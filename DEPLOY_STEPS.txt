@@ -1,0 +1,18 @@
+NIFTY AI - QUICK VERCEL STEPS
+
+1) Extract this ZIP.
+2) Do NOT put your real NEWS_API_KEY in GitHub.
+3) Upload all project files to a GitHub repository.
+4) In Vercel: Add New -> Project -> Import the GitHub repository.
+5) In Vercel project Settings -> Environment Variables add:
+      NEWS_API_KEY = <your real NewsAPI key>
+6) Deploy (or Redeploy after adding/changing the key).
+7) Open:
+      https://YOUR-PROJECT.vercel.app/
+8) Verify:
+      /health
+      /dashboard
+      /option-chain
+      /prediction
+
+If /health works but NSE FII/DII or option-chain does not, send the live endpoint output.
