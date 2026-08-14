@@ -1,23 +1,20 @@
-NIFTY AI V7 - GIT + VERCEL DEPLOYMENT
+NIFTY AI V7.1 DEPLOYMENT
 
 1. Extract this ZIP.
-2. Open your existing GitHub Nifty repository.
-3. Replace the existing app.py with the app.py from this package.
-4. Also upload/update the other package files if GitHub does not already have them.
-5. Commit directly to main (or merge your branch into main).
-6. Vercel should automatically start a new deployment.
-7. Confirm NEWS_API_KEY is still configured in:
-      Vercel -> Project -> Environment Variables
-8. After Status = Ready, test:
-      /health
-      /prediction
-      /fno-alerts
-      /option-chain
-      /dashboard
-      /backtest?period=6mo
+2. Replace app.py in your existing GitHub Nifty repository.
+3. Commit to main.
+4. Wait for Vercel deployment = Ready.
+5. Open /dashboard.
+6. Confirm F&O Alert Engine is no longer on the main dashboard.
+7. Click ☰ to open the left F&O panel.
+8. Click Refresh F&O to test lazy loading.
+9. Enable Notifications.
+10. Schedule a one-time alert 2-3 minutes in the future.
+11. Keep the browser tab open.
+12. Confirm it fires and then the form allows a new alert.
 
-BROWSER ALERTS:
-Open /dashboard and press 'Enable Browser Alerts'.
-Keep the dashboard open for browser-based minute refresh alerts.
-
-The website currently refreshes every 60 seconds.
+Useful URLs:
+- /prediction
+- /prediction?include_alerts=true
+- /fno-alerts
+- /dashboard

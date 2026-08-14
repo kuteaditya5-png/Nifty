@@ -33,7 +33,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "7.0",
+        "version": "7.1",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -3837,6 +3837,185 @@ def dashboard():
     }
 
 
+
+    .topbar-title-group {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .fno-menu-btn {
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 12px;
+        background: #111827;
+        border: 1px solid #25304a;
+        font-size: 22px;
+        line-height: 1;
+    }
+
+    .fno-menu-btn:hover {
+        background: #182235;
+    }
+
+    .alert-drawer-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 1998;
+        background: rgba(0, 0, 0, 0.62);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.22s ease, visibility 0.22s ease;
+    }
+
+    .alert-drawer-overlay.open {
+        opacity: 1;
+        visibility: visible;
+    }
+
+    .alert-drawer {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: min(760px, 94vw);
+        z-index: 1999;
+        background: #0b1020;
+        border-right: 1px solid #27344d;
+        box-shadow: 18px 0 50px rgba(0, 0, 0, 0.40);
+        transform: translateX(-102%);
+        transition: transform 0.24s ease;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .alert-drawer.open {
+        transform: translateX(0);
+    }
+
+    .alert-drawer-head {
+        padding: 18px 18px 15px;
+        border-bottom: 1px solid #25304a;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 14px;
+        background: #0e1526;
+    }
+
+    .alert-drawer-title {
+        font-size: 19px;
+        font-weight: 850;
+        margin-bottom: 5px;
+    }
+
+    .drawer-close-btn {
+        width: 38px;
+        height: 38px;
+        min-width: 38px;
+        padding: 0;
+        border-radius: 10px;
+        background: #172033;
+        border: 1px solid #334155;
+        font-size: 19px;
+    }
+
+    .alert-drawer-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+    }
+
+    .schedule-card {
+        border: 1px solid #25304a;
+        background: #0f172a;
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 16px;
+    }
+
+    .schedule-help {
+        line-height: 1.5;
+        margin-bottom: 13px;
+    }
+
+    .schedule-label {
+        display: block;
+        color: #cbd5e1;
+        font-size: 12px;
+        font-weight: 700;
+        margin-bottom: 7px;
+    }
+
+    .schedule-input {
+        width: 100%;
+        min-height: 44px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid #334155;
+        background: #0b1220;
+        color: #eef2ff;
+        font: inherit;
+        color-scheme: dark;
+    }
+
+    .schedule-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 11px;
+    }
+
+    .schedule-actions button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
+
+    .scheduled-status {
+        margin-top: 11px;
+        padding: 10px 11px;
+        border-radius: 10px;
+        background: #0b1220;
+        border: 1px solid #25304a;
+        color: #cbd5e1;
+        font-size: 12px;
+        line-height: 1.45;
+    }
+
+    .drawer-snapshot-head {
+        margin-top: 4px;
+    }
+
+    .drawer-alert-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .drawer-loading {
+        display: none;
+        margin: 10px 0 12px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #0f172a;
+        border: 1px solid #25304a;
+        color: #94a3b8;
+        font-size: 12px;
+    }
+
+    .drawer-loading.show {
+        display: block;
+    }
+
+    .drawer-note {
+        margin-top: 14px;
+        color: #64748b;
+        font-size: 11px;
+        line-height: 1.5;
+    }
+
     .alert-section {
         margin-bottom: 14px;
     }
@@ -4162,13 +4341,135 @@ def dashboard():
 </head>
 
 <body>
+
+<div class="alert-drawer-overlay" id="alertDrawerOverlay" onclick="closeAlertDrawer()"></div>
+
+<aside class="alert-drawer" id="alertDrawer">
+    <div class="alert-drawer-head">
+        <div>
+            <div class="alert-drawer-title">F&O CE / PE Alert Engine</div>
+            <div class="muted">
+                Loads only when this panel is opened or a scheduled alert becomes due.
+            </div>
+        </div>
+        <button class="drawer-close-btn" onclick="closeAlertDrawer()" aria-label="Close F&O alert panel">×</button>
+    </div>
+
+    <div class="alert-drawer-body">
+        <div class="schedule-card">
+            <div class="section-title">One-time Alert Schedule</div>
+            <div class="muted schedule-help">
+                Select one date/time. At that time the page fetches the latest CE/PE setup,
+                shows the result and sends a browser notification. After it fires, you can
+                create the next alert.
+            </div>
+
+            <label class="schedule-label" for="scheduledAlertTime">Alert date & time</label>
+            <input type="datetime-local" id="scheduledAlertTime" class="schedule-input">
+
+            <div class="schedule-actions">
+                <button onclick="scheduleOneTimeAlert()" id="scheduleAlertBtn">Set Alert</button>
+                <button class="secondary-btn" onclick="cancelScheduledAlert()" id="cancelAlertBtn" disabled>Cancel</button>
+                <button class="secondary-btn" onclick="enableBrowserAlerts()" id="enableAlertsBtn">Enable Notifications</button>
+            </div>
+
+            <div class="scheduled-status" id="scheduledAlertStatus">
+                No alert scheduled.
+            </div>
+        </div>
+
+        <div class="alert-section-header drawer-snapshot-head">
+            <div>
+                <div class="section-title">Current F&O Snapshot</div>
+                <div class="muted">
+                    Manual refresh only displays the current setup. It does not create an order.
+                </div>
+            </div>
+
+            <div class="alert-actions">
+                <button class="secondary-btn" onclick="loadFnoAlerts(false)">Refresh F&O</button>
+                <span class="status-pill" id="alertGeneratedAt">Alert: --</span>
+            </div>
+        </div>
+
+        <div class="drawer-loading" id="fnoDrawerLoading">Open panel to load CE/PE data.</div>
+
+        <div class="alert-grid drawer-alert-grid" id="drawerAlertGrid">
+            <div class="card trade-alert-card call-card">
+                <div class="trade-alert-top">
+                    <div>
+                        <div class="label">CALL OPTION</div>
+                        <div class="trade-side" id="ceContract">-- CE</div>
+                        <div class="muted" id="ceLtp">LTP: --</div>
+                    </div>
+                    <span class="alert-badge wait" id="ceSignal">WAIT</span>
+                </div>
+
+                <div class="trade-level-grid">
+                    <div class="trade-level"><div class="label">ENTRY ZONE</div><strong id="ceEntry">--</strong></div>
+                    <div class="trade-level"><div class="label">STOP LOSS</div><strong class="negative" id="ceStop">--</strong></div>
+                    <div class="trade-level"><div class="label">TARGET 1</div><strong class="positive" id="ceTarget1">--</strong></div>
+                    <div class="trade-level"><div class="label">TARGET 2</div><strong class="positive" id="ceTarget2">--</strong></div>
+                    <div class="trade-level"><div class="label">NIFTY INVALIDATION</div><strong id="ceInvalidation">--</strong></div>
+                    <div class="trade-level"><div class="label">SIGNAL STRENGTH</div><strong id="ceStrength">--</strong></div>
+                </div>
+
+                <div class="trade-state" id="ceLifecycle">
+                    Signal lifecycle: no active scheduled CE signal.
+                </div>
+                <div class="trade-reason" id="ceReason">--</div>
+            </div>
+
+            <div class="card trade-alert-card put-card">
+                <div class="trade-alert-top">
+                    <div>
+                        <div class="label">PUT OPTION</div>
+                        <div class="trade-side" id="peContract">-- PE</div>
+                        <div class="muted" id="peLtp">LTP: --</div>
+                    </div>
+                    <span class="alert-badge wait" id="peSignal">WAIT</span>
+                </div>
+
+                <div class="trade-level-grid">
+                    <div class="trade-level"><div class="label">ENTRY ZONE</div><strong id="peEntry">--</strong></div>
+                    <div class="trade-level"><div class="label">STOP LOSS</div><strong class="negative" id="peStop">--</strong></div>
+                    <div class="trade-level"><div class="label">TARGET 1</div><strong class="positive" id="peTarget1">--</strong></div>
+                    <div class="trade-level"><div class="label">TARGET 2</div><strong class="positive" id="peTarget2">--</strong></div>
+                    <div class="trade-level"><div class="label">NIFTY INVALIDATION</div><strong id="peInvalidation">--</strong></div>
+                    <div class="trade-level"><div class="label">SIGNAL STRENGTH</div><strong id="peStrength">--</strong></div>
+                </div>
+
+                <div class="trade-state" id="peLifecycle">
+                    Signal lifecycle: no active scheduled PE signal.
+                </div>
+                <div class="trade-reason" id="peReason">--</div>
+            </div>
+        </div>
+
+        <div class="alert-history">
+            <div class="section-title">Recent Browser Alert History</div>
+            <div class="history-list" id="alertHistoryList">
+                <div class="muted">No alert events recorded in this browser yet.</div>
+            </div>
+        </div>
+
+        <div class="drawer-note">
+            Scheduled browser alerts require this website to remain open in a browser tab.
+            If the computer/browser is closed, the website cannot run the scheduled check.
+        </div>
+    </div>
+</aside>
+
 <div class="container" id="dashboardRoot">
 
     <div class="topbar">
-        <div class="title-wrap">
+        <div class="topbar-title-group">
+            <button class="fno-menu-btn" onclick="openAlertDrawer()" aria-label="Open F&O alert panel" title="F&O Alert Engine">☰</button>
+            <div class="title-wrap">
             <h1>NIFTY AI</h1>
             <div class="subtitle">
                 Market prediction dashboard • Live Chart • Candlestick Patterns • Technicals • News • Global • FII/DII • Option Chain
+            </div>
             </div>
         </div>
 
@@ -4206,154 +4507,6 @@ def dashboard():
             <div class="label">Combined Score</div>
             <div class="value" id="combinedScore">--</div>
             <div class="muted">Range: -1 to +1</div>
-        </div>
-    </div>
-
-    <div class="card alert-section">
-        <div class="alert-section-header">
-            <div>
-                <div class="alert-section-title">
-                    F&O CE / PE Alert Engine
-                </div>
-                <div class="muted">
-                    Independent call/put entry, stop-loss, target and exit monitoring.
-                </div>
-            </div>
-
-            <div class="alert-actions">
-                <button
-                    class="secondary-btn"
-                    id="enableAlertsBtn"
-                    onclick="enableBrowserAlerts()"
-                >
-                    Enable Browser Alerts
-                </button>
-
-                <span class="status-pill" id="alertGeneratedAt">
-                    Alert: --
-                </span>
-            </div>
-        </div>
-
-        <div class="alert-grid">
-            <div class="card trade-alert-card call-card">
-                <div class="trade-alert-top">
-                    <div>
-                        <div class="label">CALL OPTION</div>
-                        <div class="trade-side" id="ceContract">-- CE</div>
-                        <div class="muted" id="ceLtp">LTP: --</div>
-                    </div>
-
-                    <span class="alert-badge wait" id="ceSignal">
-                        WAIT
-                    </span>
-                </div>
-
-                <div class="trade-level-grid">
-                    <div class="trade-level">
-                        <div class="label">ENTRY ZONE</div>
-                        <strong id="ceEntry">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">STOP LOSS</div>
-                        <strong class="negative" id="ceStop">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">TARGET 1</div>
-                        <strong class="positive" id="ceTarget1">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">TARGET 2</div>
-                        <strong class="positive" id="ceTarget2">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">NIFTY INVALIDATION</div>
-                        <strong id="ceInvalidation">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">SIGNAL STRENGTH</div>
-                        <strong id="ceStrength">--</strong>
-                    </div>
-                </div>
-
-                <div class="trade-state" id="ceLifecycle">
-                    Signal lifecycle: waiting for CE setup.
-                </div>
-
-                <div class="trade-reason" id="ceReason">
-                    --
-                </div>
-            </div>
-
-            <div class="card trade-alert-card put-card">
-                <div class="trade-alert-top">
-                    <div>
-                        <div class="label">PUT OPTION</div>
-                        <div class="trade-side" id="peContract">-- PE</div>
-                        <div class="muted" id="peLtp">LTP: --</div>
-                    </div>
-
-                    <span class="alert-badge wait" id="peSignal">
-                        WAIT
-                    </span>
-                </div>
-
-                <div class="trade-level-grid">
-                    <div class="trade-level">
-                        <div class="label">ENTRY ZONE</div>
-                        <strong id="peEntry">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">STOP LOSS</div>
-                        <strong class="negative" id="peStop">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">TARGET 1</div>
-                        <strong class="positive" id="peTarget1">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">TARGET 2</div>
-                        <strong class="positive" id="peTarget2">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">NIFTY INVALIDATION</div>
-                        <strong id="peInvalidation">--</strong>
-                    </div>
-
-                    <div class="trade-level">
-                        <div class="label">SIGNAL STRENGTH</div>
-                        <strong id="peStrength">--</strong>
-                    </div>
-                </div>
-
-                <div class="trade-state" id="peLifecycle">
-                    Signal lifecycle: waiting for PE setup.
-                </div>
-
-                <div class="trade-reason" id="peReason">
-                    --
-                </div>
-            </div>
-        </div>
-
-        <div class="alert-history">
-            <div class="section-title">
-                Recent Browser Alert History
-            </div>
-            <div class="history-list" id="alertHistoryList">
-                <div class="muted">
-                    No alert events recorded in this browser yet.
-                </div>
-            </div>
         </div>
     </div>
 
@@ -5005,6 +5158,334 @@ def dashboard():
     );
 
 
+
+    const oneTimeAlertScheduleKey =
+        "niftyAiOneTimeAlertScheduleV71";
+
+    let fnoPanelLastLoadedAt = 0;
+    let fnoAlertFetchInProgress = false;
+
+    function openAlertDrawer() {
+        document.getElementById("alertDrawer").classList.add("open");
+        document.getElementById("alertDrawerOverlay").classList.add("open");
+
+        renderScheduledAlertStatus();
+        renderAlertHistory();
+
+        if (Date.now() - fnoPanelLastLoadedAt > 30000) {
+            loadFnoAlerts(false);
+        }
+    }
+
+    function closeAlertDrawer() {
+        document.getElementById("alertDrawer").classList.remove("open");
+        document.getElementById("alertDrawerOverlay").classList.remove("open");
+    }
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            closeAlertDrawer();
+        }
+    });
+
+    function getOneTimeAlertSchedule() {
+        try {
+            return JSON.parse(
+                localStorage.getItem(oneTimeAlertScheduleKey) || "null"
+            );
+        }
+        catch (error) {
+            return null;
+        }
+    }
+
+    function saveOneTimeAlertSchedule(schedule) {
+        localStorage.setItem(
+            oneTimeAlertScheduleKey,
+            JSON.stringify(schedule)
+        );
+    }
+
+    function clearOneTimeAlertSchedule() {
+        localStorage.removeItem(oneTimeAlertScheduleKey);
+    }
+
+    function scheduleOneTimeAlert() {
+        const input = document.getElementById("scheduledAlertTime");
+        const selected = input.value;
+
+        if (!selected) {
+            alert("Select an alert date and time first.");
+            return;
+        }
+
+        const target = new Date(selected);
+
+        if (
+            Number.isNaN(target.getTime())
+            || target.getTime() <= Date.now()
+        ) {
+            alert("Select a future date and time.");
+            return;
+        }
+
+        const existing = getOneTimeAlertSchedule();
+
+        if (existing && existing.status === "scheduled") {
+            alert(
+                "One alert is already scheduled. Cancel it or wait for it to complete before adding another."
+            );
+            return;
+        }
+
+        if (
+            "Notification" in window
+            && Notification.permission === "default"
+        ) {
+            Notification.requestPermission();
+        }
+
+        saveOneTimeAlertSchedule({
+            targetTime: target.toISOString(),
+            createdAt: new Date().toISOString(),
+            status: "scheduled"
+        });
+
+        pushAlertHistory(
+            "SCHEDULE",
+            "One-time F&O alert scheduled for "
+            + target.toLocaleString()
+            + "."
+        );
+
+        input.value = "";
+        renderScheduledAlertStatus();
+    }
+
+    function cancelScheduledAlert() {
+        const schedule = getOneTimeAlertSchedule();
+
+        if (!schedule) {
+            return;
+        }
+
+        clearOneTimeAlertSchedule();
+
+        pushAlertHistory(
+            "SCHEDULE",
+            "Scheduled F&O alert cancelled."
+        );
+
+        renderScheduledAlertStatus();
+    }
+
+    function renderScheduledAlertStatus() {
+        const status = document.getElementById("scheduledAlertStatus");
+        const scheduleButton = document.getElementById("scheduleAlertBtn");
+        const cancelButton = document.getElementById("cancelAlertBtn");
+
+        if (!status || !scheduleButton || !cancelButton) {
+            return;
+        }
+
+        const schedule = getOneTimeAlertSchedule();
+
+        if (!schedule || schedule.status !== "scheduled") {
+            status.textContent =
+                "No alert scheduled. You can set a new one-time F&O alert.";
+            scheduleButton.disabled = false;
+            cancelButton.disabled = true;
+            return;
+        }
+
+        const target = new Date(schedule.targetTime);
+        const remainingMs = target.getTime() - Date.now();
+
+        if (remainingMs <= 0) {
+            status.textContent =
+                "Scheduled time reached. Fetching the latest F&O setup...";
+            scheduleButton.disabled = true;
+            cancelButton.disabled = true;
+            return;
+        }
+
+        const totalSeconds = Math.max(
+            0,
+            Math.floor(remainingMs / 1000)
+        );
+
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        status.textContent =
+            "Alert scheduled for "
+            + target.toLocaleString()
+            + " • remaining "
+            + String(hours).padStart(2, "0")
+            + ":"
+            + String(minutes).padStart(2, "0")
+            + ":"
+            + String(seconds).padStart(2, "0")
+            + ". Only one scheduled alert can be active at a time.";
+
+        scheduleButton.disabled = true;
+        cancelButton.disabled = false;
+    }
+
+    async function loadFnoAlerts(isScheduled = false) {
+        if (fnoAlertFetchInProgress) {
+            return null;
+        }
+
+        const loading = document.getElementById("fnoDrawerLoading");
+        fnoAlertFetchInProgress = true;
+
+        if (loading) {
+            loading.classList.add("show");
+            loading.textContent =
+                isScheduled
+                    ? "Scheduled time reached — calculating latest CE/PE alert..."
+                    : "Loading latest CE/PE alert data...";
+        }
+
+        try {
+            const response = await fetch(
+                "/fno-alerts?ts=" + Date.now(),
+                { cache: "no-store" }
+            );
+
+            const data = await response.json();
+
+            if (!response.ok || data.status !== "success") {
+                throw new Error(
+                    data.message
+                    || "F&O alert endpoint returned an error."
+                );
+            }
+
+            const alerts = data.alerts || {};
+            const optionChain = data.option_chain || {};
+
+            renderTradeAlert(
+                "CE",
+                alerts.call || {},
+                data,
+                optionChain,
+                isScheduled
+            );
+
+            renderTradeAlert(
+                "PE",
+                alerts.put || {},
+                data,
+                optionChain,
+                isScheduled
+            );
+
+            setText(
+                "alertGeneratedAt",
+                alerts.generated_at
+                    ? (
+                        "Alert: "
+                        + new Date(
+                            alerts.generated_at
+                        ).toLocaleTimeString()
+                    )
+                    : "Alert: --"
+            );
+
+            fnoPanelLastLoadedAt = Date.now();
+
+            if (isScheduled) {
+                const callSignal =
+                    (alerts.call && alerts.call.signal) || "WAIT";
+                const putSignal =
+                    (alerts.put && alerts.put.signal) || "WAIT";
+
+                const summary =
+                    "CE: "
+                    + callSignal
+                    + " | PE: "
+                    + putSignal
+                    + " | NIFTY "
+                    + (data.price ?? "--");
+
+                pushAlertHistory(
+                    "SCHEDULED",
+                    summary
+                );
+
+                sendBrowserAlert(
+                    "NIFTY AI Scheduled F&O Alert",
+                    summary
+                );
+            }
+
+            return data;
+        }
+        catch (error) {
+            if (loading) {
+                loading.textContent =
+                    "F&O alert load failed: "
+                    + error.message;
+            }
+
+            if (isScheduled) {
+                pushAlertHistory(
+                    "SCHEDULED",
+                    "Scheduled F&O alert failed: "
+                    + error.message
+                );
+
+                sendBrowserAlert(
+                    "NIFTY AI F&O Alert Failed",
+                    error.message
+                );
+            }
+
+            return null;
+        }
+        finally {
+            fnoAlertFetchInProgress = false;
+
+            if (loading) {
+                setTimeout(
+                    () => {
+                        loading.classList.remove("show");
+                    },
+                    1200
+                );
+            }
+        }
+    }
+
+    async function checkScheduledAlert() {
+        renderScheduledAlertStatus();
+
+        const schedule = getOneTimeAlertSchedule();
+
+        if (!schedule || schedule.status !== "scheduled") {
+            return;
+        }
+
+        const target = new Date(schedule.targetTime);
+
+        if (Date.now() < target.getTime()) {
+            return;
+        }
+
+        saveOneTimeAlertSchedule({
+            ...schedule,
+            status: "firing"
+        });
+
+        await loadFnoAlerts(true);
+
+        clearOneTimeAlertSchedule();
+        renderScheduledAlertStatus();
+    }
+
     const alertStateKeys = {
         CE: "niftyAiCeSignalStateV7",
         PE: "niftyAiPeSignalStateV7"
@@ -5614,7 +6095,8 @@ def dashboard():
         side,
         alertData,
         data,
-        optionChain
+        optionChain,
+        activateLifecycle = false
     ) {
         const prefix =
             side === "CE" ? "ce" : "pe";
@@ -5755,7 +6237,8 @@ def dashboard():
             );
 
         if (
-            lastRenderedAlertStatus[side]
+            activateLifecycle
+            && lastRenderedAlertStatus[side]
             !== null
             && lastRenderedAlertStatus[side]
             !== currentStatus
@@ -5790,12 +6273,38 @@ def dashboard():
         lastRenderedAlertStatus[side] =
             currentStatus;
 
-        updateSignalLifecycle(
-            side,
-            alertData,
-            data,
-            optionChain
-        );
+        if (activateLifecycle) {
+            updateSignalLifecycle(
+                side,
+                alertData,
+                data,
+                optionChain
+            );
+        }
+        else {
+            const lifecycleElement =
+                document.getElementById(
+                    prefix + "Lifecycle"
+                );
+
+            const stored =
+                loadLifecycle(side);
+
+            if (lifecycleElement) {
+                lifecycleElement.textContent =
+                    stored
+                        ? (
+                            "Stored "
+                            + side
+                            + " signal is being monitored from reference "
+                            + money(stored.referenceEntry)
+                            + "."
+                        )
+                        : (
+                            "Signal lifecycle starts only when a scheduled alert produces a BUY SIGNAL."
+                        );
+            }
+        }
     }
 
     function formatNumber(value, decimals = 2) {
@@ -5940,35 +6449,6 @@ def dashboard():
             const futures = signals.futures || {};
             const premarket = signals.premarket || {};
             const regime = signals.market_regime || {};
-            const fnoAlerts = data.fno_alerts || {};
-
-            renderTradeAlert(
-                "CE",
-                fnoAlerts.call || {},
-                data,
-                optionChain
-            );
-
-            renderTradeAlert(
-                "PE",
-                fnoAlerts.put || {},
-                data,
-                optionChain
-            );
-
-            setText(
-                "alertGeneratedAt",
-                fnoAlerts.generated_at
-                    ? (
-                        "Alert: "
-                        + new Date(
-                            fnoAlerts.generated_at
-                        ).toLocaleTimeString()
-                    )
-                    : "Alert: --"
-            );
-
-            renderAlertHistory();
 
             setText(
                 "price",
@@ -6347,10 +6827,35 @@ def dashboard():
     }
 
     loadDashboard();
+    renderScheduledAlertStatus();
+    renderAlertHistory();
 
-    // Automatic refresh every 60 seconds.
+    // Main prediction dashboard refresh.
     setInterval(
         loadDashboard,
+        60000
+    );
+
+    // Lightweight local schedule clock. No market API is called until
+    // the selected one-time alert time is reached.
+    setInterval(
+        checkScheduledAlert,
+        5000
+    );
+
+    checkScheduledAlert();
+
+    // Only monitor the F&O lifecycle when a scheduled BUY signal is active.
+    setInterval(
+        () => {
+            const hasActiveSignal =
+                loadLifecycle("CE")
+                || loadLifecycle("PE");
+
+            if (hasActiveSignal) {
+                loadFnoAlerts(true);
+            }
+        },
         60000
     );
 </script>
@@ -6990,7 +7495,7 @@ def build_fno_alert_engine(
 
 
 @app.get("/prediction")
-def prediction():
+def prediction(include_alerts: bool = False):
     try:
         # -----------------------------
         # 1. MARKET / MOMENTUM DATA
@@ -7280,28 +7785,34 @@ def prediction():
             fno_setup = "WAIT"
 
         # -----------------------------
-        # 18. F&O CE / PE ALERT ENGINE
+        # 18. OPTIONAL F&O CE / PE ALERT ENGINE
         # -----------------------------
-        fno_alerts = build_fno_alert_engine(
-            market_data=market_data,
-            option_data=option_data,
-            combined_score=combined_score,
-            bullish_probability=bullish_probability,
-            bearish_probability=bearish_probability,
-            data_coverage=data_coverage,
-            option_score=option_score,
-            breadth_score=breadth_score,
-            breadth_available=breadth_available,
-            futures_score=futures_score,
-            futures_available=futures_available,
-            candle_score=candle_score,
-            vix_risk=vix_risk,
-            market_regime=regime_data["regime"]
-        )
+        # The normal dashboard does not calculate the alert layer.
+        # Alerts are generated lazily through /fno-alerts or by explicitly
+        # calling /prediction?include_alerts=true.
+        fno_alerts = None
+
+        if include_alerts:
+            fno_alerts = build_fno_alert_engine(
+                market_data=market_data,
+                option_data=option_data,
+                combined_score=combined_score,
+                bullish_probability=bullish_probability,
+                bearish_probability=bearish_probability,
+                data_coverage=data_coverage,
+                option_score=option_score,
+                breadth_score=breadth_score,
+                breadth_available=breadth_available,
+                futures_score=futures_score,
+                futures_available=futures_available,
+                candle_score=candle_score,
+                vix_risk=vix_risk,
+                market_regime=regime_data["regime"]
+            )
 
         return {
             "status": "success",
-            "model_version": "7.0",
+            "model_version": "7.1",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7380,7 +7891,11 @@ def prediction():
                     "iv_skew": option_data.get("iv_skew"),
                     "iv_skew_score": option_data.get("iv_skew_score"),
                     "iv_risk": option_data.get("iv_risk"),
-                    "nearby_strikes": option_data.get("nearby_strikes", []),
+                    "nearby_strikes": (
+                        option_data.get("nearby_strikes", [])
+                        if include_alerts
+                        else []
+                    ),
                     "bias": option_bias,
                     "score": round(option_score, 3),
                     "message": option_data.get("message")
@@ -7441,8 +7956,9 @@ def prediction():
                 "Version 7 dynamically blends technicals, candlesticks, news, "
                 "global cues, FII/DII, options with IV skew, NIFTY breadth, "
                 "futures positioning, momentum and pre-market/opening-gap context. "
-                "It also generates independent CE/PE watch, buy, stop-loss, target "
-                "and exit-invalidation signals. Unavailable sources are excluded and "
+                "It can also generate independent CE/PE watch, buy, stop-loss, target "
+                "and exit-invalidation signals through the separate F&O alert endpoint. "
+                "Unavailable sources are excluded and "
                 "weights are renormalized. This remains a heuristic decision-support "
                 "model, not a guaranteed forecast."
             )
@@ -7461,7 +7977,7 @@ def fno_alerts():
     Current CE/PE alert snapshot generated from the same live model used by
     /prediction. This endpoint is read-only and never places an order.
     """
-    result = prediction()
+    result = prediction(include_alerts=True)
 
     if not isinstance(result, dict):
         return {
@@ -7481,6 +7997,9 @@ def fno_alerts():
         "confidence": result.get("confidence"),
         "combined_score": result.get("combined_score"),
         "data_coverage_percent": result.get("data_coverage_percent"),
+        "option_chain": (
+            (result.get("signals") or {}).get("option_chain", {})
+        ),
         "alerts": result.get("fno_alerts", {})
     }
 
