@@ -1,148 +1,107 @@
-# NIFTY AI — Vercel Deployment Package
+# NIFTY AI V7 - F&O Alert Engine
 
-This package contains the current NIFTY AI FastAPI dashboard prepared for Vercel.
+Version 7 keeps the existing dashboard and prediction model, and adds a
+CE/PE F&O alert layer.
 
-## Included
+## New F&O features
 
-- `app.py` — FastAPI application and dashboard
-- `requirements.txt` — Python dependencies
-- `pyproject.toml` — Python 3.14 selection and dependencies
-- `vercel.json` — 60-second function-duration configuration
-- `.env.example` — example local environment file
-- `.gitignore` — prevents secrets/venv files from being committed
+For CALL (CE) and PUT (PE), independently:
 
-The production root `/` redirects to `/dashboard`.
+- WAIT
+- WATCH
+- BUY SIGNAL
+- ATM strike selection
+- Current option premium (LTP)
+- Entry zone
+- Premium stop-loss
+- Target 1
+- Target 2
+- NIFTY invalidation level
+- Signal strength
+- Confirmation/warning reasons
+- Browser-side signal lifecycle monitoring
+- STOP LOSS HIT alert
+- TARGET 1 alert
+- TARGET 2 / exit alert
+- Model-reversal EXIT alert
+- NIFTY-invalidation EXIT alert
+- Recent alert history stored in the user's browser
+- Optional browser notification + alert tone
 
-## Main URLs
+The engine never places orders.
 
-After deployment:
+## New endpoint
 
-- `/` → dashboard
-- `/dashboard` → visual NIFTY dashboard
-- `/prediction` → combined prediction JSON
-- `/option-chain` → NIFTY option-chain analysis
-- `/candlestick-analysis` → candlestick-pattern analysis
-- `/chart-data?interval=5m` → chart candles
-- `/institutional-flow` → FII/FPI and DII
-- `/global-analysis` → global-market cues
-- `/health` → simple health check
-- `/docs` → FastAPI Swagger UI
+`/fno-alerts`
 
-## 1. Test locally
+It returns the current CE and PE alert snapshot.
 
-Open PowerShell in this folder.
+## Existing endpoints
 
-Create a virtual environment:
+- `/health`
+- `/dashboard`
+- `/prediction`
+- `/market-breadth`
+- `/futures-analysis`
+- `/premarket-analysis`
+- `/option-chain`
+- `/backtest?period=2y`
 
-```powershell
-python -m venv venv
-```
+## Alert logic
 
-If PowerShell blocks activation for the current window:
+A BUY SIGNAL is intentionally conservative and requires sufficient live-data
+coverage plus agreement between the combined model, probability, option-chain
+score and price-action confirmations.
 
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
+CE and PE are evaluated independently. Both may remain WAIT.
 
-Activate it:
+The premium stop is volatility-aware. The engine also builds an underlying
+NIFTY invalidation from immediate option-chain structure and intraday ATR.
 
-```powershell
-venv\Scripts\activate
-```
+Targets are generated from premium risk:
 
-Install packages:
+- Target 1: 1.2R
+- Target 2: 2.0R
 
-```powershell
-python -m pip install -r requirements.txt
-```
+## Browser alert lifecycle
 
-Create your local `.env` file by copying `.env.example`, then put your real NewsAPI key in it:
+When the live engine generates a BUY SIGNAL, the dashboard stores the generated
+signal in browser localStorage and monitors it on future dashboard refreshes.
 
-```text
-NEWS_API_KEY=your_real_key
-```
+It can produce:
 
-Start the app:
+- STOP LOSS HIT
+- TARGET 1 HIT
+- TARGET 2 HIT
+- EXIT SIGNAL when NIFTY invalidation is breached
+- EXIT SIGNAL when the model reverses
 
-```powershell
-python -m uvicorn app:app --reload
-```
+This is browser-local state. Clearing browser storage removes the local signal
+history.
 
-Open:
+Browser alerts currently work while the dashboard is open. A future persistent
+worker/notification service is needed for reliable closed-browser monitoring.
 
-```text
-http://127.0.0.1:8000/dashboard
-```
+## Deployment
 
-## 2. Put the project on GitHub
+Replace the `app.py` in the existing GitHub repository with this package's
+`app.py`, commit to the main branch, and let Vercel redeploy.
 
-Create a new empty GitHub repository, for example `nifty-ai`.
+Keep the Vercel environment variable:
 
-From PowerShell in this project folder:
+`NEWS_API_KEY`
 
-```powershell
-git init
-git add .
-git commit -m "Initial NIFTY AI deployment"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/nifty-ai.git
-git push -u origin main
-```
+After deployment test:
 
-Do **not** add your real `.env` file. It is already excluded by `.gitignore`.
+1. `/health`
+2. `/prediction`
+3. `/fno-alerts`
+4. `/option-chain`
+5. `/dashboard`
+6. `/backtest?period=6mo`
 
-You can also upload the project files using GitHub's web interface instead of Git commands.
+## Important
 
-## 3. Deploy on Vercel
-
-1. Sign in to Vercel.
-2. Choose **Add New → Project**.
-3. Import the GitHub repository containing this package.
-4. Vercel should detect the FastAPI app from `app.py`; no custom build command is required.
-5. Before/after the first deployment, open the project:
-   **Settings → Environment Variables**.
-6. Add:
-
-```text
-Name:  NEWS_API_KEY
-Value: your_real_newsapi_key
-```
-
-Enable it for Production and Preview as needed.
-7. Deploy/redeploy the project.
-
-Environment-variable changes only affect new deployments, so redeploy after changing the key.
-
-## 4. Test the live deployment
-
-Open these URLs on your Vercel domain:
-
-```text
-/health
-/dashboard
-/chart-data?interval=5m
-/institutional-flow
-/option-chain
-/candlestick-analysis
-/prediction
-```
-
-If `/health` works but NSE endpoints fail, the application itself deployed correctly and NSE is likely rejecting/rate-limiting the cloud request.
-
-## Important production notes
-
-### NSE endpoints
-
-The FII/DII and option-chain modules use NSE web endpoints with an NSE session/cookies. They work on the current local setup, but NSE can change or rate-limit these endpoints. Vercel deployment should be tested before relying on those values.
-
-### Market-data freshness
-
-`yfinance` is used for NIFTY, VIX and global-market data. Treat it as near-live/research data rather than exchange-grade tick-by-tick market data.
-
-### Dashboard chart
-
-The candlestick chart loads the Lightweight Charts browser bundle from a public CDN. The browser needs internet access to that CDN.
-
-### Trading risk
-
-The prediction engine is a heuristic decision-support model. Its displayed scenario probabilities are not proven historical accuracy until a proper backtest/prediction-history system is built.
+BUY SIGNAL means the project's programmed rule set triggered. It is not a
+guarantee of profit and it does not execute a trade. The F&O alert rules should
+be backtested and forward-tested before being trusted with real capital.

@@ -6,7 +6,7 @@ import os
 import pandas as pd
 import re
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,6 +33,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
+        "version": "7.0",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -147,17 +148,21 @@ def analyze_sentiment(text):
 
 
 def get_news_articles():
+    """
+    Fetch Indian-market news, remove obvious duplicate headlines and weight
+    sentiment by freshness. The weighting is deliberately modest so one source
+    or repeated story cannot dominate the prediction.
+    """
     if not NEWS_API_KEY:
         return {
             "status": "error",
             "message": (
                 "NEWS_API_KEY is not configured. "
-                "Add it to your Vercel Environment Variables."
+                "Add it in Vercel Environment Variables."
             )
         }
 
     url = "https://newsapi.org/v2/everything"
-
     params = {
         "q": '("Nifty 50" OR Sensex OR "Indian stock market" OR RBI OR "Reserve Bank of India" OR "Indian economy")',
         "searchIn": "title,description",
@@ -165,10 +170,7 @@ def get_news_articles():
         "sortBy": "publishedAt",
         "pageSize": 50
     }
-
-    headers = {
-        "X-Api-Key": NEWS_API_KEY
-    }
+    headers = {"X-Api-Key": NEWS_API_KEY}
 
     response = requests.get(
         url,
@@ -176,73 +178,118 @@ def get_news_articles():
         headers=headers,
         timeout=10
     )
-
     data = response.json()
 
     if response.status_code != 200:
         return {
             "status": "error",
-            "message": data.get(
-                "message",
-                "Unable to fetch news"
-            )
+            "message": data.get("message", "Unable to fetch news")
         }
 
     relevant_keywords = [
-        "nifty",
-        "sensex",
-        "rbi",
-        "reserve bank of india",
-        "sebi",
-        "bank nifty",
-        "nse",
-        "bse",
-        "indian stock market",
-        "indian equity",
-        "indian shares",
-        "fii",
-        "dii",
-        "rupee",
-        "repo rate",
-        "india inflation",
-        "indian economy"
+        "nifty", "sensex", "rbi", "reserve bank of india", "sebi",
+        "bank nifty", "nse", "bse", "indian stock market",
+        "indian equity", "indian shares", "fii", "dii", "rupee",
+        "repo rate", "india inflation", "indian economy"
     ]
 
+    preferred_financial_sources = {
+        "reuters", "bloomberg", "cnbc", "moneycontrol",
+        "the economic times", "economic times", "business standard",
+        "financial express", "businessline", "mint"
+    }
+
+    def title_tokens(value):
+        cleaned = re.sub(r"[^a-z0-9 ]+", " ", (value or "").lower())
+        stop = {
+            "the", "a", "an", "and", "or", "of", "to", "in", "on",
+            "for", "with", "at", "from", "as", "is", "are", "today",
+            "live", "update", "updates"
+        }
+        return {
+            token for token in cleaned.split()
+            if len(token) > 2 and token not in stop
+        }
+
+    def is_duplicate(tokens, prior_token_sets):
+        if not tokens:
+            return False
+        for existing in prior_token_sets:
+            union = tokens | existing
+            if not union:
+                continue
+            similarity = len(tokens & existing) / len(union)
+            if similarity >= 0.72:
+                return True
+        return False
+
     articles = []
+    accepted_titles = []
+    duplicate_count = 0
 
     for article in data.get("articles", []):
-
         title = article.get("title") or ""
         description = article.get("description") or ""
+        combined_text = (title + " " + description).lower()
 
-        combined_text = (
-            title + " " + description
-        ).lower()
+        if not any(keyword in combined_text for keyword in relevant_keywords):
+            continue
 
-        is_relevant = any(
-            keyword in combined_text
-            for keyword in relevant_keywords
+        tokens = title_tokens(title)
+        if is_duplicate(tokens, accepted_titles):
+            duplicate_count += 1
+            continue
+
+        sentiment = analyze_sentiment(title + " " + description)
+        source_name = article.get("source", {}).get("name") or "Unknown"
+        source_lower = source_name.lower()
+        published_at = article.get("publishedAt")
+
+        freshness_weight = 0.55
+        try:
+            published_dt = datetime.fromisoformat(
+                str(published_at).replace("Z", "+00:00")
+            )
+            now = datetime.now(published_dt.tzinfo)
+            age_hours = max(
+                0.0,
+                (now - published_dt).total_seconds() / 3600.0
+            )
+            if age_hours <= 6:
+                freshness_weight = 1.00
+            elif age_hours <= 24:
+                freshness_weight = 0.85
+            elif age_hours <= 48:
+                freshness_weight = 0.70
+            else:
+                freshness_weight = 0.55
+        except Exception:
+            age_hours = None
+
+        source_weight = 1.0
+        if any(name in source_lower for name in preferred_financial_sources):
+            source_weight = 1.10
+
+        weighted_score = (
+            float(sentiment["score"])
+            * freshness_weight
+            * source_weight
         )
 
-        if is_relevant:
-
-            sentiment = analyze_sentiment(
-                title + " " + description
-            )
-
-            articles.append({
-                "title": title,
-                "source": article.get(
-                    "source", {}
-                ).get("name"),
-                "published_at": article.get(
-                    "publishedAt"
-                ),
-                "description": description,
-                "sentiment": sentiment["sentiment"],
-                "sentiment_score": sentiment["score"],
-                "url": article.get("url")
-            })
+        articles.append({
+            "title": title,
+            "source": source_name,
+            "published_at": published_at,
+            "description": description,
+            "sentiment": sentiment["sentiment"],
+            "sentiment_score": sentiment["score"],
+            "weighted_sentiment_score": round(weighted_score, 3),
+            "freshness_weight": round(freshness_weight, 2),
+            "source_weight": round(source_weight, 2),
+            "age_hours": round(age_hours, 1) if age_hours is not None else None,
+            "url": article.get("url")
+        })
+        accepted_titles.append(tokens)
 
         if len(articles) >= 30:
             break
@@ -250,7 +297,12 @@ def get_news_articles():
     return {
         "status": "success",
         "articles_returned": len(articles),
-        "articles": articles
+        "duplicates_removed": duplicate_count,
+        "articles": articles,
+        "note": (
+            "News sentiment is deduplicated and freshness-weighted. "
+            "Source weighting is intentionally small and remains heuristic."
+        )
     }
 
 
@@ -285,8 +337,8 @@ def news_analysis():
 
             sentiment = article.get("sentiment")
             score = article.get(
-                "sentiment_score",
-                0
+                "weighted_sentiment_score",
+                article.get("sentiment_score", 0)
             )
 
             total_score += score
@@ -1731,6 +1783,623 @@ def _option_value(side, *keys):
     return 0.0
 
 
+
+
+def _iter_dicts(value):
+    """Yield every dictionary in a nested JSON-like object."""
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _iter_dicts(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_dicts(child)
+
+
+def _safe_float(value, default=None):
+    """Convert to a finite float. NaN/Infinity are treated as missing."""
+    try:
+        if value is None or value == "":
+            return default
+
+        if isinstance(value, str):
+            value = value.replace(",", "").replace("%", "").strip()
+
+        number = float(value)
+
+        if not math.isfinite(number):
+            return default
+
+        return number
+
+    except Exception:
+        return default
+
+
+def _json_safe(value):
+    """
+    Recursively convert Pandas / NumPy / Python values into strict JSON-safe
+    values. FastAPI/Starlette rejects NaN and Infinity by design.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe(item)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, (list, tuple, set)):
+        return [
+            _json_safe(item)
+            for item in value
+        ]
+
+    # bool must be checked before int because bool subclasses int.
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, int):
+        return int(value)
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+
+    # Pandas / NumPy scalar support without importing NumPy directly.
+    if hasattr(value, "item"):
+        try:
+            return _json_safe(value.item())
+        except Exception:
+            pass
+
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.isoformat()
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    return value
+
+
+def _score_to_bias(score):
+    score = float(score or 0)
+    if score >= 0.50:
+        return "STRONG BULLISH"
+    if score >= 0.15:
+        return "BULLISH"
+    if score <= -0.50:
+        return "STRONG BEARISH"
+    if score <= -0.15:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def get_market_breadth():
+    """
+    NIFTY 50 equal-weight breadth from NSE constituent market data.
+    This measures participation; it is not an index-point contribution model.
+    """
+    neutral = {
+        "status": "unavailable",
+        "source": "NSE",
+        "breadth_score": 0.0,
+        "breadth_bias": "NEUTRAL"
+    }
+
+    try:
+        session, headers = _nse_session()
+        response = session.get(
+            "https://www.nseindia.com/api/equity-stockIndices",
+            params={"index": "NIFTY 50"},
+            headers=headers,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            return {
+                **neutral,
+                "message": f"NSE breadth request returned HTTP {response.status_code}."
+            }
+
+        payload = response.json()
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+
+        members = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol") or row.get("meta", {}).get("symbol") or "")
+            if symbol.upper().replace(" ", "") in {"NIFTY50", "NIFTY"}:
+                continue
+
+            pchange = _safe_float(
+                row.get("pChange", row.get("percentChange")),
+                None
+            )
+            if pchange is None:
+                continue
+
+            members.append({
+                "symbol": symbol or "--",
+                "change_percent": round(pchange, 3),
+                "last_price": _safe_float(
+                    row.get("lastPrice", row.get("last")),
+                    None
+                )
+            })
+
+        if len(members) < 20:
+            return {
+                **neutral,
+                "message": "NSE returned too few NIFTY constituents for reliable breadth."
+            }
+
+        advances = sum(1 for item in members if item["change_percent"] > 0.02)
+        declines = sum(1 for item in members if item["change_percent"] < -0.02)
+        unchanged = len(members) - advances - declines
+
+        participation_score = (
+            (advances - declines) / len(members)
+            if members else 0.0
+        )
+
+        avg_change = sum(item["change_percent"] for item in members) / len(members)
+        average_momentum_score = max(-1.0, min(1.0, avg_change / 0.75))
+
+        # Participation is more important than a few large movers.
+        breadth_score = (
+            participation_score * 0.75
+            + average_momentum_score * 0.25
+        )
+        breadth_score = max(-1.0, min(1.0, breadth_score))
+
+        gainers = sorted(
+            members,
+            key=lambda item: item["change_percent"],
+            reverse=True
+        )[:5]
+        losers = sorted(
+            members,
+            key=lambda item: item["change_percent"]
+        )[:5]
+
+        return {
+            "status": "success",
+            "source": "NSE",
+            "constituents_analyzed": len(members),
+            "advances": advances,
+            "declines": declines,
+            "unchanged": unchanged,
+            "advance_decline_ratio": round(
+                advances / declines if declines else float(advances),
+                3
+            ),
+            "average_change_percent": round(avg_change, 3),
+            "breadth_score": round(breadth_score, 3),
+            "breadth_bias": _score_to_bias(breadth_score),
+            "top_gainers": gainers,
+            "top_losers": losers,
+            "note": (
+                "Equal-weight NIFTY 50 participation signal. It does not claim "
+                "to reproduce official free-float index-point contribution."
+            )
+        }
+
+    except requests.RequestException as e:
+        return {**neutral, "message": "NSE breadth connection error: " + str(e)}
+    except Exception as e:
+        return {**neutral, "message": str(e)}
+
+
+def get_nifty_futures_analysis():
+    """
+    Try NSE's live equity-derivatives market data and classify the nearest
+    NIFTY futures contract as long buildup, short buildup, short covering,
+    or long unwinding. If NSE changes the payload/endpoint, the signal is
+    excluded from the combined model rather than breaking prediction.
+    """
+    neutral = {
+        "status": "unavailable",
+        "source": "NSE",
+        "futures_score": 0.0,
+        "futures_bias": "NEUTRAL",
+        "positioning": "UNAVAILABLE"
+    }
+
+    try:
+        session, headers = _nse_session()
+        candidate_indices = ["nse50_fut", "index_fut"]
+        candidate_payloads = []
+
+        for index_name in candidate_indices:
+            try:
+                response = session.get(
+                    "https://www.nseindia.com/api/liveEquity-derivatives",
+                    params={"index": index_name},
+                    headers=headers,
+                    timeout=15
+                )
+                if response.status_code == 200:
+                    candidate_payloads.append(response.json())
+            except Exception:
+                continue
+
+        futures_rows = []
+        for payload in candidate_payloads:
+            for row in _iter_dicts(payload):
+                joined = " ".join(
+                    str(row.get(key, ""))
+                    for key in (
+                        "underlying", "symbol", "instrument",
+                        "instrumentType", "identifier", "contract"
+                    )
+                ).upper()
+
+                if "NIFTY" not in joined or "BANKNIFTY" in joined:
+                    continue
+
+                instrument_text = " ".join(
+                    str(row.get(key, ""))
+                    for key in ("instrument", "instrumentType", "identifier")
+                ).upper()
+
+                # Accept explicit futures rows, or rows from nse50_fut where
+                # option type / strike is absent.
+                if (
+                    "FUT" not in instrument_text
+                    and row.get("optionType") not in (None, "", "-")
+                ):
+                    continue
+
+                ltp = _safe_float(
+                    row.get("lastPrice", row.get("ltp")),
+                    None
+                )
+                oi = _safe_float(
+                    row.get("openInterest", row.get("open_interest")),
+                    None
+                )
+                oi_change = _safe_float(
+                    row.get(
+                        "changeinOpenInterest",
+                        row.get("changeInOpenInterest", row.get("change_in_oi"))
+                    ),
+                    None
+                )
+                pchange = _safe_float(
+                    row.get("pChange", row.get("percentChange")),
+                    None
+                )
+
+                if ltp is None or oi is None or oi_change is None:
+                    continue
+
+                expiry_text = str(row.get("expiryDate") or row.get("expiry") or "")
+                expiry_dt = None
+                for fmt in ("%d-%b-%Y", "%d-%b-%y", "%Y-%m-%d"):
+                    try:
+                        expiry_dt = datetime.strptime(expiry_text, fmt)
+                        break
+                    except Exception:
+                        pass
+
+                futures_rows.append({
+                    "expiry": expiry_text,
+                    "expiry_dt": expiry_dt,
+                    "ltp": ltp,
+                    "open_interest": oi,
+                    "change_in_oi": oi_change,
+                    "change_percent": pchange,
+                    "raw": row
+                })
+
+        if not futures_rows:
+            return {
+                **neutral,
+                "message": "NIFTY futures live row was not available from NSE."
+            }
+
+        today = datetime.now().date()
+        futures_rows.sort(
+            key=lambda item: (
+                0 if item["expiry_dt"] and item["expiry_dt"].date() >= today else 1,
+                item["expiry_dt"] or datetime.max
+            )
+        )
+        selected = futures_rows[0]
+
+        price_change = selected["change_percent"]
+        if price_change is None:
+            price_score = 0.0
+        else:
+            price_score = max(-1.0, min(1.0, price_change / 0.75))
+
+        oi_change = selected["change_in_oi"]
+        oi_direction = 1 if oi_change > 0 else (-1 if oi_change < 0 else 0)
+        price_direction = 1 if price_score > 0.02 else (-1 if price_score < -0.02 else 0)
+
+        if price_direction > 0 and oi_direction > 0:
+            positioning = "LONG BUILDUP"
+            positioning_score = 0.85
+        elif price_direction < 0 and oi_direction > 0:
+            positioning = "SHORT BUILDUP"
+            positioning_score = -0.85
+        elif price_direction > 0 and oi_direction < 0:
+            positioning = "SHORT COVERING"
+            positioning_score = 0.55
+        elif price_direction < 0 and oi_direction < 0:
+            positioning = "LONG UNWINDING"
+            positioning_score = -0.55
+        else:
+            positioning = "MIXED / FLAT"
+            positioning_score = price_score * 0.35
+
+        # Basis is deliberately a smaller modifier.
+        try:
+            spot_data = yf.Ticker("^NSEI").history(period="1d", interval="5m")
+            spot = float(spot_data["Close"].iloc[-1]) if not spot_data.empty else None
+        except Exception:
+            spot = None
+
+        if spot:
+            basis_percent = (selected["ltp"] - spot) / spot * 100
+            basis_score = max(-1.0, min(1.0, basis_percent / 0.50))
+        else:
+            basis_percent = None
+            basis_score = 0.0
+
+        futures_score = (
+            positioning_score * 0.85
+            + basis_score * 0.15
+        )
+        futures_score = max(-1.0, min(1.0, futures_score))
+
+        return {
+            "status": "success",
+            "source": "NSE",
+            "expiry": selected["expiry"],
+            "futures_ltp": round(selected["ltp"], 2),
+            "open_interest": round(selected["open_interest"], 2),
+            "change_in_oi": round(oi_change, 2),
+            "change_percent": round(price_change, 3) if price_change is not None else None,
+            "positioning": positioning,
+            "basis_percent": round(basis_percent, 3) if basis_percent is not None else None,
+            "futures_score": round(futures_score, 3),
+            "futures_bias": _score_to_bias(futures_score),
+            "note": (
+                "Price/OI classification: price up + OI up = long buildup; "
+                "price down + OI up = short buildup; price up + OI down = "
+                "short covering; price down + OI down = long unwinding."
+            )
+        }
+
+    except requests.RequestException as e:
+        return {**neutral, "message": "NSE futures connection error: " + str(e)}
+    except Exception as e:
+        return {**neutral, "message": str(e)}
+
+
+def get_premarket_analysis(market_data=None):
+    """
+    Try to read the GIFT Nifty cue displayed by NSE. If unavailable, use the
+    current session opening gap after the market has opened. The signal is
+    deliberately low weight because the source can be unavailable and gaps
+    can reverse quickly.
+    """
+    neutral = {
+        "status": "unavailable",
+        "source": "NSE / yfinance",
+        "premarket_score": 0.0,
+        "premarket_bias": "NEUTRAL",
+        "signal_type": "UNAVAILABLE"
+    }
+
+    # First attempt: GIFT Nifty text shown on NSE market pages.
+    try:
+        session, headers = _nse_session()
+        response = session.get(
+            "https://www.nseindia.com/market-data/pre-open-market-cm-and-emerge-market",
+            headers=headers,
+            timeout=12
+        )
+        if response.status_code == 200:
+            plain = re.sub(r"<[^>]+>", " ", response.text)
+            plain = re.sub(r"\s+", " ", plain)
+            match = re.search(
+                r"GiftNifty\s+Futures.*?([0-9][0-9,]*\.?[0-9]*)\s+([+-]?[0-9][0-9,]*\.?[0-9]*)\s*\(([+-]?[0-9.]+)%\)",
+                plain,
+                re.IGNORECASE
+            )
+            if match:
+                price = _safe_float(match.group(1), None)
+                change = _safe_float(match.group(2), None)
+                change_percent = _safe_float(match.group(3), None)
+                if change_percent is not None:
+                    score = max(-1.0, min(1.0, change_percent / 0.75))
+                    return {
+                        "status": "success",
+                        "source": "NSE displayed GIFT Nifty cue",
+                        "signal_type": "GIFT NIFTY",
+                        "price": round(price, 2) if price is not None else None,
+                        "change": round(change, 2) if change is not None else None,
+                        "change_percent": round(change_percent, 3),
+                        "premarket_score": round(score, 3),
+                        "premarket_bias": _score_to_bias(score)
+                    }
+    except Exception:
+        pass
+
+    # Second attempt: actual current-session opening gap once NIFTY has opened.
+    try:
+        data = market_data
+        if data is None or data.empty:
+            data = yf.Ticker("^NSEI").history(period="5d", interval="5m")
+
+        if data is not None and not data.empty and len(data) >= 2:
+            date_values = pd.Index(data.index.date)
+            latest_date = date_values[-1]
+            today_rows = data[date_values == latest_date]
+            previous_rows = data[date_values < latest_date]
+
+            if not today_rows.empty and not previous_rows.empty:
+                session_open = float(today_rows["Open"].iloc[0])
+                previous_session_close = float(previous_rows["Close"].iloc[-1])
+                gap_percent = (
+                    (session_open - previous_session_close)
+                    / previous_session_close
+                    * 100
+                )
+                score = max(-1.0, min(1.0, gap_percent / 0.60))
+                return {
+                    "status": "success",
+                    "source": "yfinance NIFTY session data",
+                    "signal_type": "OPENING GAP",
+                    "session_open": round(session_open, 2),
+                    "previous_close": round(previous_session_close, 2),
+                    "change_percent": round(gap_percent, 3),
+                    "premarket_score": round(score, 3),
+                    "premarket_bias": _score_to_bias(score),
+                    "note": "Opening-gap fallback is available only after the new session starts."
+                }
+    except Exception:
+        pass
+
+    return {
+        **neutral,
+        "message": "GIFT Nifty / opening-gap cue is currently unavailable."
+    }
+
+
+def detect_market_regime(
+    vix_value,
+    technical_score,
+    momentum_score,
+    news_score,
+    breadth_score
+):
+    """Classify the current environment so signal weights can adapt."""
+    vix_value = _safe_float(vix_value, None)
+    technical_score = float(technical_score or 0)
+    momentum_score = float(momentum_score or 0)
+    news_score = float(news_score or 0)
+    breadth_score = float(breadth_score or 0)
+
+    same_direction = (
+        technical_score * momentum_score > 0
+        and technical_score * breadth_score >= 0
+    )
+
+    if (
+        (vix_value is not None and vix_value >= 18)
+        or abs(news_score) >= 0.70
+    ):
+        regime = "EVENT / HIGH VOLATILITY"
+    elif (
+        abs(technical_score) >= 0.45
+        and abs(momentum_score) >= 0.18
+        and same_direction
+    ):
+        regime = "TRENDING"
+    elif (
+        (vix_value is None or vix_value < 16)
+        and abs(technical_score) < 0.35
+        and abs(momentum_score) < 0.22
+    ):
+        regime = "RANGE / MEAN-REVERTING"
+    else:
+        regime = "MIXED"
+
+    multipliers = {
+        "technical": 1.0,
+        "news": 1.0,
+        "global": 1.0,
+        "institutional": 1.0,
+        "option_chain": 1.0,
+        "candlestick": 1.0,
+        "momentum": 1.0,
+        "breadth": 1.0,
+        "futures": 1.0,
+        "premarket": 1.0
+    }
+
+    if regime == "TRENDING":
+        multipliers.update({
+            "technical": 1.25,
+            "candlestick": 1.10,
+            "momentum": 1.30,
+            "breadth": 1.20,
+            "futures": 1.15,
+            "option_chain": 0.90,
+            "news": 0.85
+        })
+    elif regime == "RANGE / MEAN-REVERTING":
+        multipliers.update({
+            "option_chain": 1.30,
+            "technical": 0.80,
+            "momentum": 0.70,
+            "candlestick": 0.90,
+            "premarket": 0.80,
+            "futures": 0.90
+        })
+    elif regime == "EVENT / HIGH VOLATILITY":
+        multipliers.update({
+            "news": 1.35,
+            "global": 1.20,
+            "premarket": 1.20,
+            "option_chain": 1.10,
+            "technical": 0.85,
+            "candlestick": 0.80,
+            "momentum": 0.80
+        })
+
+    return {
+        "regime": regime,
+        "weight_multipliers": multipliers
+    }
+
+
+def blend_available_signals(signal_scores, base_weights, multipliers, availability):
+    """Blend only signals that are actually available and renormalize weights."""
+    effective = {}
+    raw_weight_total = 0.0
+
+    for name, base_weight in base_weights.items():
+        if not availability.get(name, True):
+            continue
+        weight = base_weight * multipliers.get(name, 1.0)
+        if weight <= 0:
+            continue
+        effective[name] = weight
+        raw_weight_total += weight
+
+    if raw_weight_total <= 0:
+        return 0.0, {}, 0.0
+
+    normalized = {
+        name: weight / raw_weight_total
+        for name, weight in effective.items()
+    }
+
+    combined = sum(
+        float(signal_scores.get(name, 0) or 0) * weight
+        for name, weight in normalized.items()
+    )
+    combined = max(-1.0, min(1.0, combined))
+
+    available_base_weight = sum(
+        base_weights[name]
+        for name in base_weights
+        if availability.get(name, True)
+    )
+    coverage = max(0.0, min(1.0, available_base_weight / sum(base_weights.values())))
+
+    return combined, normalized, coverage
+
+
 def get_option_chain_analysis(expiry=None):
     """
     Fetch and analyze the NIFTY option chain.
@@ -2006,6 +2675,20 @@ def get_option_chain_analysis(expiry=None):
                 "ltp"
             )
 
+            call_iv = _option_value(
+                ce,
+                "impliedVolatility",
+                "implied_volatility",
+                "iv"
+            )
+
+            put_iv = _option_value(
+                pe,
+                "impliedVolatility",
+                "implied_volatility",
+                "iv"
+            )
+
             total_call_oi += call_oi
             total_put_oi += put_oi
 
@@ -2028,7 +2711,9 @@ def get_option_chain_analysis(expiry=None):
                     put_change_oi
                 ),
                 "call_ltp": call_ltp,
-                "put_ltp": put_ltp
+                "put_ltp": put_ltp,
+                "call_iv": call_iv,
+                "put_iv": put_iv
             })
 
         if not parsed_rows:
@@ -2058,6 +2743,62 @@ def get_option_chain_analysis(expiry=None):
         )
 
         atm_strike = atm_row["strike"]
+
+        # ------------------------------------------------
+        # IMPLIED VOLATILITY / SKEW
+        # ------------------------------------------------
+        atm_call_iv = atm_row.get("call_iv") or 0.0
+        atm_put_iv = atm_row.get("put_iv") or 0.0
+        valid_atm_ivs = [
+            value for value in (atm_call_iv, atm_put_iv)
+            if value and value > 0
+        ]
+        atm_iv = (
+            sum(valid_atm_ivs) / len(valid_atm_ivs)
+            if valid_atm_ivs else None
+        )
+
+        iv_window = max(200.0, float(spot) * 0.01)
+        near_call_ivs = [
+            row.get("call_iv", 0.0)
+            for row in parsed_rows
+            if spot <= row["strike"] <= spot + iv_window
+            and row.get("call_iv", 0.0) > 0
+        ]
+        near_put_ivs = [
+            row.get("put_iv", 0.0)
+            for row in parsed_rows
+            if spot - iv_window <= row["strike"] <= spot
+            and row.get("put_iv", 0.0) > 0
+        ]
+
+        avg_call_iv = (
+            sum(near_call_ivs) / len(near_call_ivs)
+            if near_call_ivs else None
+        )
+        avg_put_iv = (
+            sum(near_put_ivs) / len(near_put_ivs)
+            if near_put_ivs else None
+        )
+
+        if avg_call_iv is not None and avg_put_iv is not None:
+            iv_skew = avg_put_iv - avg_call_iv
+            # Put IV richer than call IV is treated as near-term downside/fear demand.
+            iv_skew_score = max(-1.0, min(1.0, -iv_skew / 5.0))
+        else:
+            iv_skew = None
+            iv_skew_score = 0.0
+
+        if atm_iv is None:
+            iv_risk = "UNKNOWN"
+        elif atm_iv < 12:
+            iv_risk = "LOW"
+        elif atm_iv < 18:
+            iv_risk = "MEDIUM"
+        elif atm_iv < 25:
+            iv_risk = "HIGH"
+        else:
+            iv_risk = "VERY HIGH"
 
         # ------------------------------------------------
         # SUPPORT / RESISTANCE
@@ -2346,16 +3087,18 @@ def get_option_chain_analysis(expiry=None):
             min(1, wall_score)
         )
 
-        # Safer blended option-chain score:
-        # 55% absolute OI PCR
-        # 20% fresh change-in-OI positioning
-        # 15% immediate OI wall balance
-        # 10% max-pain pull
+        # Version 6 option-chain score:
+        # 50% absolute OI PCR
+        # 18% fresh change-in-OI positioning
+        # 12% immediate OI wall balance
+        # 8% max-pain pull
+        # 12% option IV skew
         option_chain_score = (
-            pcr_score * 0.55
-            + change_oi_score * 0.20
-            + wall_score * 0.15
-            + max_pain_score * 0.10
+            pcr_score * 0.50
+            + change_oi_score * 0.18
+            + wall_score * 0.12
+            + max_pain_score * 0.08
+            + iv_skew_score * 0.12
         )
 
         option_chain_score = max(
@@ -2594,6 +3337,12 @@ def get_option_chain_analysis(expiry=None):
                     3
                 )
             ),
+            "atm_iv": (round(atm_iv, 2) if atm_iv is not None else None),
+            "avg_call_iv": (round(avg_call_iv, 2) if avg_call_iv is not None else None),
+            "avg_put_iv": (round(avg_put_iv, 2) if avg_put_iv is not None else None),
+            "iv_skew": (round(iv_skew, 2) if iv_skew is not None else None),
+            "iv_skew_score": round(iv_skew_score, 3),
+            "iv_risk": iv_risk,
             "option_chain_score": round(
                 option_chain_score,
                 3
@@ -2621,8 +3370,16 @@ def get_option_chain_analysis(expiry=None):
                         item["call_ltp"],
                         2
                     ),
+                    "call_iv": round(
+                        item.get("call_iv", 0.0),
+                        2
+                    ),
                     "put_ltp": round(
                         item["put_ltp"],
+                        2
+                    ),
+                    "put_iv": round(
+                        item.get("put_iv", 0.0),
                         2
                     ),
                     "put_change_oi": round(
@@ -2641,8 +3398,8 @@ def get_option_chain_analysis(expiry=None):
             ],
             "note": (
                 "Option-chain score blends OI PCR, capped/reliability-"
-                "weighted change-in-OI, immediate OI wall balance and "
-                "a small max-pain pull. Immediate and major levels are "
+                "weighted change-in-OI, immediate OI wall balance, option IV "
+                "skew and a small max-pain pull. Immediate and major levels are "
                 "reported separately. Use as decision support only."
             )
         }
@@ -2668,6 +3425,21 @@ def option_chain(expiry: str = None):
     return get_option_chain_analysis(
         expiry=expiry
     )
+
+
+@app.get("/market-breadth")
+def market_breadth():
+    return get_market_breadth()
+
+
+@app.get("/futures-analysis")
+def futures_analysis():
+    return get_nifty_futures_analysis()
+
+
+@app.get("/premarket-analysis")
+def premarket_analysis():
+    return get_premarket_analysis()
 
 
 # ============================================================
@@ -3064,6 +3836,192 @@ def dashboard():
         text-align: right;
     }
 
+
+    .alert-section {
+        margin-bottom: 14px;
+    }
+
+    .alert-section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+    }
+
+    .alert-section-title {
+        font-size: 17px;
+        font-weight: 800;
+    }
+
+    .alert-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+    }
+
+    .trade-alert-card {
+        position: relative;
+        overflow: hidden;
+    }
+
+    .trade-alert-card::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        background: #64748b;
+    }
+
+    .trade-alert-card.call-card::before {
+        background: #22c55e;
+    }
+
+    .trade-alert-card.put-card::before {
+        background: #ef4444;
+    }
+
+    .trade-alert-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+        margin-bottom: 14px;
+    }
+
+    .trade-side {
+        font-size: 20px;
+        font-weight: 850;
+    }
+
+    .alert-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 92px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        border: 1px solid #334155;
+        background: #172033;
+    }
+
+    .alert-badge.buy {
+        color: #86efac;
+        border-color: rgba(34, 197, 94, 0.45);
+        background: rgba(34, 197, 94, 0.10);
+    }
+
+    .alert-badge.watch {
+        color: #facc15;
+        border-color: rgba(250, 204, 21, 0.40);
+        background: rgba(250, 204, 21, 0.08);
+    }
+
+    .alert-badge.wait {
+        color: #cbd5e1;
+    }
+
+    .alert-badge.exit {
+        color: #fdba74;
+        border-color: rgba(249, 115, 22, 0.45);
+        background: rgba(249, 115, 22, 0.10);
+    }
+
+    .alert-badge.stop {
+        color: #fecaca;
+        border-color: rgba(239, 68, 68, 0.50);
+        background: rgba(239, 68, 68, 0.12);
+    }
+
+    .trade-level-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+    }
+
+    .trade-level {
+        padding: 10px;
+        border: 1px solid #25304a;
+        background: #0d1526;
+        border-radius: 10px;
+    }
+
+    .trade-level .label {
+        margin-bottom: 4px;
+        font-size: 10px;
+    }
+
+    .trade-level strong {
+        display: block;
+        font-size: 14px;
+    }
+
+    .trade-reason {
+        margin-top: 12px;
+        color: #94a3b8;
+        font-size: 12px;
+        line-height: 1.5;
+    }
+
+    .trade-state {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #0d1526;
+        border: 1px solid #25304a;
+        font-size: 12px;
+        color: #cbd5e1;
+    }
+
+    .alert-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .secondary-btn {
+        background: #172033;
+        border: 1px solid #334155;
+        color: #e2e8f0;
+    }
+
+    .secondary-btn:hover {
+        background: #1f2a40;
+    }
+
+    .alert-history {
+        margin-top: 14px;
+    }
+
+    .history-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+    }
+
+    .history-item {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 9px 10px;
+        border-radius: 9px;
+        background: #0d1526;
+        border: 1px solid #25304a;
+        font-size: 12px;
+    }
+
+    .history-time {
+        color: #64748b;
+        white-space: nowrap;
+    }
+
     .footer-note {
         margin-top: 14px;
         color: #64748b;
@@ -3187,6 +4145,7 @@ def dashboard():
     @media (max-width: 700px) {
         .hero-grid,
         .grid-2,
+        .alert-grid,
         .levels {
             grid-template-columns: 1fr;
         }
@@ -3247,6 +4206,154 @@ def dashboard():
             <div class="label">Combined Score</div>
             <div class="value" id="combinedScore">--</div>
             <div class="muted">Range: -1 to +1</div>
+        </div>
+    </div>
+
+    <div class="card alert-section">
+        <div class="alert-section-header">
+            <div>
+                <div class="alert-section-title">
+                    F&O CE / PE Alert Engine
+                </div>
+                <div class="muted">
+                    Independent call/put entry, stop-loss, target and exit monitoring.
+                </div>
+            </div>
+
+            <div class="alert-actions">
+                <button
+                    class="secondary-btn"
+                    id="enableAlertsBtn"
+                    onclick="enableBrowserAlerts()"
+                >
+                    Enable Browser Alerts
+                </button>
+
+                <span class="status-pill" id="alertGeneratedAt">
+                    Alert: --
+                </span>
+            </div>
+        </div>
+
+        <div class="alert-grid">
+            <div class="card trade-alert-card call-card">
+                <div class="trade-alert-top">
+                    <div>
+                        <div class="label">CALL OPTION</div>
+                        <div class="trade-side" id="ceContract">-- CE</div>
+                        <div class="muted" id="ceLtp">LTP: --</div>
+                    </div>
+
+                    <span class="alert-badge wait" id="ceSignal">
+                        WAIT
+                    </span>
+                </div>
+
+                <div class="trade-level-grid">
+                    <div class="trade-level">
+                        <div class="label">ENTRY ZONE</div>
+                        <strong id="ceEntry">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">STOP LOSS</div>
+                        <strong class="negative" id="ceStop">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">TARGET 1</div>
+                        <strong class="positive" id="ceTarget1">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">TARGET 2</div>
+                        <strong class="positive" id="ceTarget2">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">NIFTY INVALIDATION</div>
+                        <strong id="ceInvalidation">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">SIGNAL STRENGTH</div>
+                        <strong id="ceStrength">--</strong>
+                    </div>
+                </div>
+
+                <div class="trade-state" id="ceLifecycle">
+                    Signal lifecycle: waiting for CE setup.
+                </div>
+
+                <div class="trade-reason" id="ceReason">
+                    --
+                </div>
+            </div>
+
+            <div class="card trade-alert-card put-card">
+                <div class="trade-alert-top">
+                    <div>
+                        <div class="label">PUT OPTION</div>
+                        <div class="trade-side" id="peContract">-- PE</div>
+                        <div class="muted" id="peLtp">LTP: --</div>
+                    </div>
+
+                    <span class="alert-badge wait" id="peSignal">
+                        WAIT
+                    </span>
+                </div>
+
+                <div class="trade-level-grid">
+                    <div class="trade-level">
+                        <div class="label">ENTRY ZONE</div>
+                        <strong id="peEntry">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">STOP LOSS</div>
+                        <strong class="negative" id="peStop">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">TARGET 1</div>
+                        <strong class="positive" id="peTarget1">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">TARGET 2</div>
+                        <strong class="positive" id="peTarget2">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">NIFTY INVALIDATION</div>
+                        <strong id="peInvalidation">--</strong>
+                    </div>
+
+                    <div class="trade-level">
+                        <div class="label">SIGNAL STRENGTH</div>
+                        <strong id="peStrength">--</strong>
+                    </div>
+                </div>
+
+                <div class="trade-state" id="peLifecycle">
+                    Signal lifecycle: waiting for PE setup.
+                </div>
+
+                <div class="trade-reason" id="peReason">
+                    --
+                </div>
+            </div>
+        </div>
+
+        <div class="alert-history">
+            <div class="section-title">
+                Recent Browser Alert History
+            </div>
+            <div class="history-list" id="alertHistoryList">
+                <div class="muted">
+                    No alert events recorded in this browser yet.
+                </div>
+            </div>
         </div>
     </div>
 
@@ -3503,10 +4610,72 @@ def dashboard():
         </div>
     </div>
 
+    <div class="grid-2">
+        <div class="card">
+            <div class="section-title">Advanced Prediction Signals</div>
+
+            <div class="signal-row">
+                <span class="signal-name">Market Regime</span>
+                <span class="signal-value" id="marketRegime">--</span>
+            </div>
+
+            <div class="signal-row">
+                <span class="signal-name">NIFTY 50 Breadth</span>
+                <span class="signal-value" id="breadthBias">--</span>
+            </div>
+
+            <div class="signal-row">
+                <span class="signal-name">Advances / Declines</span>
+                <span class="signal-value" id="breadthCounts">--</span>
+            </div>
+
+            <div class="signal-row">
+                <span class="signal-name">NIFTY Futures</span>
+                <span class="signal-value" id="futuresPositioning">--</span>
+            </div>
+
+            <div class="signal-row">
+                <span class="signal-name">GIFT / Opening Gap</span>
+                <span class="signal-value" id="premarketBias">--</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Volatility & Model Quality</div>
+
+            <div class="signal-row">
+                <span class="signal-name">ATM Option IV</span>
+                <span class="signal-value" id="atmIv">--</span>
+            </div>
+
+            <div class="signal-row">
+                <span class="signal-name">Put - Call IV Skew</span>
+                <span class="signal-value" id="ivSkew">--</span>
+            </div>
+
+            <div class="signal-row">
+                <span class="signal-name">IV Risk</span>
+                <span class="signal-value" id="ivRisk">--</span>
+            </div>
+
+            <div class="signal-row">
+                <span class="signal-name">Live Data Coverage</span>
+                <span class="signal-value" id="dataCoverage">--</span>
+            </div>
+
+            <div class="signal-row">
+                <span class="signal-name">Backtest</span>
+                <span class="signal-value"><a href="/backtest?period=2y" target="_blank" style="color:#60a5fa;">Run 2Y Core Backtest</a></span>
+            </div>
+        </div>
+    </div>
+
     <div class="footer-note">
-        This dashboard is a heuristic decision-support tool. "Current signal strength"
-        is the probability assigned to the selected scenario, not proven historical accuracy.
-        Historical accuracy will only be shown after backtesting/prediction-history data is available.
+        This dashboard is a heuristic F&O decision-support tool. BUY SIGNAL means
+        the programmed rule set triggered; it does not place an order and does not guarantee profit.
+        Premium entries, stop-losses and targets are model-generated risk levels. "Current signal
+        strength" is not proven historical accuracy. Validate the alert engine with backtesting and
+        forward testing before relying on it with real capital.
     </div>
 </div>
 
@@ -3835,6 +5004,800 @@ def dashboard():
         }
     );
 
+
+    const alertStateKeys = {
+        CE: "niftyAiCeSignalStateV7",
+        PE: "niftyAiPeSignalStateV7"
+    };
+
+    const alertHistoryKey =
+        "niftyAiAlertHistoryV7";
+
+    let lastRenderedAlertStatus = {
+        CE: null,
+        PE: null
+    };
+
+    function money(value) {
+        if (
+            value === null
+            || value === undefined
+            || Number.isNaN(Number(value))
+        ) {
+            return "--";
+        }
+
+        return "₹" + Number(value).toFixed(2);
+    }
+
+    function alertBadgeClass(signal) {
+        const value = String(signal || "").toUpperCase();
+
+        if (value.includes("STOP")) {
+            return "alert-badge stop";
+        }
+
+        if (
+            value.includes("EXIT")
+            || value.includes("TARGET")
+        ) {
+            return "alert-badge exit";
+        }
+
+        if (value.includes("BUY")) {
+            return "alert-badge buy";
+        }
+
+        if (value.includes("WATCH")) {
+            return "alert-badge watch";
+        }
+
+        return "alert-badge wait";
+    }
+
+    function setAlertBadge(id, signal) {
+        const element =
+            document.getElementById(id);
+
+        if (!element) {
+            return;
+        }
+
+        element.textContent =
+            signal || "WAIT";
+
+        element.className =
+            alertBadgeClass(signal);
+    }
+
+    function enableBrowserAlerts() {
+        if (!("Notification" in window)) {
+            alert(
+                "Browser notifications are not supported here."
+            );
+            return;
+        }
+
+        Notification.requestPermission()
+            .then((permission) => {
+                const btn =
+                    document.getElementById(
+                        "enableAlertsBtn"
+                    );
+
+                if (permission === "granted") {
+                    btn.textContent =
+                        "Browser Alerts Enabled";
+
+                    pushAlertHistory(
+                        "SYSTEM",
+                        "Browser alerts enabled."
+                    );
+                }
+                else {
+                    btn.textContent =
+                        "Alerts Permission Blocked";
+                }
+            });
+    }
+
+    function playAlertTone() {
+        try {
+            const AudioContext =
+                window.AudioContext
+                || window.webkitAudioContext;
+
+            const context =
+                new AudioContext();
+
+            const oscillator =
+                context.createOscillator();
+
+            const gain =
+                context.createGain();
+
+            oscillator.connect(gain);
+            gain.connect(context.destination);
+
+            oscillator.frequency.value = 880;
+            gain.gain.value = 0.035;
+
+            oscillator.start();
+
+            setTimeout(
+                () => {
+                    oscillator.stop();
+                    context.close();
+                },
+                180
+            );
+        }
+        catch (error) {
+            // Sound is optional.
+        }
+    }
+
+    function sendBrowserAlert(title, body) {
+        playAlertTone();
+
+        if (
+            "Notification" in window
+            && Notification.permission
+                === "granted"
+        ) {
+            try {
+                new Notification(
+                    title,
+                    {
+                        body: body
+                    }
+                );
+            }
+            catch (error) {
+                // Notification failure must not break dashboard refresh.
+            }
+        }
+    }
+
+    function getAlertHistory() {
+        try {
+            return JSON.parse(
+                localStorage.getItem(
+                    alertHistoryKey
+                )
+                || "[]"
+            );
+        }
+        catch (error) {
+            return [];
+        }
+    }
+
+    function pushAlertHistory(side, message) {
+        const history =
+            getAlertHistory();
+
+        history.unshift({
+            side: side,
+            message: message,
+            time: new Date().toISOString()
+        });
+
+        localStorage.setItem(
+            alertHistoryKey,
+            JSON.stringify(
+                history.slice(0, 20)
+            )
+        );
+
+        renderAlertHistory();
+    }
+
+    function renderAlertHistory() {
+        const container =
+            document.getElementById(
+                "alertHistoryList"
+            );
+
+        if (!container) {
+            return;
+        }
+
+        const history =
+            getAlertHistory();
+
+        if (!history.length) {
+            container.innerHTML =
+                '<div class="muted">'
+                + 'No alert events recorded in this browser yet.'
+                + '</div>';
+            return;
+        }
+
+        container.innerHTML =
+            history.slice(0, 8)
+                .map((item) => {
+                    const time =
+                        new Date(
+                            item.time
+                        ).toLocaleTimeString();
+
+                    return (
+                        '<div class="history-item">'
+                        + '<span><strong>'
+                        + item.side
+                        + '</strong> • '
+                        + item.message
+                        + '</span>'
+                        + '<span class="history-time">'
+                        + time
+                        + '</span>'
+                        + '</div>'
+                    );
+                })
+                .join("");
+    }
+
+    function loadLifecycle(side) {
+        try {
+            return JSON.parse(
+                localStorage.getItem(
+                    alertStateKeys[side]
+                )
+                || "null"
+            );
+        }
+        catch (error) {
+            return null;
+        }
+    }
+
+    function saveLifecycle(side, state) {
+        localStorage.setItem(
+            alertStateKeys[side],
+            JSON.stringify(state)
+        );
+    }
+
+    function clearLifecycle(side) {
+        localStorage.removeItem(
+            alertStateKeys[side]
+        );
+    }
+
+    function optionPremiumForStrike(
+        side,
+        strike,
+        optionChain
+    ) {
+        const rows =
+            optionChain.nearby_strikes || [];
+
+        const row =
+            rows.find((item) => {
+                return Number(item.strike)
+                    === Number(strike);
+            });
+
+        if (!row) {
+            return null;
+        }
+
+        const value =
+            side === "CE"
+                ? row.call_ltp
+                : row.put_ltp;
+
+        if (
+            value === null
+            || value === undefined
+            || Number.isNaN(Number(value))
+        ) {
+            return null;
+        }
+
+        return Number(value);
+    }
+
+    function updateSignalLifecycle(
+        side,
+        alertData,
+        data,
+        optionChain
+    ) {
+        const prefix =
+            side === "CE" ? "ce" : "pe";
+
+        const lifecycleElement =
+            document.getElementById(
+                prefix + "Lifecycle"
+            );
+
+        if (
+            !alertData
+            || !lifecycleElement
+        ) {
+            return;
+        }
+
+        let state =
+            loadLifecycle(side);
+
+        const backendSignal =
+            String(
+                alertData.signal || "WAIT"
+            ).toUpperCase();
+
+        // Start monitoring the generated signal when the backend first
+        // produces BUY SIGNAL. This monitors the signal itself; it does
+        // not claim the user actually entered the trade.
+        if (
+            backendSignal === "BUY SIGNAL"
+            && !state
+            && alertData.strike
+            && alertData.ltp
+        ) {
+            state = {
+                side: side,
+                strike: alertData.strike,
+                referenceEntry: alertData.ltp,
+                stopLoss: alertData.stop_loss,
+                target1: alertData.target_1,
+                target2: alertData.target_2,
+                niftyInvalidation:
+                    alertData.nifty_invalidation,
+                createdAt:
+                    new Date().toISOString(),
+                target1Hit: false
+            };
+
+            saveLifecycle(
+                side,
+                state
+            );
+
+            const message =
+                side
+                + " BUY SIGNAL • "
+                + state.strike
+                + " "
+                + side
+                + " • ref "
+                + money(state.referenceEntry);
+
+            pushAlertHistory(
+                side,
+                message
+            );
+
+            sendBrowserAlert(
+                "NIFTY AI " + side + " BUY SIGNAL",
+                message
+            );
+        }
+
+        if (!state) {
+            lifecycleElement.textContent =
+                "Signal lifecycle: no active "
+                + side
+                + " buy signal being monitored.";
+            return;
+        }
+
+        const currentPremium =
+            optionPremiumForStrike(
+                side,
+                state.strike,
+                optionChain
+            );
+
+        const niftyPrice =
+            Number(data.price);
+
+        let lifecycleStatus =
+            "MONITORING";
+
+        let lifecycleMessage =
+            "Monitoring "
+            + state.strike
+            + " "
+            + side
+            + " from reference "
+            + money(
+                state.referenceEntry
+            )
+            + ".";
+
+        const stopHit =
+            currentPremium !== null
+            && state.stopLoss !== null
+            && state.stopLoss !== undefined
+            && currentPremium
+                <= Number(state.stopLoss);
+
+        const target2Hit =
+            currentPremium !== null
+            && state.target2 !== null
+            && state.target2 !== undefined
+            && currentPremium
+                >= Number(state.target2);
+
+        const target1Hit =
+            currentPremium !== null
+            && state.target1 !== null
+            && state.target1 !== undefined
+            && currentPremium
+                >= Number(state.target1);
+
+        const underlyingInvalid =
+            side === "CE"
+                ? (
+                    Number.isFinite(niftyPrice)
+                    && state.niftyInvalidation
+                    && niftyPrice
+                        <= Number(
+                            state.niftyInvalidation
+                        )
+                )
+                : (
+                    Number.isFinite(niftyPrice)
+                    && state.niftyInvalidation
+                    && niftyPrice
+                        >= Number(
+                            state.niftyInvalidation
+                        )
+                );
+
+        const modelReversal =
+            side === "CE"
+                ? (
+                    Number(data.combined_score)
+                        <= -0.10
+                    || String(data.prediction)
+                        .toUpperCase()
+                        .includes("BEARISH")
+                )
+                : (
+                    Number(data.combined_score)
+                        >= 0.10
+                    || String(data.prediction)
+                        .toUpperCase()
+                        .includes("BULLISH")
+                );
+
+        if (stopHit) {
+            lifecycleStatus =
+                "STOP LOSS HIT";
+
+            lifecycleMessage =
+                "STOP LOSS HIT • "
+                + state.strike
+                + " "
+                + side
+                + " • premium "
+                + money(currentPremium);
+
+            pushAlertHistory(
+                side,
+                lifecycleMessage
+            );
+
+            sendBrowserAlert(
+                "NIFTY AI " + side + " STOP LOSS",
+                lifecycleMessage
+            );
+
+            clearLifecycle(side);
+        }
+        else if (underlyingInvalid) {
+            lifecycleStatus =
+                "EXIT SIGNAL";
+
+            lifecycleMessage =
+                "NIFTY invalidation level breached • EXIT "
+                + state.strike
+                + " "
+                + side
+                + ".";
+
+            pushAlertHistory(
+                side,
+                lifecycleMessage
+            );
+
+            sendBrowserAlert(
+                "NIFTY AI " + side + " EXIT",
+                lifecycleMessage
+            );
+
+            clearLifecycle(side);
+        }
+        else if (modelReversal) {
+            lifecycleStatus =
+                "EXIT SIGNAL";
+
+            lifecycleMessage =
+                "Model direction reversed • EXIT / reassess "
+                + state.strike
+                + " "
+                + side
+                + ".";
+
+            pushAlertHistory(
+                side,
+                lifecycleMessage
+            );
+
+            sendBrowserAlert(
+                "NIFTY AI " + side + " EXIT",
+                lifecycleMessage
+            );
+
+            clearLifecycle(side);
+        }
+        else if (target2Hit) {
+            lifecycleStatus =
+                "TARGET 2 HIT";
+
+            lifecycleMessage =
+                "TARGET 2 HIT • "
+                + state.strike
+                + " "
+                + side
+                + " • premium "
+                + money(currentPremium)
+                + " • exit/book signal.";
+
+            pushAlertHistory(
+                side,
+                lifecycleMessage
+            );
+
+            sendBrowserAlert(
+                "NIFTY AI " + side + " TARGET 2",
+                lifecycleMessage
+            );
+
+            clearLifecycle(side);
+        }
+        else if (
+            target1Hit
+            && !state.target1Hit
+        ) {
+            lifecycleStatus =
+                "TARGET 1 HIT";
+
+            lifecycleMessage =
+                "TARGET 1 HIT • "
+                + state.strike
+                + " "
+                + side
+                + " • premium "
+                + money(currentPremium)
+                + " • partial-booking alert.";
+
+            state.target1Hit = true;
+
+            saveLifecycle(
+                side,
+                state
+            );
+
+            pushAlertHistory(
+                side,
+                lifecycleMessage
+            );
+
+            sendBrowserAlert(
+                "NIFTY AI " + side + " TARGET 1",
+                lifecycleMessage
+            );
+        }
+        else if (currentPremium === null) {
+            lifecycleMessage +=
+                " Current premium is outside the compact nearby-strike feed; lifecycle remains stored.";
+        }
+        else {
+            lifecycleMessage +=
+                " Current premium "
+                + money(currentPremium)
+                + ".";
+        }
+
+        lifecycleElement.textContent =
+            lifecycleStatus
+            + " • "
+            + lifecycleMessage;
+    }
+
+    function renderTradeAlert(
+        side,
+        alertData,
+        data,
+        optionChain
+    ) {
+        const prefix =
+            side === "CE" ? "ce" : "pe";
+
+        if (!alertData) {
+            return;
+        }
+
+        const strike =
+            alertData.strike;
+
+        setText(
+            prefix + "Contract",
+            (
+                strike === null
+                || strike === undefined
+            )
+                ? "-- " + side
+                : formatNumber(
+                    strike,
+                    0
+                ) + " " + side
+        );
+
+        setText(
+            prefix + "Ltp",
+            "LTP: "
+            + money(
+                alertData.ltp
+            )
+        );
+
+        setAlertBadge(
+            prefix + "Signal",
+            alertData.signal
+        );
+
+        const zone =
+            alertData.entry_zone || {};
+
+        setText(
+            prefix + "Entry",
+            (
+                zone.low === null
+                || zone.low === undefined
+                || zone.high === null
+                || zone.high === undefined
+            )
+                ? "--"
+                : (
+                    money(zone.low)
+                    + " - "
+                    + money(zone.high)
+                )
+        );
+
+        setText(
+            prefix + "Stop",
+            money(
+                alertData.stop_loss
+            )
+        );
+
+        setText(
+            prefix + "Target1",
+            money(
+                alertData.target_1
+            )
+        );
+
+        setText(
+            prefix + "Target2",
+            money(
+                alertData.target_2
+            )
+        );
+
+        setText(
+            prefix + "Invalidation",
+            (
+                alertData.nifty_invalidation
+                === null
+                || alertData.nifty_invalidation
+                === undefined
+            )
+                ? "--"
+                : formatNumber(
+                    alertData.nifty_invalidation,
+                    2
+                )
+        );
+
+        setText(
+            prefix + "Strength",
+            (
+                alertData.signal_strength_percent
+                === null
+                || alertData.signal_strength_percent
+                === undefined
+            )
+                ? "--"
+                : (
+                    alertData.signal_strength_percent
+                    + "%"
+                )
+        );
+
+        const confirmations =
+            alertData.confirmations || [];
+
+        const warnings =
+            alertData.warnings || [];
+
+        const reasonText =
+            "Confirmations: "
+            + (
+                confirmations.length
+                    ? confirmations.slice(0, 3).join(" ")
+                    : "None."
+            )
+            + (
+                warnings.length
+                    ? (
+                        " Warnings: "
+                        + warnings.slice(0, 2).join(" ")
+                    )
+                    : ""
+            );
+
+        setText(
+            prefix + "Reason",
+            reasonText
+        );
+
+        const currentStatus =
+            String(
+                alertData.signal || "WAIT"
+            );
+
+        if (
+            lastRenderedAlertStatus[side]
+            !== null
+            && lastRenderedAlertStatus[side]
+            !== currentStatus
+        ) {
+            const message =
+                side
+                + " signal changed from "
+                + lastRenderedAlertStatus[side]
+                + " to "
+                + currentStatus
+                + ".";
+
+            pushAlertHistory(
+                side,
+                message
+            );
+
+            if (
+                currentStatus === "BUY SIGNAL"
+                || lastRenderedAlertStatus[side]
+                    === "BUY SIGNAL"
+            ) {
+                sendBrowserAlert(
+                    "NIFTY AI "
+                    + side
+                    + " signal changed",
+                    message
+                );
+            }
+        }
+
+        lastRenderedAlertStatus[side] =
+            currentStatus;
+
+        updateSignalLifecycle(
+            side,
+            alertData,
+            data,
+            optionChain
+        );
+    }
+
     function formatNumber(value, decimals = 2) {
         if (value === null || value === undefined || Number.isNaN(Number(value))) {
             return "--";
@@ -3973,6 +5936,39 @@ def dashboard():
             const globalMarkets = global.markets || {};
             const institutional = signals.institutional_flow || {};
             const optionChain = signals.option_chain || {};
+            const breadth = signals.market_breadth || {};
+            const futures = signals.futures || {};
+            const premarket = signals.premarket || {};
+            const regime = signals.market_regime || {};
+            const fnoAlerts = data.fno_alerts || {};
+
+            renderTradeAlert(
+                "CE",
+                fnoAlerts.call || {},
+                data,
+                optionChain
+            );
+
+            renderTradeAlert(
+                "PE",
+                fnoAlerts.put || {},
+                data,
+                optionChain
+            );
+
+            setText(
+                "alertGeneratedAt",
+                fnoAlerts.generated_at
+                    ? (
+                        "Alert: "
+                        + new Date(
+                            fnoAlerts.generated_at
+                        ).toLocaleTimeString()
+                    )
+                    : "Alert: --"
+            );
+
+            renderAlertHistory();
 
             setText(
                 "price",
@@ -4171,6 +6167,59 @@ def dashboard():
             );
 
             setText(
+                "marketRegime",
+                regime.regime || "--"
+            );
+
+            setBias(
+                "breadthBias",
+                breadth.bias || "NEUTRAL"
+            );
+
+            setText(
+                "breadthCounts",
+                (breadth.advances ?? "--")
+                + " / "
+                + (breadth.declines ?? "--")
+            );
+
+            setBias(
+                "futuresPositioning",
+                futures.positioning || futures.bias || "--"
+            );
+
+            setBias(
+                "premarketBias",
+                premarket.bias || "--"
+            );
+
+            setText(
+                "atmIv",
+                optionChain.atm_iv === null || optionChain.atm_iv === undefined
+                    ? "--"
+                    : formatNumber(optionChain.atm_iv, 2) + "%"
+            );
+
+            setText(
+                "ivSkew",
+                optionChain.iv_skew === null || optionChain.iv_skew === undefined
+                    ? "--"
+                    : formatNumber(optionChain.iv_skew, 2) + " vol pts"
+            );
+
+            setBias(
+                "ivRisk",
+                optionChain.iv_risk || "UNKNOWN"
+            );
+
+            setText(
+                "dataCoverage",
+                data.data_coverage_percent === null || data.data_coverage_percent === undefined
+                    ? "--"
+                    : data.data_coverage_percent + "%"
+            );
+
+            setText(
                 "vixValue",
                 formatNumber(
                     vix.value,
@@ -4313,6 +6362,633 @@ def dashboard():
 
 
 
+
+
+# ============================================================
+# F&O ALERT ENGINE - VERSION 7
+# ============================================================
+
+def _calculate_intraday_atr(data, period=14):
+    """
+    Calculate a compact intraday ATR from the currently available candles.
+    Used only for risk/invalidation sizing; it is not a price forecast.
+    """
+    try:
+        if data is None or data.empty or len(data) < period + 2:
+            return None
+
+        frame = data[["High", "Low", "Close"]].copy()
+        previous_close = frame["Close"].shift(1)
+
+        true_range = pd.concat(
+            [
+                frame["High"] - frame["Low"],
+                (frame["High"] - previous_close).abs(),
+                (frame["Low"] - previous_close).abs()
+            ],
+            axis=1
+        ).max(axis=1)
+
+        atr = _safe_float(
+            true_range.rolling(period).mean().iloc[-1]
+        )
+
+        return atr
+
+    except Exception:
+        return None
+
+
+def _nearest_option_row(option_data, spot):
+    rows = option_data.get("nearby_strikes", []) or []
+
+    if not rows:
+        return None
+
+    usable = []
+
+    for row in rows:
+        strike = _safe_float(row.get("strike"))
+
+        if strike is None:
+            continue
+
+        usable.append((abs(strike - spot), row))
+
+    if not usable:
+        return None
+
+    usable.sort(key=lambda item: item[0])
+    return usable[0][1]
+
+
+def _premium_levels(ltp, stop_percent):
+    if ltp is None or ltp <= 0:
+        return {
+            "entry_low": None,
+            "entry_high": None,
+            "stop_loss": None,
+            "target_1": None,
+            "target_2": None
+        }
+
+    # Small entry zone around the observed premium. The alert should be
+    # re-checked if price runs materially outside this zone.
+    entry_low = ltp * 0.985
+    entry_high = ltp * 1.015
+
+    stop_loss = ltp * (1 - stop_percent / 100.0)
+    risk = ltp - stop_loss
+
+    # Risk/reward targets based on the generated signal premium.
+    target_1 = ltp + risk * 1.20
+    target_2 = ltp + risk * 2.00
+
+    return {
+        "entry_low": round(entry_low, 2),
+        "entry_high": round(entry_high, 2),
+        "stop_loss": round(stop_loss, 2),
+        "target_1": round(target_1, 2),
+        "target_2": round(target_2, 2)
+    }
+
+
+def build_fno_alert_engine(
+    market_data,
+    option_data,
+    combined_score,
+    bullish_probability,
+    bearish_probability,
+    data_coverage,
+    option_score,
+    breadth_score,
+    breadth_available,
+    futures_score,
+    futures_available,
+    candle_score,
+    vix_risk,
+    market_regime
+):
+    """
+    Build independent CE and PE decision-support alerts.
+
+    The engine intentionally allows BOTH sides to remain WAIT.
+    It does not force a trade simply because one side has a slightly
+    better score.
+
+    BUY SIGNAL means the project's rule set has triggered. It is not a
+    guarantee of profit and it does not place an order.
+    """
+
+    neutral = {
+        "status": "unavailable",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "expiry": option_data.get("expiry"),
+        "spot": option_data.get("spot"),
+        "call": {
+            "side": "CE",
+            "signal": "WAIT",
+            "reason": "Option-chain premium data unavailable."
+        },
+        "put": {
+            "side": "PE",
+            "signal": "WAIT",
+            "reason": "Option-chain premium data unavailable."
+        }
+    }
+
+    if option_data.get("status") != "success":
+        return neutral
+
+    spot = _safe_float(
+        option_data.get("spot")
+    )
+
+    if spot is None:
+        try:
+            spot = _safe_float(
+                market_data["Close"].iloc[-1]
+            )
+        except Exception:
+            spot = None
+
+    if spot is None:
+        return neutral
+
+    atm_row = _nearest_option_row(
+        option_data,
+        spot
+    )
+
+    if not atm_row:
+        return neutral
+
+    strike = _safe_float(
+        atm_row.get("strike")
+    )
+    call_ltp = _safe_float(
+        atm_row.get("call_ltp")
+    )
+    put_ltp = _safe_float(
+        atm_row.get("put_ltp")
+    )
+
+    atr = _calculate_intraday_atr(
+        market_data
+    )
+
+    immediate_support = _safe_float(
+        option_data.get("immediate_support")
+    )
+    immediate_resistance = _safe_float(
+        option_data.get("immediate_resistance")
+    )
+
+    iv_risk = str(
+        option_data.get("iv_risk")
+        or "UNKNOWN"
+    ).upper()
+
+    # Premium stop expands modestly in high-volatility regimes so ordinary
+    # option noise is less likely to trigger an immediate false stop.
+    stop_percent = 18.0
+
+    if iv_risk == "HIGH":
+        stop_percent = 21.0
+    elif iv_risk == "VERY HIGH":
+        stop_percent = 24.0
+
+    if str(market_regime).upper() == "EVENT / HIGH VOLATILITY":
+        stop_percent += 2.0
+
+    if str(vix_risk).upper() == "VERY HIGH":
+        stop_percent += 2.0
+
+    stop_percent = min(
+        28.0,
+        max(15.0, stop_percent)
+    )
+
+    call_levels = _premium_levels(
+        call_ltp,
+        stop_percent
+    )
+    put_levels = _premium_levels(
+        put_ltp,
+        stop_percent
+    )
+
+    # Underlying invalidation combines option-chain structure and intraday ATR.
+    atr_distance = (
+        atr * 1.5
+        if atr is not None
+        else spot * 0.0035
+    )
+
+    fallback_call_invalidation = (
+        spot - atr_distance
+    )
+    fallback_put_invalidation = (
+        spot + atr_distance
+    )
+
+    if (
+        immediate_support is not None
+        and immediate_support < spot
+    ):
+        call_invalidation = max(
+            immediate_support,
+            fallback_call_invalidation
+        )
+    else:
+        call_invalidation = fallback_call_invalidation
+
+    if (
+        immediate_resistance is not None
+        and immediate_resistance > spot
+    ):
+        put_invalidation = min(
+            immediate_resistance,
+            fallback_put_invalidation
+        )
+    else:
+        put_invalidation = fallback_put_invalidation
+
+    coverage_percent = (
+        float(data_coverage) * 100.0
+        if data_coverage <= 1.0
+        else float(data_coverage)
+    )
+
+    # --------------------------------------------------------
+    # CE confirmations
+    # --------------------------------------------------------
+    call_confirmations = []
+    call_warnings = []
+
+    if combined_score >= 0.35:
+        call_confirmations.append(
+            "Combined model score is bullish."
+        )
+    else:
+        call_warnings.append(
+            "Combined model score is below the CE buy threshold."
+        )
+
+    if bullish_probability >= 50:
+        call_confirmations.append(
+            "Bullish scenario probability is at least 50%."
+        )
+    else:
+        call_warnings.append(
+            "Bullish probability is below 50%."
+        )
+
+    if option_score >= 0.12:
+        call_confirmations.append(
+            "Option-chain positioning confirms bullish direction."
+        )
+    else:
+        call_warnings.append(
+            "Option chain is not sufficiently bullish."
+        )
+
+    if not breadth_available:
+        call_warnings.append(
+            "Market breadth is unavailable."
+        )
+    elif breadth_score >= 0:
+        call_confirmations.append(
+            "NIFTY breadth is not opposing the CE signal."
+        )
+    else:
+        call_warnings.append(
+            "Market breadth is opposing the CE signal."
+        )
+
+    if not futures_available:
+        call_warnings.append(
+            "Futures OI confirmation is unavailable."
+        )
+    elif futures_score >= 0:
+        call_confirmations.append(
+            "Futures positioning is not opposing the CE signal."
+        )
+    else:
+        call_warnings.append(
+            "Futures positioning is opposing the CE signal."
+        )
+
+    if candle_score > -0.35:
+        call_confirmations.append(
+            "Candlestick structure is not strongly bearish."
+        )
+    else:
+        call_warnings.append(
+            "Candlestick structure strongly opposes CE."
+        )
+
+    # --------------------------------------------------------
+    # PE confirmations
+    # --------------------------------------------------------
+    put_confirmations = []
+    put_warnings = []
+
+    if combined_score <= -0.35:
+        put_confirmations.append(
+            "Combined model score is bearish."
+        )
+    else:
+        put_warnings.append(
+            "Combined model score is above the PE buy threshold."
+        )
+
+    if bearish_probability >= 50:
+        put_confirmations.append(
+            "Bearish scenario probability is at least 50%."
+        )
+    else:
+        put_warnings.append(
+            "Bearish probability is below 50%."
+        )
+
+    if option_score <= -0.12:
+        put_confirmations.append(
+            "Option-chain positioning confirms bearish direction."
+        )
+    else:
+        put_warnings.append(
+            "Option chain is not sufficiently bearish."
+        )
+
+    if not breadth_available:
+        put_warnings.append(
+            "Market breadth is unavailable."
+        )
+    elif breadth_score <= 0:
+        put_confirmations.append(
+            "NIFTY breadth is not opposing the PE signal."
+        )
+    else:
+        put_warnings.append(
+            "Market breadth is opposing the PE signal."
+        )
+
+    if not futures_available:
+        put_warnings.append(
+            "Futures OI confirmation is unavailable."
+        )
+    elif futures_score <= 0:
+        put_confirmations.append(
+            "Futures positioning is not opposing the PE signal."
+        )
+    else:
+        put_warnings.append(
+            "Futures positioning is opposing the PE signal."
+        )
+
+    if candle_score < 0.35:
+        put_confirmations.append(
+            "Candlestick structure is not strongly bullish."
+        )
+    else:
+        put_warnings.append(
+            "Candlestick structure strongly opposes PE."
+        )
+
+    # --------------------------------------------------------
+    # Independent signal states
+    # --------------------------------------------------------
+    minimum_coverage = 72.0
+
+    call_buy = (
+        coverage_percent >= minimum_coverage
+        and combined_score >= 0.35
+        and bullish_probability >= 50
+        and option_score >= 0.12
+        and candle_score > -0.35
+        and (
+            not breadth_available
+            or breadth_score >= -0.10
+        )
+        and (
+            not futures_available
+            or futures_score >= -0.10
+        )
+        and call_ltp is not None
+        and call_ltp > 0
+    )
+
+    put_buy = (
+        coverage_percent >= minimum_coverage
+        and combined_score <= -0.35
+        and bearish_probability >= 50
+        and option_score <= -0.12
+        and candle_score < 0.35
+        and (
+            not breadth_available
+            or breadth_score <= 0.10
+        )
+        and (
+            not futures_available
+            or futures_score <= 0.10
+        )
+        and put_ltp is not None
+        and put_ltp > 0
+    )
+
+    call_watch = (
+        not call_buy
+        and combined_score >= 0.18
+        and bullish_probability >= 43
+        and call_ltp is not None
+        and call_ltp > 0
+    )
+
+    put_watch = (
+        not put_buy
+        and combined_score <= -0.18
+        and bearish_probability >= 43
+        and put_ltp is not None
+        and put_ltp > 0
+    )
+
+    call_signal = (
+        "BUY SIGNAL"
+        if call_buy
+        else (
+            "WATCH"
+            if call_watch
+            else "WAIT"
+        )
+    )
+
+    put_signal = (
+        "BUY SIGNAL"
+        if put_buy
+        else (
+            "WATCH"
+            if put_watch
+            else "WAIT"
+        )
+    )
+
+    # Do not allow both sides to be BUY SIGNAL at the same time.
+    # In an ambiguous conflict, the weaker side is downgraded to WATCH.
+    if call_signal == "BUY SIGNAL" and put_signal == "BUY SIGNAL":
+        if bullish_probability > bearish_probability:
+            put_signal = "WATCH"
+            put_warnings.append(
+                "Downgraded because the CE setup has stronger model probability."
+            )
+        elif bearish_probability > bullish_probability:
+            call_signal = "WATCH"
+            call_warnings.append(
+                "Downgraded because the PE setup has stronger model probability."
+            )
+        else:
+            call_signal = "WATCH"
+            put_signal = "WATCH"
+            call_warnings.append(
+                "Both sides conflicted; no forced trade."
+            )
+            put_warnings.append(
+                "Both sides conflicted; no forced trade."
+            )
+
+    call_strength = max(
+        0,
+        min(
+            100,
+            round(
+                bullish_probability * 0.65
+                + max(0.0, combined_score) * 20
+                + max(0.0, option_score) * 15
+            )
+        )
+    )
+
+    put_strength = max(
+        0,
+        min(
+            100,
+            round(
+                bearish_probability * 0.65
+                + max(0.0, -combined_score) * 20
+                + max(0.0, -option_score) * 15
+            )
+        )
+    )
+
+    call_exit_rules = [
+        "Exit if premium reaches the generated stop-loss.",
+        (
+            "Exit if NIFTY falls below "
+            + str(round(call_invalidation, 2))
+            + "."
+        ),
+        "Exit/avoid CE if the combined model reverses to bearish.",
+        "Target 1 can be used for partial profit; Target 2 is the extended objective."
+    ]
+
+    put_exit_rules = [
+        "Exit if premium reaches the generated stop-loss.",
+        (
+            "Exit if NIFTY rises above "
+            + str(round(put_invalidation, 2))
+            + "."
+        ),
+        "Exit/avoid PE if the combined model reverses to bullish.",
+        "Target 1 can be used for partial profit; Target 2 is the extended objective."
+    ]
+
+    return {
+        "status": "success",
+        "generated_at": datetime.now().isoformat(
+            timespec="seconds"
+        ),
+        "expiry": option_data.get("expiry"),
+        "spot": round(spot, 2),
+        "data_coverage_percent": round(
+            coverage_percent,
+            1
+        ),
+        "market_regime": market_regime,
+        "atr_5m": (
+            round(atr, 2)
+            if atr is not None
+            else None
+        ),
+        "premium_stop_percent": round(
+            stop_percent,
+            1
+        ),
+        "call": {
+            "side": "CE",
+            "signal": call_signal,
+            "strike": (
+                round(strike, 2)
+                if strike is not None
+                else None
+            ),
+            "ltp": (
+                round(call_ltp, 2)
+                if call_ltp is not None
+                else None
+            ),
+            "entry_zone": {
+                "low": call_levels["entry_low"],
+                "high": call_levels["entry_high"]
+            },
+            "stop_loss": call_levels["stop_loss"],
+            "target_1": call_levels["target_1"],
+            "target_2": call_levels["target_2"],
+            "nifty_invalidation": round(
+                call_invalidation,
+                2
+            ),
+            "signal_strength_percent": call_strength,
+            "confirmations": call_confirmations,
+            "warnings": call_warnings,
+            "exit_rules": call_exit_rules
+        },
+        "put": {
+            "side": "PE",
+            "signal": put_signal,
+            "strike": (
+                round(strike, 2)
+                if strike is not None
+                else None
+            ),
+            "ltp": (
+                round(put_ltp, 2)
+                if put_ltp is not None
+                else None
+            ),
+            "entry_zone": {
+                "low": put_levels["entry_low"],
+                "high": put_levels["entry_high"]
+            },
+            "stop_loss": put_levels["stop_loss"],
+            "target_1": put_levels["target_1"],
+            "target_2": put_levels["target_2"],
+            "nifty_invalidation": round(
+                put_invalidation,
+                2
+            ),
+            "signal_strength_percent": put_strength,
+            "confirmations": put_confirmations,
+            "warnings": put_warnings,
+            "exit_rules": put_exit_rules
+        },
+        "note": (
+            "BUY SIGNAL means the project rule set triggered. "
+            "The engine does not place orders. CE and PE are evaluated "
+            "independently and both can remain WAIT."
+        )
+    }
+
+
 @app.get("/prediction")
 def prediction():
     try:
@@ -4320,11 +6996,7 @@ def prediction():
         # 1. MARKET / MOMENTUM DATA
         # -----------------------------
         nifty = yf.Ticker("^NSEI")
-
-        market_data = nifty.history(
-            period="5d",
-            interval="5m"
-        )
+        market_data = nifty.history(period="5d", interval="5m")
 
         if market_data.empty or len(market_data) < 2:
             return {
@@ -4332,552 +7004,447 @@ def prediction():
                 "message": "NIFTY market data not available"
             }
 
-        latest_close = float(
-            market_data["Close"].iloc[-1]
-        )
-
-        previous_close = float(
-            market_data["Close"].iloc[-2]
-        )
-
+        latest_close = float(market_data["Close"].iloc[-1])
+        previous_close = float(market_data["Close"].iloc[-2])
         change_5min = latest_close - previous_close
-
-        change_percent_5min = (
-            change_5min / previous_close
-        ) * 100
-
-        # Convert 5-minute movement into -1 to +1 range.
-        # +/-0.30% in 5 minutes is treated as a strong short-term move.
-        momentum_score = max(
-            -1,
-            min(
-                1,
-                change_percent_5min / 0.30
-            )
-        )
+        change_percent_5min = (change_5min / previous_close) * 100
+        momentum_score = max(-1.0, min(1.0, change_percent_5min / 0.30))
 
         # -----------------------------
         # 2. TECHNICAL ANALYSIS
         # -----------------------------
-        technical_data = calculate_technical_indicators(
-            market_data
-        )
-
-        technical_raw_score = technical_data[
-            "technical_score"
-        ]
-
-        technical_score = max(
-            -1,
-            min(
-                1,
-                technical_raw_score / 4
-            )
-        )
+        technical_data = calculate_technical_indicators(market_data)
+        technical_raw_score = technical_data["technical_score"]
+        technical_score = max(-1.0, min(1.0, technical_raw_score / 4.0))
 
         # -----------------------------
         # 3. NEWS ANALYSIS
         # -----------------------------
         news_data = get_news_articles()
-
-        if news_data.get("status") != "success":
-            return news_data
-
-        articles = news_data.get(
-            "articles",
-            []
-        )
+        news_available = news_data.get("status") == "success"
+        articles = news_data.get("articles", []) if news_available else []
 
         total_news_score = sum(
             article.get(
-                "sentiment_score",
-                0
+                "weighted_sentiment_score",
+                article.get("sentiment_score", 0)
             )
             for article in articles
         )
-
         bullish_articles = sum(
-            1
-            for article in articles
-            if article.get("sentiment") == "BULLISH"
+            1 for article in articles if article.get("sentiment") == "BULLISH"
         )
-
         bearish_articles = sum(
-            1
-            for article in articles
-            if article.get("sentiment") == "BEARISH"
+            1 for article in articles if article.get("sentiment") == "BEARISH"
         )
-
         neutral_articles = sum(
-            1
-            for article in articles
-            if article.get("sentiment") == "NEUTRAL"
+            1 for article in articles if article.get("sentiment") == "NEUTRAL"
         )
-
-        # Cap extreme news scores.
-        # +/-15 is treated as a strong news signal.
-        news_score = max(
-            -1,
-            min(
-                1,
-                total_news_score / 15
-            )
-        )
-
-        if total_news_score >= 5:
-            news_bias = "STRONG BULLISH"
-
-        elif total_news_score > 0:
-            news_bias = "BULLISH"
-
-        elif total_news_score <= -5:
-            news_bias = "STRONG BEARISH"
-
-        elif total_news_score < 0:
-            news_bias = "BEARISH"
-
-        else:
-            news_bias = "NEUTRAL"
+        news_score = max(-1.0, min(1.0, total_news_score / 10.0)) if news_available else 0.0
+        news_bias = _score_to_bias(news_score)
 
         # -----------------------------
         # 4. INDIA VIX
         # -----------------------------
-        india_vix = yf.Ticker("^INDIAVIX")
-
-        vix_data = india_vix.history(
-            period="5d",
-            interval="5m"
-        )
-
-        if vix_data.empty:
+        try:
+            vix_data = yf.Ticker("^INDIAVIX").history(period="5d", interval="5m")
+            vix_value = float(vix_data["Close"].iloc[-1]) if not vix_data.empty else None
+        except Exception:
             vix_value = None
+
+        if vix_value is None:
             vix_risk = "UNKNOWN"
-
+        elif vix_value < 12:
+            vix_risk = "LOW"
+        elif vix_value < 18:
+            vix_risk = "MEDIUM"
+        elif vix_value < 25:
+            vix_risk = "HIGH"
         else:
-            vix_value = float(
-                vix_data["Close"].iloc[-1]
-            )
-
-            if vix_value < 12:
-                vix_risk = "LOW"
-
-            elif vix_value < 18:
-                vix_risk = "MEDIUM"
-
-            elif vix_value < 25:
-                vix_risk = "HIGH"
-
-            else:
-                vix_risk = "VERY HIGH"
+            vix_risk = "VERY HIGH"
 
         # -----------------------------
         # 5. GLOBAL MARKET ANALYSIS
         # -----------------------------
         global_data = get_global_analysis()
-        global_score = float(
-            global_data.get("global_score", 0)
-        )
-        global_bias = global_data.get(
-            "global_bias",
-            "NEUTRAL"
-        )
+        global_available = global_data.get("status") == "success"
+        global_score = float(global_data.get("global_score", 0) or 0)
+        global_bias = global_data.get("global_bias", "NEUTRAL")
 
         # -----------------------------
         # 6. INSTITUTIONAL FLOW
         # -----------------------------
         institutional_data = get_institutional_flow()
-
+        institutional_available = institutional_data.get("status") == "success"
         institutional_score = float(
-            institutional_data.get(
-                "institutional_score",
-                0
-            )
+            institutional_data.get("institutional_score", 0) or 0
         )
-
-        institutional_bias = institutional_data.get(
-            "institutional_bias",
-            "NEUTRAL"
-        )
+        institutional_bias = institutional_data.get("institutional_bias", "NEUTRAL")
 
         # -----------------------------
-        # 7. OPTION CHAIN
+        # 7. OPTION CHAIN + IV/SKEW
         # -----------------------------
         option_data = get_option_chain_analysis()
-
-        option_score = float(
-            option_data.get(
-                "option_chain_score",
-                0
-            )
-        )
-
-        option_bias = option_data.get(
-            "option_chain_bias",
-            "NEUTRAL"
-        )
+        option_available = option_data.get("status") == "success"
+        option_score = float(option_data.get("option_chain_score", 0) or 0)
+        option_bias = option_data.get("option_chain_bias", "NEUTRAL")
 
         # -----------------------------
         # 8. CANDLESTICK PATTERN
         # -----------------------------
-        candle_data = (
-            analyze_candlestick_patterns(
-                market_data,
-                interval_minutes=5
-            )
+        candle_data = analyze_candlestick_patterns(
+            market_data,
+            interval_minutes=5
         )
+        candle_available = candle_data.get("status") == "success"
+        candle_score = float(candle_data.get("pattern_score", 0) or 0)
+        candle_bias = candle_data.get("pattern_bias", "NEUTRAL")
 
-        candle_score = float(
-            candle_data.get(
-                "pattern_score",
-                0
-            )
-        )
+        # -----------------------------
+        # 9. NEW: MARKET BREADTH
+        # -----------------------------
+        breadth_data = get_market_breadth()
+        breadth_available = breadth_data.get("status") == "success"
+        breadth_score = float(breadth_data.get("breadth_score", 0) or 0)
 
-        candle_bias = candle_data.get(
-            "pattern_bias",
-            "NEUTRAL"
+        # -----------------------------
+        # 10. NEW: NIFTY FUTURES OI
+        # -----------------------------
+        futures_data = get_nifty_futures_analysis()
+        futures_available = futures_data.get("status") == "success"
+        futures_score = float(futures_data.get("futures_score", 0) or 0)
+
+        # -----------------------------
+        # 11. NEW: GIFT NIFTY / OPENING GAP
+        # -----------------------------
+        premarket_data = get_premarket_analysis(market_data)
+        premarket_available = premarket_data.get("status") == "success"
+        premarket_score = float(premarket_data.get("premarket_score", 0) or 0)
+
+        # -----------------------------
+        # 12. NEW: MARKET-REGIME DETECTION
+        # -----------------------------
+        regime_data = detect_market_regime(
+            vix_value=vix_value,
+            technical_score=technical_score,
+            momentum_score=momentum_score,
+            news_score=news_score,
+            breadth_score=breadth_score
         )
 
         # -----------------------------
-        # 9. COMBINED DIRECTION SCORE
+        # 13. DYNAMIC WEIGHTED MODEL
         # -----------------------------
-        # Version 4 weights:
-        # Technical 25%, News 15%, Global 15%,
-        # FII/DII 10%, Option Chain 20%,
-        # Candlestick Patterns 10%,
-        # short-term momentum 5%.
-        #
-        # Candlestick and momentum weights are deliberately limited
-        # because both overlap with technical price-action information.
-        combined_score = (
-            technical_score * 0.25
-            + news_score * 0.15
-            + global_score * 0.15
-            + institutional_score * 0.10
-            + option_score * 0.20
-            + candle_score * 0.10
-            + momentum_score * 0.05
-        )
+        # Base Version 6 live weights. Missing live sources are removed and
+        # the remaining weights are automatically renormalized.
+        base_weights = {
+            "technical": 0.20,
+            "news": 0.11,
+            "global": 0.11,
+            "institutional": 0.08,
+            "option_chain": 0.18,
+            "candlestick": 0.08,
+            "momentum": 0.05,
+            "breadth": 0.08,
+            "futures": 0.06,
+            "premarket": 0.05
+        }
 
-        combined_score = max(
-            -1,
-            min(
-                1,
-                combined_score
-            )
+        signal_scores = {
+            "technical": technical_score,
+            "news": news_score,
+            "global": global_score,
+            "institutional": institutional_score,
+            "option_chain": option_score,
+            "candlestick": candle_score,
+            "momentum": momentum_score,
+            "breadth": breadth_score,
+            "futures": futures_score,
+            "premarket": premarket_score
+        }
+
+        availability = {
+            "technical": True,
+            "news": news_available,
+            "global": global_available,
+            "institutional": institutional_available,
+            "option_chain": option_available,
+            "candlestick": candle_available,
+            "momentum": True,
+            "breadth": breadth_available,
+            "futures": futures_available,
+            "premarket": premarket_available
+        }
+
+        combined_score, effective_weights, data_coverage = blend_available_signals(
+            signal_scores=signal_scores,
+            base_weights=base_weights,
+            multipliers=regime_data["weight_multipliers"],
+            availability=availability
         )
 
         # -----------------------------
-        # 10. PROBABILITY MODEL
+        # 14. PROBABILITY MODEL
         # -----------------------------
-        direction_strength = abs(
-            combined_score
-        )
+        direction_strength = abs(combined_score)
+        sideways_probability = 45 - (direction_strength * 25)
 
-        # Weak directional score means higher chance of sideways action.
-        sideways_probability = (
-            45
-            - (direction_strength * 25)
-        )
-
-        # Low VIX often supports quieter/range-bound trading.
-        # High VIX reduces the sideways assumption.
         if vix_value is not None:
-
             if vix_value < 12:
                 sideways_probability += 5
-
             elif vix_value >= 18:
                 sideways_probability -= 5
 
-        sideways_probability = max(
-            15,
-            min(
-                55,
-                sideways_probability
-            )
-        )
+        if regime_data["regime"] == "TRENDING":
+            sideways_probability -= 8
+        elif regime_data["regime"] == "RANGE / MEAN-REVERTING":
+            sideways_probability += 8
+        elif regime_data["regime"] == "EVENT / HIGH VOLATILITY":
+            sideways_probability -= 4
 
-        directional_probability = (
-            100 - sideways_probability
-        )
+        sideways_probability = max(12, min(60, sideways_probability))
+        directional_probability = 100 - sideways_probability
+        bullish_probability = directional_probability * (0.5 + combined_score / 2)
+        bearish_probability = directional_probability - bullish_probability
 
-        bullish_probability = (
-            directional_probability
-            * (0.5 + (combined_score / 2))
-        )
-
-        bearish_probability = (
-            directional_probability
-            - bullish_probability
-        )
-
-        bullish_probability = round(
-            bullish_probability
-        )
-
-        sideways_probability = round(
-            sideways_probability
-        )
-
-        bearish_probability = (
-            100
-            - bullish_probability
-            - sideways_probability
-        )
+        bullish_probability = round(bullish_probability)
+        sideways_probability = round(sideways_probability)
+        bearish_probability = 100 - bullish_probability - sideways_probability
 
         # -----------------------------
-        # 11. PREDICTION LABEL
+        # 15. PREDICTION LABEL
         # -----------------------------
         if combined_score >= 0.60:
             prediction_label = "STRONG BULLISH"
-
         elif combined_score >= 0.20:
             prediction_label = "BULLISH"
-
         elif combined_score <= -0.60:
             prediction_label = "STRONG BEARISH"
-
         elif combined_score <= -0.20:
             prediction_label = "BEARISH"
-
         else:
             prediction_label = "SIDEWAYS / NEUTRAL"
 
         # -----------------------------
-        # 12. CONFIDENCE
+        # 16. CONFIDENCE
         # -----------------------------
         if direction_strength >= 0.60:
             confidence = "HIGH"
-
         elif direction_strength >= 0.30:
             confidence = "MEDIUM"
-
         else:
             confidence = "LOW"
 
-        # Higher VIX increases uncertainty.
-        if vix_risk in [
-            "HIGH",
-            "VERY HIGH"
-        ]:
-
+        if vix_risk in ("HIGH", "VERY HIGH"):
             if confidence == "HIGH":
                 confidence = "MEDIUM"
-
             elif confidence == "MEDIUM":
                 confidence = "LOW"
 
+        if data_coverage < 0.70:
+            confidence = "LOW"
+        elif data_coverage < 0.85 and confidence == "HIGH":
+            confidence = "MEDIUM"
+
         # -----------------------------
-        # 13. F&O SETUP WATCH
+        # 17. CONSERVATIVE F&O WATCH
         # -----------------------------
-        # This is intentionally conservative. It only produces
-        # a CE/PE watch when the overall model and option chain agree.
+        directional_confirmation = (
+            breadth_score * combined_score >= 0
+            or not breadth_available
+        )
+        futures_confirmation = (
+            futures_score * combined_score >= 0
+            or not futures_available
+        )
+
         if (
-            option_data.get("status")
-            == "success"
+            option_available
             and combined_score >= 0.25
-            and option_score >= 0.15
+            and option_score >= 0.12
             and candle_score > -0.35
+            and directional_confirmation
+            and futures_confirmation
         ):
             fno_setup = "CE WATCH"
-
         elif (
-            option_data.get("status")
-            == "success"
+            option_available
             and combined_score <= -0.25
-            and option_score <= -0.15
+            and option_score <= -0.12
             and candle_score < 0.35
+            and directional_confirmation
+            and futures_confirmation
         ):
             fno_setup = "PE WATCH"
-
         else:
             fno_setup = "WAIT"
 
+        # -----------------------------
+        # 18. F&O CE / PE ALERT ENGINE
+        # -----------------------------
+        fno_alerts = build_fno_alert_engine(
+            market_data=market_data,
+            option_data=option_data,
+            combined_score=combined_score,
+            bullish_probability=bullish_probability,
+            bearish_probability=bearish_probability,
+            data_coverage=data_coverage,
+            option_score=option_score,
+            breadth_score=breadth_score,
+            breadth_available=breadth_available,
+            futures_score=futures_score,
+            futures_available=futures_available,
+            candle_score=candle_score,
+            vix_risk=vix_risk,
+            market_regime=regime_data["regime"]
+        )
+
         return {
             "status": "success",
+            "model_version": "7.0",
             "market": "NIFTY 50",
-            "price": round(
-                latest_close,
-                2
-            ),
+            "price": round(latest_close, 2),
             "prediction": prediction_label,
             "confidence": confidence,
             "fno_setup": fno_setup,
+            "fno_alerts": fno_alerts,
             "bullish_probability": bullish_probability,
             "sideways_probability": sideways_probability,
             "bearish_probability": bearish_probability,
-            "combined_score": round(
-                combined_score,
-                3
-            ),
+            "combined_score": round(combined_score, 3),
+            "data_coverage_percent": round(data_coverage * 100, 1),
+            "effective_weights": {
+                name: round(weight, 4)
+                for name, weight in effective_weights.items()
+            },
             "signals": {
                 "technical": {
-                    "bias": technical_data[
-                        "technical_bias"
-                    ],
+                    "bias": technical_data["technical_bias"],
                     "score": technical_raw_score,
-                    "rsi_14": technical_data[
-                        "rsi_14"
-                    ],
-                    "ema_20": technical_data[
-                        "ema_20"
-                    ],
-                    "ema_50": technical_data[
-                        "ema_50"
-                    ],
-                    "macd": technical_data[
-                        "macd"
-                    ],
-                    "macd_signal": technical_data[
-                        "macd_signal"
-                    ]
+                    "normalized_score": round(technical_score, 3),
+                    "rsi_14": technical_data["rsi_14"],
+                    "ema_20": technical_data["ema_20"],
+                    "ema_50": technical_data["ema_50"],
+                    "macd": technical_data["macd"],
+                    "macd_signal": technical_data["macd_signal"]
                 },
                 "news": {
+                    "status": news_data.get("status"),
                     "bias": news_bias,
                     "score": total_news_score,
-                    "articles_analyzed": len(
-                        articles
-                    ),
+                    "normalized_score": round(news_score, 3),
+                    "articles_analyzed": len(articles),
                     "bullish_articles": bullish_articles,
                     "bearish_articles": bearish_articles,
-                    "neutral_articles": neutral_articles
+                    "neutral_articles": neutral_articles,
+                    "message": news_data.get("message")
                 },
                 "vix": {
-                    "value": (
-                        round(
-                            vix_value,
-                            2
-                        )
-                        if vix_value is not None
-                        else None
-                    ),
+                    "value": round(vix_value, 2) if vix_value is not None else None,
                     "risk": vix_risk
                 },
                 "global": {
+                    "status": global_data.get("status"),
                     "bias": global_bias,
                     "score": round(global_score, 3),
                     "markets": global_data.get("markets", {})
                 },
                 "institutional_flow": {
-                    "status": institutional_data.get(
-                        "status"
-                    ),
+                    "status": institutional_data.get("status"),
                     "bias": institutional_bias,
-                    "score": round(
-                        institutional_score,
-                        3
-                    ),
-                    "report_date": institutional_data.get(
-                        "report_date"
-                    ),
-                    "fii_fpi": institutional_data.get(
-                        "fii_fpi"
-                    ),
-                    "dii": institutional_data.get(
-                        "dii"
-                    ),
-                    "message": institutional_data.get(
-                        "message"
-                    )
+                    "score": round(institutional_score, 3),
+                    "report_date": institutional_data.get("report_date"),
+                    "fii_fpi": institutional_data.get("fii_fpi"),
+                    "dii": institutional_data.get("dii"),
+                    "message": institutional_data.get("message")
                 },
                 "option_chain": {
-                    "status": option_data.get(
-                        "status"
-                    ),
-                    "expiry": option_data.get(
-                        "expiry"
-                    ),
-                    "spot": option_data.get(
-                        "spot"
-                    ),
-                    "atm_strike": option_data.get(
-                        "atm_strike"
-                    ),
-                    "pcr_oi": option_data.get(
-                        "pcr_oi"
-                    ),
-                    "pcr_change_oi": option_data.get(
-                        "pcr_change_oi"
-                    ),
-                    "support": option_data.get(
-                        "support"
-                    ),
-                    "resistance": option_data.get(
-                        "resistance"
-                    ),
-                    "immediate_support": option_data.get(
-                        "immediate_support"
-                    ),
-                    "immediate_resistance": option_data.get(
-                        "immediate_resistance"
-                    ),
-                    "major_support": option_data.get(
-                        "major_support"
-                    ),
-                    "major_resistance": option_data.get(
-                        "major_resistance"
-                    ),
-                    "change_oi_score": option_data.get(
-                        "change_oi_score"
-                    ),
-                    "change_oi_reliability": option_data.get(
-                        "change_oi_reliability"
-                    ),
-                    "max_pain": option_data.get(
-                        "max_pain"
-                    ),
+                    "status": option_data.get("status"),
+                    "expiry": option_data.get("expiry"),
+                    "spot": option_data.get("spot"),
+                    "atm_strike": option_data.get("atm_strike"),
+                    "pcr_oi": option_data.get("pcr_oi"),
+                    "pcr_change_oi": option_data.get("pcr_change_oi"),
+                    "support": option_data.get("support"),
+                    "resistance": option_data.get("resistance"),
+                    "immediate_support": option_data.get("immediate_support"),
+                    "immediate_resistance": option_data.get("immediate_resistance"),
+                    "major_support": option_data.get("major_support"),
+                    "major_resistance": option_data.get("major_resistance"),
+                    "change_oi_score": option_data.get("change_oi_score"),
+                    "change_oi_reliability": option_data.get("change_oi_reliability"),
+                    "max_pain": option_data.get("max_pain"),
+                    "atm_iv": option_data.get("atm_iv"),
+                    "avg_call_iv": option_data.get("avg_call_iv"),
+                    "avg_put_iv": option_data.get("avg_put_iv"),
+                    "iv_skew": option_data.get("iv_skew"),
+                    "iv_skew_score": option_data.get("iv_skew_score"),
+                    "iv_risk": option_data.get("iv_risk"),
+                    "nearby_strikes": option_data.get("nearby_strikes", []),
                     "bias": option_bias,
-                    "score": round(
-                        option_score,
-                        3
-                    ),
-                    "message": option_data.get(
-                        "message"
-                    )
+                    "score": round(option_score, 3),
+                    "message": option_data.get("message")
                 },
                 "candlestick": {
-                    "status": candle_data.get(
-                        "status"
-                    ),
+                    "status": candle_data.get("status"),
                     "bias": candle_bias,
-                    "score": round(
-                        candle_score,
-                        3
-                    ),
-                    "confidence": candle_data.get(
-                        "pattern_confidence"
-                    ),
-                    "primary_pattern": candle_data.get(
-                        "primary_pattern"
-                    ),
-                    "patterns": candle_data.get(
-                        "patterns",
-                        []
-                    ),
-                    "prior_trend": candle_data.get(
-                        "prior_trend"
-                    ),
-                    "last_completed_candle": candle_data.get(
-                        "last_completed_candle"
-                    )
+                    "score": round(candle_score, 3),
+                    "confidence": candle_data.get("pattern_confidence"),
+                    "primary_pattern": candle_data.get("primary_pattern"),
+                    "patterns": candle_data.get("patterns", []),
+                    "prior_trend": candle_data.get("prior_trend"),
+                    "last_completed_candle": candle_data.get("last_completed_candle")
                 },
                 "momentum": {
-                    "change_5min": round(
-                        change_5min,
-                        2
-                    ),
-                    "change_percent_5min": round(
-                        change_percent_5min,
-                        3
-                    )
-                }
+                    "change_5min": round(change_5min, 2),
+                    "change_percent_5min": round(change_percent_5min, 3),
+                    "score": round(momentum_score, 3)
+                },
+                "market_breadth": {
+                    "status": breadth_data.get("status"),
+                    "bias": breadth_data.get("breadth_bias", "NEUTRAL"),
+                    "score": round(breadth_score, 3),
+                    "constituents_analyzed": breadth_data.get("constituents_analyzed"),
+                    "advances": breadth_data.get("advances"),
+                    "declines": breadth_data.get("declines"),
+                    "unchanged": breadth_data.get("unchanged"),
+                    "average_change_percent": breadth_data.get("average_change_percent"),
+                    "top_gainers": breadth_data.get("top_gainers", []),
+                    "top_losers": breadth_data.get("top_losers", []),
+                    "message": breadth_data.get("message")
+                },
+                "futures": {
+                    "status": futures_data.get("status"),
+                    "bias": futures_data.get("futures_bias", "NEUTRAL"),
+                    "score": round(futures_score, 3),
+                    "positioning": futures_data.get("positioning"),
+                    "expiry": futures_data.get("expiry"),
+                    "futures_ltp": futures_data.get("futures_ltp"),
+                    "open_interest": futures_data.get("open_interest"),
+                    "change_in_oi": futures_data.get("change_in_oi"),
+                    "change_percent": futures_data.get("change_percent"),
+                    "basis_percent": futures_data.get("basis_percent"),
+                    "message": futures_data.get("message")
+                },
+                "premarket": {
+                    "status": premarket_data.get("status"),
+                    "bias": premarket_data.get("premarket_bias", "NEUTRAL"),
+                    "score": round(premarket_score, 3),
+                    "signal_type": premarket_data.get("signal_type"),
+                    "change_percent": premarket_data.get("change_percent"),
+                    "source": premarket_data.get("source"),
+                    "message": premarket_data.get("message")
+                },
+                "market_regime": regime_data
             },
             "note": (
-                "Version 4 heuristic model with technical, candlestick, news, "
-                "global, FII/DII, option-chain and momentum signals. "
-                "Use as decision support only; "
-                "it is not a guaranteed market forecast."
+                "Version 7 dynamically blends technicals, candlesticks, news, "
+                "global cues, FII/DII, options with IV skew, NIFTY breadth, "
+                "futures positioning, momentum and pre-market/opening-gap context. "
+                "It also generates independent CE/PE watch, buy, stop-loss, target "
+                "and exit-invalidation signals. Unavailable sources are excluded and "
+                "weights are renormalized. This remains a heuristic decision-support "
+                "model, not a guaranteed forecast."
             )
         }
 
@@ -4885,4 +7452,466 @@ def prediction():
         return {
             "status": "error",
             "message": str(e)
+        }
+
+
+@app.get("/fno-alerts")
+def fno_alerts():
+    """
+    Current CE/PE alert snapshot generated from the same live model used by
+    /prediction. This endpoint is read-only and never places an order.
+    """
+    result = prediction()
+
+    if not isinstance(result, dict):
+        return {
+            "status": "error",
+            "message": "Prediction engine returned an unexpected response."
+        }
+
+    if result.get("status") != "success":
+        return result
+
+    return {
+        "status": "success",
+        "model_version": result.get("model_version"),
+        "market": result.get("market"),
+        "price": result.get("price"),
+        "prediction": result.get("prediction"),
+        "confidence": result.get("confidence"),
+        "combined_score": result.get("combined_score"),
+        "data_coverage_percent": result.get("data_coverage_percent"),
+        "alerts": result.get("fno_alerts", {})
+    }
+
+
+
+# ------------------------------------------------------------------
+# BACKTESTING
+# ------------------------------------------------------------------
+
+def _history_frame(symbol, period):
+    """Daily adjusted market history with a normalized date index."""
+    try:
+        data = yf.Ticker(symbol).history(
+            period=period,
+            interval="1d",
+            auto_adjust=False
+        )
+        if data.empty:
+            return pd.DataFrame()
+        data = data.copy()
+        data.index = pd.to_datetime(data.index).tz_localize(None).normalize()
+        return data
+    except Exception:
+        return pd.DataFrame()
+
+
+def _historical_global_series(period, target_index):
+    """Build a daily global NIFTY-effect score using only completed prior data."""
+    specs = {
+        "sp500": ("^GSPC", 1.0),
+        "nasdaq": ("^IXIC", 1.0),
+        "nikkei": ("^N225", 1.0),
+        "hang_seng": ("^HSI", 1.0),
+        "crude": ("CL=F", -1.0),
+        "usd_inr": ("INR=X", -1.0)
+    }
+
+    series_map = {}
+    for name, (symbol, effect) in specs.items():
+        frame = _history_frame(symbol, period)
+        if frame.empty or "Close" not in frame:
+            continue
+        pct = frame["Close"].pct_change() * 100
+        score = pct.apply(lambda value: max(-1.0, min(1.0, value / 1.0)) if pd.notna(value) else None)
+        score = score * effect
+        series_map[name] = score.reindex(target_index).ffill()
+
+    result = pd.Series(0.0, index=target_index, dtype=float)
+    available = pd.Series(0.0, index=target_index, dtype=float)
+
+    equity_names = [name for name in ("sp500", "nasdaq", "nikkei", "hang_seng") if name in series_map]
+    if equity_names:
+        equity_df = pd.concat([series_map[name] for name in equity_names], axis=1)
+        equity_mean = equity_df.mean(axis=1, skipna=True)
+        result = result + equity_mean.fillna(0) * 0.70
+        available = available + equity_df.notna().any(axis=1).astype(float) * 0.70
+
+    if "crude" in series_map:
+        result = result + series_map["crude"].fillna(0) * 0.20
+        available = available + series_map["crude"].notna().astype(float) * 0.20
+
+    if "usd_inr" in series_map:
+        result = result + series_map["usd_inr"].fillna(0) * 0.10
+        available = available + series_map["usd_inr"].notna().astype(float) * 0.10
+
+    result = result.clip(-1, 1)
+    return result, available.clip(0, 1)
+
+
+def _prediction_label_from_score(score):
+    if score >= 0.20:
+        return "BULLISH"
+    if score <= -0.20:
+        return "BEARISH"
+    return "SIDEWAYS"
+
+
+def _actual_label(change_percent, sideways_threshold):
+    if change_percent > sideways_threshold:
+        return "BULLISH"
+    if change_percent < -sideways_threshold:
+        return "BEARISH"
+    return "SIDEWAYS"
+
+
+def _metrics_for_records(records, weights, sideways_threshold):
+    if not records:
+        return {
+            "samples": 0,
+            "accuracy_percent": None,
+            "directional_accuracy_percent": None,
+            "high_confidence_accuracy_percent": None
+        }
+
+    correct = 0
+    directional_total = 0
+    directional_correct = 0
+    high_total = 0
+    high_correct = 0
+    class_stats = {
+        "BULLISH": {"predicted": 0, "correct": 0},
+        "SIDEWAYS": {"predicted": 0, "correct": 0},
+        "BEARISH": {"predicted": 0, "correct": 0}
+    }
+
+    scored = []
+    for row in records:
+        score_parts = []
+
+        for feature, weight in weights.items():
+            feature_value = _safe_float(
+                row.get(feature),
+                0.0
+            ) or 0.0
+            score_parts.append(
+                feature_value * weight
+            )
+
+        score = sum(score_parts)
+
+        if not math.isfinite(score):
+            score = 0.0
+
+        score = max(-1.0, min(1.0, score))
+        predicted = _prediction_label_from_score(score)
+        actual = _actual_label(row["actual_change_percent"], sideways_threshold)
+        is_correct = predicted == actual
+
+        correct += int(is_correct)
+        class_stats[predicted]["predicted"] += 1
+        class_stats[predicted]["correct"] += int(is_correct)
+
+        if predicted != "SIDEWAYS":
+            directional_total += 1
+            directional_correct += int(is_correct)
+
+        if abs(score) >= 0.30:
+            high_total += 1
+            high_correct += int(is_correct)
+
+        scored.append({
+            "date": row["date"],
+            "score": round(score, 3),
+            "prediction": predicted,
+            "actual": actual,
+            "actual_change_percent": round(row["actual_change_percent"], 3),
+            "correct": is_correct
+        })
+
+    accuracy = correct / len(records) * 100
+    directional_accuracy = (
+        directional_correct / directional_total * 100
+        if directional_total else None
+    )
+    high_accuracy = (
+        high_correct / high_total * 100
+        if high_total else None
+    )
+
+    return {
+        "samples": len(records),
+        "accuracy_percent": round(accuracy, 2),
+        "directional_signals": directional_total,
+        "directional_accuracy_percent": (
+            round(directional_accuracy, 2)
+            if directional_accuracy is not None else None
+        ),
+        "high_confidence_signals": high_total,
+        "high_confidence_accuracy_percent": (
+            round(high_accuracy, 2)
+            if high_accuracy is not None else None
+        ),
+        "class_accuracy": {
+            label: {
+                "predicted": stats["predicted"],
+                "correct": stats["correct"],
+                "accuracy_percent": (
+                    round(stats["correct"] / stats["predicted"] * 100, 2)
+                    if stats["predicted"] else None
+                )
+            }
+            for label, stats in class_stats.items()
+        },
+        "recent_results": scored[-20:]
+    }
+
+
+def run_core_backtest(period="2y", sideways_threshold=0.30):
+    """
+    Chronological backtest of signals that can be reconstructed reliably from
+    historical price data. News, live option OI, FII/DII snapshots, live breadth
+    and futures OI are NOT silently backfilled; those require saved historical
+    snapshots / forward testing.
+    """
+    allowed_periods = {"6mo", "1y", "2y", "5y"}
+    if period not in allowed_periods:
+        period = "2y"
+
+    nifty = _history_frame("^NSEI", period)
+    if nifty.empty or len(nifty) < 90:
+        return {
+            "status": "error",
+            "message": "Not enough historical NIFTY daily data for backtest."
+        }
+
+    global_series, global_coverage = _historical_global_series(period, nifty.index)
+
+    records = []
+    # Features are always built only through i-1, then tested on day i.
+    for i in range(60, len(nifty)):
+        history = nifty.iloc[:i]
+        previous = history.iloc[-1]
+        test_day = nifty.iloc[i]
+
+        previous_close = _safe_float(previous.get("Close"))
+        test_close = _safe_float(test_day.get("Close"))
+
+        if (
+            previous_close is None
+            or test_close is None
+            or previous_close <= 0
+        ):
+            continue
+
+        try:
+            technical_data = calculate_technical_indicators(history)
+            raw_technical_score = _safe_float(
+                technical_data.get("technical_score"),
+                0.0
+            )
+            technical_score = max(
+                -1.0,
+                min(1.0, raw_technical_score / 4.0)
+            )
+        except Exception:
+            continue
+
+        if len(history) >= 2:
+            prior_close = _safe_float(
+                history["Close"].iloc[-2]
+            )
+
+            if prior_close is not None and prior_close > 0:
+                momentum_pct = (
+                    (previous_close - prior_close)
+                    / prior_close
+                    * 100
+                )
+                momentum_score = max(
+                    -1.0,
+                    min(1.0, momentum_pct / 1.0)
+                )
+            else:
+                momentum_score = 0.0
+        else:
+            momentum_score = 0.0
+
+        try:
+            candle_data = analyze_candlestick_patterns(
+                history,
+                interval_minutes=1440
+            )
+            candle_score = _safe_float(
+                candle_data.get("pattern_score"),
+                0.0
+            ) or 0.0
+            candle_score = max(
+                -1.0,
+                min(1.0, candle_score)
+            )
+        except Exception:
+            candle_score = 0.0
+
+        feature_date = history.index[-1]
+        global_score = _safe_float(
+            global_series.get(feature_date),
+            0.0
+        ) or 0.0
+        global_score = max(
+            -1.0,
+            min(1.0, global_score)
+        )
+
+        actual_change = (
+            (test_close - previous_close)
+            / previous_close
+            * 100
+        )
+
+        if not math.isfinite(actual_change):
+            continue
+
+        records.append({
+            "date": str(nifty.index[i].date()),
+            "technical": technical_score,
+            "candlestick": candle_score,
+            "global": global_score,
+            "momentum": momentum_score,
+            "actual_change_percent": actual_change
+        })
+
+    if len(records) < 50:
+        return {
+            "status": "error",
+            "message": "Too few usable historical records after feature construction."
+        }
+
+    split_index = max(1, int(len(records) * 0.70))
+    train_records = records[:split_index]
+    test_records = records[split_index:]
+
+    candidates = {
+        "BALANCED": {
+            "technical": 0.45,
+            "candlestick": 0.20,
+            "global": 0.25,
+            "momentum": 0.10
+        },
+        "TREND_HEAVY": {
+            "technical": 0.55,
+            "candlestick": 0.20,
+            "global": 0.15,
+            "momentum": 0.10
+        },
+        "MACRO_HEAVY": {
+            "technical": 0.35,
+            "candlestick": 0.15,
+            "global": 0.40,
+            "momentum": 0.10
+        },
+        "PRICE_ACTION": {
+            "technical": 0.45,
+            "candlestick": 0.30,
+            "global": 0.15,
+            "momentum": 0.10
+        },
+        "MOMENTUM_HEAVY": {
+            "technical": 0.40,
+            "candlestick": 0.15,
+            "global": 0.20,
+            "momentum": 0.25
+        }
+    }
+
+    train_scores = {}
+    for name, weights in candidates.items():
+        metrics = _metrics_for_records(train_records, weights, sideways_threshold)
+        train_scores[name] = metrics
+
+    best_name = max(
+        candidates,
+        key=lambda name: train_scores[name].get("accuracy_percent") or 0
+    )
+    best_weights = candidates[best_name]
+    out_of_sample = _metrics_for_records(
+        test_records,
+        best_weights,
+        sideways_threshold
+    )
+    full_metrics = _metrics_for_records(
+        records,
+        best_weights,
+        sideways_threshold
+    )
+
+    return {
+        "status": "success",
+        "backtest_type": "chronological core-model walk-forward holdout",
+        "period": period,
+        "sideways_threshold_percent": sideways_threshold,
+        "feature_rule": (
+            "All features for a test session use only data available through "
+            "the previous completed trading session."
+        ),
+        "train_percent": 70,
+        "test_percent": 30,
+        "training_samples": len(train_records),
+        "out_of_sample_samples": len(test_records),
+        "selected_weight_profile": best_name,
+        "selected_core_weights": best_weights,
+        "training_accuracy_percent": train_scores[best_name]["accuracy_percent"],
+        "out_of_sample": out_of_sample,
+        "full_period_reference": full_metrics,
+        "candidate_training_accuracy": {
+            name: metrics["accuracy_percent"]
+            for name, metrics in train_scores.items()
+        },
+        "historical_signals_included": [
+            "Technicals",
+            "Candlestick patterns",
+            "Prior-session momentum",
+            "Global equity/crude/USDINR cues"
+        ],
+        "live_signals_not_reconstructed": [
+            "Historical NewsAPI sentiment snapshots",
+            "Historical intraday FII/DII snapshot as used live",
+            "Historical NIFTY option-chain OI / change-OI / IV snapshot",
+            "Historical NIFTY 50 live breadth snapshot",
+            "Historical NIFTY futures live OI snapshot",
+            "Historical GIFT Nifty live snapshot"
+        ],
+        "important_note": (
+            "This endpoint does not fabricate missing historical live signals. "
+            "To measure the exact Version 6 live model, save one prediction snapshot "
+            "at a fixed time each trading day and compare it with the later market outcome."
+        )
+    }
+
+
+@app.get("/backtest")
+def backtest(period: str = "2y", sideways_threshold: float = 0.30):
+    try:
+        sideways_threshold = _safe_float(
+            sideways_threshold,
+            0.30
+        )
+        sideways_threshold = max(
+            0.10,
+            min(1.50, sideways_threshold)
+        )
+
+        result = run_core_backtest(
+            period=period,
+            sideways_threshold=sideways_threshold
+        )
+
+        return _json_safe(result)
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": "Backtest failed.",
+            "detail": str(e)
         }
