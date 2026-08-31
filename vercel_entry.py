@@ -1,17 +1,31 @@
 """
-Vercel entrypoint for NIFTY AI v8.1.
+NIFTY AI v8.1 Vercel entrypoint.
 
-Keep your existing v8.0 main.py unchanged in the same folder.
-This module imports the existing FastAPI app and attaches:
-- /login
-- OTP endpoints
-- user session
-- WhatsApp alert endpoints
-- dashboard authentication
+This file intentionally keeps the startup layer very small.
 """
 
-from main import app, fno_alerts
-from auth_whatsapp import setup_auth_whatsapp
+try:
+    from main import app
+except Exception as exc:
+    raise RuntimeError(
+        "Could not import FastAPI app from main.py. "
+        f"Original error: {exc}"
+    ) from exc
+
+try:
+    from main import fno_alerts
+except Exception:
+    # Login/dashboard can still load even if the F&O function
+    # has been renamed or is temporarily unavailable.
+    fno_alerts = None
+
+try:
+    from auth_whatsapp import setup_auth_whatsapp
+except Exception as exc:
+    raise RuntimeError(
+        "Could not import auth_whatsapp.py. "
+        f"Original error: {exc}"
+    ) from exc
 
 setup_auth_whatsapp(
     app,

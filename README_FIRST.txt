@@ -1,77 +1,78 @@
-NIFTY AI v8.1 — READY TO UPLOAD
-================================
+NIFTY AI v8.1 — VERCEL STARTUP FIX
+===================================
 
-IMPORTANT
----------
-This package fixes the missing login page issue.
+WHAT WAS FIXED
+--------------
+The earlier auth_whatsapp.py imported these at Python startup:
+- jwt
+- psycopg
+- twilio
 
-You DO NOT need to run patch_main.py anymore.
+A failure loading any one of them could crash the whole Vercel
+serverless function before /login opened.
 
-KEEP YOUR CURRENT v8.0 main.py
-------------------------------
-Your deployment folder must contain your existing current NIFTY AI main.py.
+This build:
+- removes PyJWT completely
+- uses a signed standard-library session cookie
+- lazy-loads psycopg only when PostgreSQL is needed
+- lazy-loads Twilio only when OTP/WhatsApp is needed
+- does NOT connect to PostgreSQL during application startup
+- allows the login page/dashboard routing to start independently
+- adds GET /auth/status so configuration can be checked safely
+- does not fail startup if fno_alerts cannot be imported
 
-Add these new files beside it:
-- vercel_entry.py
+UPLOAD
+------
+KEEP your existing working main.py.
+
+Replace:
 - auth_whatsapp.py
+- vercel_entry.py
 - requirements.txt
-- schema.sql
-- .env.example
 - vercel.json
+
+You can also keep/use:
+- schema.sql
 - dashboard_whatsapp_ui_patch.html
 - scheduled_alert_whatsapp_patch.js
 
-WHY LOGIN WAS MISSING
----------------------
-The previous package required:
-    python patch_main.py
-
-That step attached the login routes to the FastAPI app.
-
-This new package instead uses:
-    vercel_entry.py
-
-Vercel loads vercel_entry.py, which imports your existing app from main.py
-and automatically attaches the login + WhatsApp module.
-
-AFTER DEPLOYMENT
+VERCEL VARIABLES
 ----------------
-Open:
-    https://YOUR-VERCEL-DOMAIN/login
+For the LOGIN PAGE itself:
+No Twilio or database connection is required just to render /login.
 
-The root "/" in your old main.py may still redirect to /dashboard,
-but /dashboard is now protected and will redirect unauthenticated users
-to /login.
+For actual OTP login:
+- TWILIO_ACCOUNT_SID
+- TWILIO_AUTH_TOKEN
+- TWILIO_VERIFY_SERVICE_SID
+- DATABASE_URL
+- JWT_SECRET (24+ characters)
 
-VERCEL ENVIRONMENT VARIABLES
-----------------------------
-Required:
-    NEWS_API_KEY
-    DATABASE_URL
-    JWT_SECRET
-    TWILIO_ACCOUNT_SID
-    TWILIO_AUTH_TOKEN
-    TWILIO_VERIFY_SERVICE_SID
-    TWILIO_WHATSAPP_FROM
+For WhatsApp:
+- TWILIO_WHATSAPP_FROM
+- TWILIO_CONTENT_SID when required by your approved template setup
 
-Optional / production template:
-    TWILIO_CONTENT_SID
-
-DATABASE
---------
-Run schema.sql in your PostgreSQL database.
-
-TEST
-----
+TEST ORDER
+----------
 1. Deploy.
-2. Open /login.
-3. Enter mobile number.
-4. Verify OTP.
-5. Dashboard opens.
-6. Test:
-       POST /api/whatsapp/test
+2. Open:
+   /health
 
-NOTE
-----
-Your EXISTING main.py is still required because it contains the NIFTY v8.0
-prediction engine and /fno-alerts logic.
+3. Open:
+   /login
+
+4. Open:
+   /auth/status
+
+Expected:
+{
+  "status": "success",
+  ...
+}
+
+5. Only after those work, test Send OTP.
+
+IMPORTANT
+---------
+Do not replace the working NIFTY prediction main.py with these support
+files. main.py remains your existing v8.0 model.

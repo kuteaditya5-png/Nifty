@@ -5,5 +5,4 @@ pandas>=2.2,<3.0
 python-dotenv>=1.0,<2.0
 uvicorn>=0.35,<1.0
 twilio>=9.0,<10.0
-PyJWT>=2.9,<3.0
 psycopg[binary]>=3.2,<4.0
