@@ -7,6 +7,7 @@ import pandas as pd
 import re
 import math
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,7 +17,7 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 app = FastAPI(
     title="NIFTY AI",
     description="AI powered NIFTY 50 market analysis",
-    version="1.0"
+    version="9.0"
 )
 
 
@@ -33,7 +34,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "8.0",
+        "version": "9.0",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -491,14 +492,16 @@ def _completed_intraday_frame(data, interval_minutes=5):
 
 def calculate_price_action_confirmation(data):
     """
-    Multi-timeframe confirmation built from the existing 5-minute NIFTY feed.
+    Completed-candle multi-timeframe confirmation.
 
-    It combines:
+    Layers:
     - 5m EMA structure
-    - session VWAP when usable volume is available
+    - 15m EMA structure reconstructed from completed 5m bars
+    - 30m EMA structure reconstructed from completed 5m bars
+    - session VWAP when index volume is usable
     - ADX / directional movement
-    - 15m EMA structure reconstructed from completed 5m candles
-    - local breakout / breakdown confirmation
+    - prior-hour breakout / breakdown
+    - relative-volume confirmation when usable volume exists
 
     This is a heuristic confirmation layer, not a guarantee of accuracy.
     """
@@ -508,15 +511,18 @@ def calculate_price_action_confirmation(data):
         "bias": "NEUTRAL",
         "five_minute_trend": "NEUTRAL",
         "fifteen_minute_trend": "NEUTRAL",
+        "thirty_minute_trend": "NEUTRAL",
         "vwap": None,
         "vwap_position": "UNAVAILABLE",
         "adx_14": None,
         "di_direction": "NEUTRAL",
-        "breakout_state": "NONE"
+        "breakout_state": "NONE",
+        "relative_volume": None,
+        "volume_confirmation": "UNAVAILABLE"
     }
 
     clean = _completed_intraday_frame(data, interval_minutes=5)
-    if clean.empty or len(clean) < 35:
+    if clean.empty or len(clean) < 42:
         return neutral
 
     try:
@@ -525,7 +531,7 @@ def calculate_price_action_confirmation(data):
         high = clean["High"].astype(float)
         low = clean["Low"].astype(float)
 
-        # 5-minute trend structure.
+        # 5-minute trend.
         ema9 = close.ewm(span=9, adjust=False).mean()
         ema21 = close.ewm(span=21, adjust=False).mean()
         last_close = float(close.iloc[-1])
@@ -534,25 +540,27 @@ def calculate_price_action_confirmation(data):
 
         if last_close > last_ema9 > last_ema21:
             five_trend = "BULLISH"
-            score += 0.28
+            score += 0.22
         elif last_close < last_ema9 < last_ema21:
             five_trend = "BEARISH"
-            score -= 0.28
+            score -= 0.22
         else:
             five_trend = "MIXED"
 
-        # Session VWAP. Index volume can occasionally be zero/missing in
-        # yfinance; in that case VWAP is excluded instead of fabricated.
+        # Session VWAP and relative volume when yfinance provides usable volume.
         vwap_value = None
         vwap_position = "UNAVAILABLE"
+        relative_volume = None
+        volume_confirmation = "UNAVAILABLE"
+        usable_volume = False
+
         if "Volume" in clean.columns:
             latest_date = clean.index[-1].date()
             session = clean[pd.Index(clean.index.date) == latest_date].copy()
-            session_volume = pd.to_numeric(
-                session["Volume"], errors="coerce"
-            ).fillna(0.0)
+            session_volume = pd.to_numeric(session["Volume"], errors="coerce").fillna(0.0)
 
             if session_volume.sum() > 0:
+                usable_volume = True
                 typical = (
                     session["High"].astype(float)
                     + session["Low"].astype(float)
@@ -566,14 +574,20 @@ def calculate_price_action_confirmation(data):
                 if vwap_value is not None:
                     if last_close > vwap_value * 1.0003:
                         vwap_position = "ABOVE"
-                        score += 0.14
+                        score += 0.12
                     elif last_close < vwap_value * 0.9997:
                         vwap_position = "BELOW"
-                        score -= 0.14
+                        score -= 0.12
                     else:
                         vwap_position = "AT VWAP"
 
-        # Wilder-style ADX / DI direction.
+                if len(session_volume) >= 8:
+                    baseline = _safe_float(session_volume.iloc[-21:-1].mean(), None)
+                    latest_vol = _safe_float(session_volume.iloc[-1], None)
+                    if baseline and baseline > 0 and latest_vol is not None:
+                        relative_volume = latest_vol / baseline
+
+        # Wilder-style ADX / DI.
         previous_close = close.shift(1)
         tr = pd.concat(
             [
@@ -586,12 +600,8 @@ def calculate_price_action_confirmation(data):
 
         up_move = high.diff()
         down_move = -low.diff()
-        plus_dm = up_move.where(
-            (up_move > down_move) & (up_move > 0), 0.0
-        )
-        minus_dm = down_move.where(
-            (down_move > up_move) & (down_move > 0), 0.0
-        )
+        plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+        minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
 
         atr_wilder = tr.ewm(alpha=1 / 14, adjust=False).mean()
         plus_di = 100 * (
@@ -619,7 +629,7 @@ def calculate_price_action_confirmation(data):
             and minus_value is not None
             and adx_value >= 18
         ):
-            adx_weight = 0.20 if adx_value >= 25 else 0.12
+            adx_weight = 0.16 if adx_value >= 25 else 0.10
             if plus_value > minus_value:
                 di_direction = "BULLISH"
                 score += adx_weight
@@ -627,27 +637,33 @@ def calculate_price_action_confirmation(data):
                 di_direction = "BEARISH"
                 score -= adx_weight
 
-        # Reconstruct only fully completed 15-minute candles from 5m bars.
-        counts_15 = close.resample("15min").count()
-        closes_15 = close.resample("15min").last()
-        full_15 = closes_15[counts_15 >= 3].dropna()
-        fifteen_trend = "UNAVAILABLE"
+        def resampled_trend(minutes, min_bars, fast_span, slow_span):
+            counts = close.resample(f"{minutes}min").count()
+            closes = close.resample(f"{minutes}min").last()
+            required = max(1, minutes // 5)
+            full = closes[counts >= required].dropna()
+            if len(full) < min_bars:
+                return "UNAVAILABLE"
+            fast = full.ewm(span=fast_span, adjust=False).mean()
+            slow = full.ewm(span=slow_span, adjust=False).mean()
+            latest = float(full.iloc[-1])
+            if latest > float(fast.iloc[-1]) > float(slow.iloc[-1]):
+                return "BULLISH"
+            if latest < float(fast.iloc[-1]) < float(slow.iloc[-1]):
+                return "BEARISH"
+            return "MIXED"
 
-        if len(full_15) >= 12:
-            ema8_15 = full_15.ewm(span=8, adjust=False).mean()
-            ema21_15 = full_15.ewm(span=21, adjust=False).mean()
-            close15 = float(full_15.iloc[-1])
-            ema8_value = float(ema8_15.iloc[-1])
-            ema21_value = float(ema21_15.iloc[-1])
+        fifteen_trend = resampled_trend(15, 12, 8, 21)
+        if fifteen_trend == "BULLISH":
+            score += 0.22
+        elif fifteen_trend == "BEARISH":
+            score -= 0.22
 
-            if close15 > ema8_value > ema21_value:
-                fifteen_trend = "BULLISH"
-                score += 0.26
-            elif close15 < ema8_value < ema21_value:
-                fifteen_trend = "BEARISH"
-                score -= 0.26
-            else:
-                fifteen_trend = "MIXED"
+        thirty_trend = resampled_trend(30, 10, 5, 13)
+        if thirty_trend == "BULLISH":
+            score += 0.16
+        elif thirty_trend == "BEARISH":
+            score -= 0.16
 
         # Breakout/breakdown against the prior completed hour (12 x 5m).
         breakout_state = "NONE"
@@ -661,6 +677,20 @@ def calculate_price_action_confirmation(data):
                 breakout_state = "BEARISH BREAKDOWN"
                 score -= 0.12
 
+        # Only use volume as a directional boost when the index feed actually
+        # supplies usable volume and the latest bar is meaningfully above normal.
+        if usable_volume and relative_volume is not None:
+            if relative_volume >= 1.20 and breakout_state == "BULLISH BREAKOUT":
+                volume_confirmation = "BULLISH"
+                score += 0.06
+            elif relative_volume >= 1.20 and breakout_state == "BEARISH BREAKDOWN":
+                volume_confirmation = "BEARISH"
+                score -= 0.06
+            elif relative_volume >= 1.20:
+                volume_confirmation = "HIGH VOLUME / NO BREAKOUT"
+            else:
+                volume_confirmation = "NORMAL"
+
         score = max(-1.0, min(1.0, score))
 
         return {
@@ -669,28 +699,27 @@ def calculate_price_action_confirmation(data):
             "bias": _score_to_bias(score),
             "five_minute_trend": five_trend,
             "fifteen_minute_trend": fifteen_trend,
+            "thirty_minute_trend": thirty_trend,
             "vwap": round(vwap_value, 2) if vwap_value is not None else None,
             "vwap_position": vwap_position,
             "adx_14": round(adx_value, 2) if adx_value is not None else None,
             "di_direction": di_direction,
             "breakout_state": breakout_state,
+            "relative_volume": round(relative_volume, 2) if relative_volume is not None else None,
+            "volume_confirmation": volume_confirmation,
             "last_completed_candle": (
                 clean.index[-1].isoformat()
                 if hasattr(clean.index[-1], "isoformat")
                 else str(clean.index[-1])
             ),
             "note": (
-                "Multi-timeframe confirmation uses completed 5m candles, a "
-                "reconstructed completed 15m trend, ADX/DI, optional VWAP and "
-                "local breakout structure."
+                "Completed-candle price action uses 5m, 15m and 30m trend structure, "
+                "ADX/DI, optional VWAP/relative volume and prior-hour breakouts."
             )
         }
 
     except Exception as e:
-        return {
-            **neutral,
-            "message": str(e)
-        }
+        return {**neutral, "message": str(e)}
 
 
 def _candle_values(row):
@@ -2926,6 +2955,25 @@ def get_option_chain_analysis(expiry=None):
                 "iv"
             )
 
+            call_volume = _option_value(
+                ce, "totalTradedVolume", "tradedVolume", "volume"
+            )
+            put_volume = _option_value(
+                pe, "totalTradedVolume", "tradedVolume", "volume"
+            )
+            call_bid = _option_value(
+                ce, "bidprice", "bidPrice", "bid"
+            )
+            call_ask = _option_value(
+                ce, "askPrice", "askprice", "ask"
+            )
+            put_bid = _option_value(
+                pe, "bidprice", "bidPrice", "bid"
+            )
+            put_ask = _option_value(
+                pe, "askPrice", "askprice", "ask"
+            )
+
             total_call_oi += call_oi
             total_put_oi += put_oi
 
@@ -2950,7 +2998,13 @@ def get_option_chain_analysis(expiry=None):
                 "call_ltp": call_ltp,
                 "put_ltp": put_ltp,
                 "call_iv": call_iv,
-                "put_iv": put_iv
+                "put_iv": put_iv,
+                "call_volume": call_volume,
+                "put_volume": put_volume,
+                "call_bid": call_bid,
+                "call_ask": call_ask,
+                "put_bid": put_bid,
+                "put_ask": put_ask
             })
 
         if not parsed_rows:
@@ -3611,6 +3665,9 @@ def get_option_chain_analysis(expiry=None):
                         item.get("call_iv", 0.0),
                         2
                     ),
+                    "call_volume": round(item.get("call_volume", 0.0), 2),
+                    "call_bid": round(item.get("call_bid", 0.0), 2),
+                    "call_ask": round(item.get("call_ask", 0.0), 2),
                     "put_ltp": round(
                         item["put_ltp"],
                         2
@@ -3619,6 +3676,9 @@ def get_option_chain_analysis(expiry=None):
                         item.get("put_iv", 0.0),
                         2
                     ),
+                    "put_volume": round(item.get("put_volume", 0.0), 2),
+                    "put_bid": round(item.get("put_bid", 0.0), 2),
+                    "put_ask": round(item.get("put_ask", 0.0), 2),
                     "put_change_oi": round(
                         item[
                             "put_change_oi"
@@ -3850,2456 +3910,120 @@ def dashboard():
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NIFTY AI Dashboard</title>
-
 <script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
-
 <style>
-    * {
-        box-sizing: border-box;
-    }
-
-    body {
-        margin: 0;
-        font-family: Arial, Helvetica, sans-serif;
-        background: #0b1020;
-        color: #eef2ff;
-    }
-
-    .container {
-        width: min(1500px, 96%);
-        margin: 0 auto;
-        padding: 24px 0 40px;
-    }
-
-    .topbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 20px;
-        margin-bottom: 22px;
-        flex-wrap: wrap;
-    }
-
-    .title-wrap h1 {
-        margin: 0;
-        font-size: 30px;
-        letter-spacing: 0.4px;
-    }
-
-    .subtitle {
-        margin-top: 6px;
-        color: #9ca3af;
-        font-size: 14px;
-    }
-
-    .actions {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-
-    button {
-        border: 0;
-        border-radius: 10px;
-        padding: 10px 16px;
-        font-weight: 700;
-        cursor: pointer;
-        background: #2563eb;
-        color: white;
-    }
-
-    button:hover {
-        background: #1d4ed8;
-    }
-
-    .status-pill {
-        padding: 9px 12px;
-        border-radius: 999px;
-        background: #111827;
-        color: #cbd5e1;
-        border: 1px solid #25304a;
-        font-size: 13px;
-    }
-
-    .hero-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 14px;
-        margin-bottom: 14px;
-    }
-
-    .grid-3 {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
-        margin-bottom: 14px;
-    }
-
-    .grid-2 {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 14px;
-        margin-bottom: 14px;
-    }
-
-    .card {
-        background: #111827;
-        border: 1px solid #1f2937;
-        border-radius: 16px;
-        padding: 18px;
-        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.16);
-    }
-
-    .label {
-        color: #9ca3af;
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        margin-bottom: 8px;
-    }
-
-    .value {
-        font-size: 28px;
-        font-weight: 800;
-        line-height: 1.1;
-    }
-
-    .small-value {
-        font-size: 21px;
-        font-weight: 750;
-    }
-
-    .muted {
-        color: #94a3b8;
-    }
-
-    .positive {
-        color: #22c55e;
-    }
-
-    .negative {
-        color: #ef4444;
-    }
-
-    .neutral {
-        color: #f59e0b;
-    }
-
-    .info {
-        color: #60a5fa;
-    }
-
-    .probability-wrap {
-        margin-top: 10px;
-    }
-
-    .probability-row {
-        display: grid;
-        grid-template-columns: 95px 1fr 48px;
-        gap: 10px;
-        align-items: center;
-        margin: 10px 0;
-        font-size: 13px;
-    }
-
-    .bar {
-        height: 10px;
-        border-radius: 999px;
-        background: #1f2937;
-        overflow: hidden;
-    }
-
-    .fill {
-        height: 100%;
-        border-radius: 999px;
-    }
-
-    .bullish-fill {
-        background: #22c55e;
-    }
-
-    .sideways-fill {
-        background: #f59e0b;
-    }
-
-    .bearish-fill {
-        background: #ef4444;
-    }
-
-    .section-title {
-        margin: 5px 0 12px;
-        font-size: 18px;
-        font-weight: 800;
-    }
-
-    .levels {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-    }
-
-    .level-box {
-        border-radius: 12px;
-        padding: 14px;
-        background: #0f172a;
-        border: 1px solid #243044;
-    }
-
-    .level-box .value {
-        font-size: 22px;
-    }
-
-    .signal-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-        align-items: center;
-        padding: 11px 0;
-        border-bottom: 1px solid #1f2937;
-    }
-
-    .signal-row:last-child {
-        border-bottom: 0;
-    }
-
-    .signal-name {
-        color: #cbd5e1;
-        font-weight: 650;
-    }
-
-    .signal-value {
-        font-weight: 800;
-        text-align: right;
-    }
-
-
-
-    .topbar-title-group {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-
-    .fno-menu-btn {
-        width: 44px;
-        height: 44px;
-        padding: 0;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 12px;
-        background: #111827;
-        border: 1px solid #25304a;
-        font-size: 22px;
-        line-height: 1;
-    }
-
-    .fno-menu-btn:hover {
-        background: #182235;
-    }
-
-    .alert-drawer-overlay {
-        position: fixed;
-        inset: 0;
-        z-index: 1998;
-        background: rgba(0, 0, 0, 0.62);
-        opacity: 0;
-        visibility: hidden;
-        transition: opacity 0.22s ease, visibility 0.22s ease;
-    }
-
-    .alert-drawer-overlay.open {
-        opacity: 1;
-        visibility: visible;
-    }
-
-    .alert-drawer {
-        position: fixed;
-        top: 0;
-        left: 0;
-        bottom: 0;
-        width: min(760px, 94vw);
-        z-index: 1999;
-        background: #0b1020;
-        border-right: 1px solid #27344d;
-        box-shadow: 18px 0 50px rgba(0, 0, 0, 0.40);
-        transform: translateX(-102%);
-        transition: transform 0.24s ease;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .alert-drawer.open {
-        transform: translateX(0);
-    }
-
-    .alert-drawer-head {
-        padding: 18px 18px 15px;
-        border-bottom: 1px solid #25304a;
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 14px;
-        background: #0e1526;
-    }
-
-    .alert-drawer-title {
-        font-size: 19px;
-        font-weight: 850;
-        margin-bottom: 5px;
-    }
-
-    .drawer-close-btn {
-        width: 38px;
-        height: 38px;
-        min-width: 38px;
-        padding: 0;
-        border-radius: 10px;
-        background: #172033;
-        border: 1px solid #334155;
-        font-size: 19px;
-    }
-
-    .alert-drawer-body {
-        flex: 1;
-        overflow-y: auto;
-        padding: 16px;
-    }
-
-    .schedule-card {
-        border: 1px solid #25304a;
-        background: #0f172a;
-        border-radius: 14px;
-        padding: 14px;
-        margin-bottom: 16px;
-    }
-
-    .schedule-help {
-        line-height: 1.5;
-        margin-bottom: 13px;
-    }
-
-    .schedule-label {
-        display: block;
-        color: #cbd5e1;
-        font-size: 12px;
-        font-weight: 700;
-        margin-bottom: 7px;
-    }
-
-    .schedule-input {
-        width: 100%;
-        min-height: 44px;
-        padding: 10px 12px;
-        border-radius: 10px;
-        border: 1px solid #334155;
-        background: #0b1220;
-        color: #eef2ff;
-        font: inherit;
-        color-scheme: dark;
-    }
-
-    .schedule-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 11px;
-    }
-
-    .schedule-actions button:disabled {
-        opacity: 0.45;
-        cursor: not-allowed;
-    }
-
-    .scheduled-status {
-        margin-top: 11px;
-        padding: 10px 11px;
-        border-radius: 10px;
-        background: #0b1220;
-        border: 1px solid #25304a;
-        color: #cbd5e1;
-        font-size: 12px;
-        line-height: 1.45;
-    }
-
-    .drawer-snapshot-head {
-        margin-top: 4px;
-    }
-
-    .drawer-alert-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .drawer-loading {
-        display: none;
-        margin: 10px 0 12px;
-        padding: 10px 12px;
-        border-radius: 10px;
-        background: #0f172a;
-        border: 1px solid #25304a;
-        color: #94a3b8;
-        font-size: 12px;
-    }
-
-    .drawer-loading.show {
-        display: block;
-    }
-
-    .drawer-note {
-        margin-top: 14px;
-        color: #64748b;
-        font-size: 11px;
-        line-height: 1.5;
-    }
-
-    .alert-section {
-        margin-bottom: 14px;
-    }
-
-    .alert-section-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-        margin-bottom: 12px;
-    }
-
-    .alert-section-title {
-        font-size: 17px;
-        font-weight: 800;
-    }
-
-    .alert-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 14px;
-    }
-
-    .trade-alert-card {
-        position: relative;
-        overflow: hidden;
-    }
-
-    .trade-alert-card::before {
-        content: "";
-        position: absolute;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 4px;
-        background: #64748b;
-    }
-
-    .trade-alert-card.call-card::before {
-        background: #22c55e;
-    }
-
-    .trade-alert-card.put-card::before {
-        background: #ef4444;
-    }
-
-    .trade-alert-top {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 12px;
-        margin-bottom: 14px;
-    }
-
-    .trade-side {
-        font-size: 20px;
-        font-weight: 850;
-    }
-
-    .alert-badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 92px;
-        padding: 7px 10px;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 800;
-        border: 1px solid #334155;
-        background: #172033;
-    }
-
-    .alert-badge.buy {
-        color: #86efac;
-        border-color: rgba(34, 197, 94, 0.45);
-        background: rgba(34, 197, 94, 0.10);
-    }
-
-    .alert-badge.watch {
-        color: #facc15;
-        border-color: rgba(250, 204, 21, 0.40);
-        background: rgba(250, 204, 21, 0.08);
-    }
-
-    .alert-badge.wait {
-        color: #cbd5e1;
-    }
-
-    .alert-badge.exit {
-        color: #fdba74;
-        border-color: rgba(249, 115, 22, 0.45);
-        background: rgba(249, 115, 22, 0.10);
-    }
-
-    .alert-badge.stop {
-        color: #fecaca;
-        border-color: rgba(239, 68, 68, 0.50);
-        background: rgba(239, 68, 68, 0.12);
-    }
-
-    .trade-level-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 8px;
-        margin-top: 12px;
-    }
-
-    .trade-level {
-        padding: 10px;
-        border: 1px solid #25304a;
-        background: #0d1526;
-        border-radius: 10px;
-    }
-
-    .trade-level .label {
-        margin-bottom: 4px;
-        font-size: 10px;
-    }
-
-    .trade-level strong {
-        display: block;
-        font-size: 14px;
-    }
-
-    .trade-reason {
-        margin-top: 12px;
-        color: #94a3b8;
-        font-size: 12px;
-        line-height: 1.5;
-    }
-
-    .trade-state {
-        margin-top: 10px;
-        padding: 10px 12px;
-        border-radius: 10px;
-        background: #0d1526;
-        border: 1px solid #25304a;
-        font-size: 12px;
-        color: #cbd5e1;
-    }
-
-    .alert-actions {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-
-    .secondary-btn {
-        background: #172033;
-        border: 1px solid #334155;
-        color: #e2e8f0;
-    }
-
-    .secondary-btn:hover {
-        background: #1f2a40;
-    }
-
-    .alert-history {
-        margin-top: 14px;
-    }
-
-    .history-list {
-        display: grid;
-        gap: 8px;
-        margin-top: 10px;
-    }
-
-    .history-item {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 9px 10px;
-        border-radius: 9px;
-        background: #0d1526;
-        border: 1px solid #25304a;
-        font-size: 12px;
-    }
-
-    .history-time {
-        color: #64748b;
-        white-space: nowrap;
-    }
-
-
-    .signal-focus-card {
-        position: relative;
-        overflow: hidden;
-    }
-
-    .signal-focus-card::before {
-        content: "";
-        position: absolute;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 4px;
-        background: #f59e0b;
-    }
-
-    .signal-reason {
-        margin-top: 8px;
-        color: #cbd5e1;
-        font-size: 12px;
-        line-height: 1.45;
-    }
-
-    .signal-timestamp {
-        margin-top: 8px;
-        color: #60a5fa;
-        font-size: 12px;
-        font-weight: 700;
-    }
-
-    .signal-history-card {
-        margin-bottom: 14px;
-    }
-
-    .signal-toast {
-        position: fixed;
-        right: 18px;
-        bottom: 18px;
-        z-index: 2500;
-        width: min(390px, calc(100vw - 36px));
-        padding: 14px 16px;
-        border-radius: 14px;
-        background: #111827;
-        border: 1px solid #334155;
-        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
-        opacity: 0;
-        transform: translateY(20px);
-        pointer-events: none;
-        transition: opacity 0.2s ease, transform 0.2s ease;
-    }
-
-    .signal-toast.show {
-        opacity: 1;
-        transform: translateY(0);
-    }
-
-    .signal-toast-title {
-        font-weight: 850;
-        margin-bottom: 5px;
-    }
-
-    .footer-note {
-        margin-top: 14px;
-        color: #64748b;
-        font-size: 12px;
-        line-height: 1.5;
-    }
-
-
-    .chart-card {
-        margin-bottom: 14px;
-        padding: 0;
-        overflow: hidden;
-    }
-
-    .chart-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 14px;
-        padding: 18px 18px 10px;
-        flex-wrap: wrap;
-    }
-
-    .chart-heading-wrap {
-        display: flex;
-        flex-direction: column;
-        gap: 5px;
-    }
-
-    .chart-subtitle {
-        color: #94a3b8;
-        font-size: 12px;
-    }
-
-    .chart-controls {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .interval-btn {
-        padding: 7px 12px;
-        border-radius: 8px;
-        background: #172033;
-        color: #9ca3af;
-        border: 1px solid #26334d;
-        font-size: 12px;
-    }
-
-    .interval-btn:hover {
-        background: #1d2940;
-    }
-
-    .interval-btn.active {
-        background: #2563eb;
-        border-color: #2563eb;
-        color: white;
-    }
-
-    .chart-legend {
-        display: flex;
-        gap: 18px;
-        flex-wrap: wrap;
-        padding: 0 18px 10px;
-        color: #94a3b8;
-        font-size: 12px;
-    }
-
-    .legend-dot {
-        display: inline-block;
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        margin-right: 5px;
-    }
-
-    .ema20-dot {
-        background: #60a5fa;
-    }
-
-    .ema50-dot {
-        background: #a78bfa;
-    }
-
-    #niftyChart {
-        width: 100%;
-        height: 430px;
-        position: relative;
-    }
-
-    .chart-message {
-        padding: 12px 18px 16px;
-        color: #94a3b8;
-        font-size: 12px;
-    }
-
-    .loading {
-        opacity: 0.65;
-    }
-
-    .error {
-        padding: 14px;
-        border-radius: 12px;
-        background: rgba(239, 68, 68, 0.12);
-        border: 1px solid rgba(239, 68, 68, 0.35);
-        color: #fecaca;
-        margin-bottom: 14px;
-        display: none;
-    }
-
-    @media (max-width: 1100px) {
-        .hero-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .grid-3 {
-            grid-template-columns: 1fr;
-        }
-    }
-
-    @media (max-width: 700px) {
-        .hero-grid,
-        .grid-2,
-        .alert-grid,
-        .levels {
-            grid-template-columns: 1fr;
-        }
-
-        .value {
-            font-size: 25px;
-        }
-
-        .container {
-            width: 94%;
-        }
-    }
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#0b1020;color:#eef2ff}
+.container{width:min(1450px,96%);margin:0 auto;padding:22px 0 42px}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+h1{margin:0;font-size:30px;letter-spacing:.4px}.subtitle{color:#94a3b8;font-size:13px;margin-top:5px}
+.actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+button{border:0;border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;background:#2563eb;color:white}
+button.secondary{background:#172033;border:1px solid #334155;color:#e2e8f0}.status-pill{padding:9px 12px;border-radius:999px;background:#111827;border:1px solid #25304a;color:#cbd5e1;font-size:12px}
+.card{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:18px;box-shadow:0 8px 30px rgba(0,0,0,.16)}
+.hero{display:grid;grid-template-columns:.85fr 1.15fr 1.35fr;gap:14px;margin-bottom:14px}.label{color:#9ca3af;font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}.value{font-size:30px;font-weight:900;line-height:1.08}.muted{color:#94a3b8}.small{font-size:12px;line-height:1.5}.positive{color:#22c55e}.negative{color:#ef4444}.neutral{color:#f59e0b}.info{color:#60a5fa}
+.prediction-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.chip{padding:6px 9px;border-radius:999px;background:#0f172a;border:1px solid #26334d;color:#cbd5e1;font-size:11px;font-weight:700}.reason{margin-top:11px;color:#cbd5e1;font-size:12px;line-height:1.5}.signal-time{margin-top:9px;color:#60a5fa;font-size:12px;font-weight:800}
+.trade-card{position:relative;overflow:hidden}.trade-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#64748b}.trade-card.buy:before{background:#22c55e}.trade-card.pe:before{background:#ef4444}.trade-status{font-size:25px;font-weight:900}.contract{font-size:18px;font-weight:850;margin-top:8px}.trade-levels{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}.level{padding:10px;border:1px solid #25304a;background:#0d1526;border-radius:10px}.level .label{font-size:9px;margin-bottom:4px}.level strong{font-size:14px}.trade-extra{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:#94a3b8}
+.chart-card{padding:0;overflow:hidden;margin-bottom:14px}.chart-header{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;padding:17px 18px 9px}.section-title{font-size:18px;font-weight:900}.chart-status{color:#94a3b8;font-size:12px;margin-top:4px}.chart-controls{display:flex;gap:7px}.interval-btn{padding:7px 11px;background:#172033;border:1px solid #26334d;color:#9ca3af;font-size:11px}.interval-btn.active{background:#2563eb;border-color:#2563eb;color:white}.chart-legend{display:flex;gap:14px;flex-wrap:wrap;padding:0 18px 10px;color:#94a3b8;font-size:11px}#niftyChart{width:100%;height:500px}.chart-message{padding:10px 18px 15px;color:#64748b;font-size:11px;line-height:1.4}
+.history-card{margin-bottom:14px}.history-head{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.history-list{display:grid;gap:8px;margin-top:12px}.history-item{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;border-radius:9px;background:#0d1526;border:1px solid #25304a;font-size:12px}.history-time{color:#64748b;white-space:nowrap}.footer{color:#64748b;font-size:11px;line-height:1.5;margin-top:10px}.error{display:none;padding:12px;border-radius:10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);color:#fecaca;margin-bottom:12px}.loading{opacity:.7}.toast{position:fixed;right:18px;bottom:18px;z-index:2500;width:min(390px,calc(100vw - 36px));padding:14px 16px;border-radius:14px;background:#111827;border:1px solid #334155;box-shadow:0 18px 48px rgba(0,0,0,.38);opacity:0;transform:translateY(20px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:translateY(0)}.toast-title{font-weight:900;margin-bottom:5px}
+@media(max-width:1000px){.hero{grid-template-columns:1fr 1fr}.trade-card{grid-column:1/-1}}@media(max-width:700px){.hero{grid-template-columns:1fr}.trade-card{grid-column:auto}.trade-levels{grid-template-columns:repeat(2,1fr)}#niftyChart{height:430px}.value{font-size:26px}.container{width:94%}}
 </style>
 </head>
-
 <body>
-
-
 <div class="container" id="dashboardRoot">
+  <div class="topbar">
+    <div><h1>NIFTY AI</h1><div class="subtitle">Unified NIFTY prediction • chart signal • suggested F&O contract</div></div>
+    <div class="actions"><span class="status-pill" id="marketPhase">Market: --</span><span class="status-pill" id="lastUpdated">Loading...</span><button class="secondary" id="enableAlertsBtn" onclick="enableNotifications()">Enable Alerts</button><button onclick="loadDashboard()">Refresh</button></div>
+  </div>
+  <div class="error" id="errorBox"></div>
 
-    <div class="topbar">
-        <div class="topbar-title-group">
-            <div class="title-wrap">
-            <h1>NIFTY AI</h1>
-            <div class="subtitle">
-                Market prediction dashboard • Live Chart • Candlestick Patterns • Technicals • News • Global • FII/DII • Option Chain
-            </div>
-            </div>
-        </div>
-
-        <div class="actions">
-            <span class="status-pill" id="lastUpdated">Loading...</span>
-            <button class="secondary-btn" onclick="enableSignalNotifications()" id="enableSignalAlertsBtn">Enable Alerts</button>
-            <button onclick="loadDashboard()">Refresh</button>
-        </div>
+  <div class="hero">
+    <div class="card">
+      <div class="label">NIFTY 50</div>
+      <div class="value" id="price">--</div>
+      <div class="muted small" id="niftyChange">5m change: --</div>
+      <div class="muted small" id="expiryText">Expiry: --</div>
     </div>
 
-    <div class="error" id="errorBox"></div>
-
-    <div class="hero-grid">
-        <div class="card">
-            <div class="label">NIFTY 50</div>
-            <div class="value" id="price">--</div>
-            <div class="muted" id="expiryText">Expiry: --</div>
-        </div>
-
-        <div class="card">
-            <div class="label">Prediction</div>
-            <div class="value" id="prediction">--</div>
-            <div class="muted" id="confidence">Confidence: --</div>
-            <div class="muted" id="predictionAccuracy">
-                Current signal strength: --%
-            </div>
-        </div>
-
-        <div class="card signal-focus-card">
-            <div class="label">F&O Setup</div>
-            <div class="value" id="fnoSetup">--</div>
-            <div class="signal-reason" id="fnoReason">Waiting for the latest confirmation...</div>
-            <div class="signal-timestamp" id="fnoTimestamp">Signal time: --</div>
-        </div>
-
-        <div class="card">
-            <div class="label">Combined Score</div>
-            <div class="value" id="combinedScore">--</div>
-            <div class="muted">Range: -1 to +1</div>
-        </div>
+    <div class="card">
+      <div class="label">Unified Prediction</div>
+      <div class="value" id="prediction">--</div>
+      <div class="prediction-meta"><span class="chip" id="confidenceChip">Confidence --</span><span class="chip" id="scoreChip">Score --</span><span class="chip" id="conflictChip">Conflict --</span></div>
+      <div class="reason" id="predictionReason">Waiting for model confirmation...</div>
+      <div class="signal-time" id="signalTimestamp">Signal time: --</div>
     </div>
 
-    <div class="card chart-card">
-        <div class="chart-header">
-            <div class="chart-heading-wrap">
-                <div class="section-title" style="margin:0;">
-                    NIFTY Live Chart
-                </div>
-                <div class="chart-subtitle" id="chartStatus">
-                    Loading 5-minute candles...
-                </div>
-            </div>
-
-            <div class="chart-controls">
-                <button class="interval-btn" data-interval="1m" onclick="changeChartInterval('1m')">
-                    1m
-                </button>
-                <button class="interval-btn active" data-interval="5m" onclick="changeChartInterval('5m')">
-                    5m
-                </button>
-                <button class="interval-btn" data-interval="15m" onclick="changeChartInterval('15m')">
-                    15m
-                </button>
-            </div>
-        </div>
-
-        <div class="chart-legend">
-            <span>
-                <span class="legend-dot ema20-dot"></span>
-                EMA 20
-            </span>
-            <span>
-                <span class="legend-dot ema50-dot"></span>
-                EMA 50
-            </span>
-            <span>
-                CE / PE / WAIT changes are marked on the candle where the signal changed
-            </span>
-            <span>
-                Support / Resistance / Max Pain are shown as horizontal lines
-            </span>
-        </div>
-
-        <div id="niftyChart"></div>
-
-        <div class="chart-message">
-            Near-live chart from yfinance. Refreshes with the dashboard and is
-            not guaranteed to be exchange tick-by-tick realtime data.
-        </div>
+    <div class="card trade-card" id="tradeCard">
+      <div class="label">Suggested F&O Setup</div>
+      <div class="trade-status" id="tradeDecision">WAIT</div>
+      <div class="contract" id="contractName">No option buy suggested</div>
+      <div class="muted small" id="contractMeta">The model will suggest one ranked contract only when CE/PE direction is confirmed.</div>
+      <div class="trade-levels">
+        <div class="level"><div class="label">ENTRY</div><strong id="entryZone">--</strong></div>
+        <div class="level"><div class="label">STOP LOSS</div><strong class="negative" id="stopLoss">--</strong></div>
+        <div class="level"><div class="label">TARGET 1</div><strong class="positive" id="target1">--</strong></div>
+        <div class="level"><div class="label">TARGET 2</div><strong class="positive" id="target2">--</strong></div>
+      </div>
+      <div class="trade-extra"><span id="optionLtp">LTP --</span><span id="optionIv">IV --</span><span id="optionDelta">Δ --</span><span id="selectionScore">Contract score --</span></div>
+      <div class="reason" id="tradeReason">--</div>
     </div>
+  </div>
 
-    <div class="card signal-history-card">
-        <div class="alert-section-header">
-            <div>
-                <div class="section-title">Recent Signal Changes</div>
-                <div class="muted">Saved in this browser so you can see exactly when WAIT changed.</div>
-            </div>
-            <button class="secondary-btn" onclick="clearMainSignalHistory()">Clear History</button>
-        </div>
-        <div class="history-list" id="mainSignalHistory">
-            <div class="muted">No signal changes recorded yet.</div>
-        </div>
+  <div class="card chart-card">
+    <div class="chart-header">
+      <div><div class="section-title">Prediction Candlestick Chart</div><div class="chart-status" id="chartStatus">Loading 5m candles...</div></div>
+      <div class="chart-controls"><button class="interval-btn" data-interval="1m" onclick="changeChartInterval('1m')">1m</button><button class="interval-btn active" data-interval="5m" onclick="changeChartInterval('5m')">5m</button><button class="interval-btn" data-interval="15m" onclick="changeChartInterval('15m')">15m</button></div>
     </div>
+    <div class="chart-legend"><span>EMA20 / EMA50</span><span>Support / resistance / max pain</span><span>CE ↑ • PE ↓ • WAIT ● markers</span><span id="projectionLegend">15m projection: --</span></div>
+    <div id="niftyChart"></div>
+    <div class="chart-message">The chart uses near-live yfinance candles. Prediction markers are decision-support signals, not exchange orders or guaranteed forecasts.</div>
+  </div>
 
-    <div class="grid-3">
-        <div class="card">
-            <div class="section-title">Probability</div>
+  <div class="card history-card">
+    <div class="history-head"><div><div class="section-title">Recent Prediction Changes</div><div class="muted small">Stored in this browser with the exact time the unified CE/PE/WAIT state changed.</div></div><button class="secondary" onclick="clearHistory()">Clear History</button></div>
+    <div class="history-list" id="signalHistory"><div class="muted">No signal changes recorded yet.</div></div>
+  </div>
 
-            <div class="probability-wrap">
-                <div class="probability-row">
-                    <span>Bullish</span>
-                    <div class="bar">
-                        <div class="fill bullish-fill" id="bullishBar"></div>
-                    </div>
-                    <strong id="bullishProbability">--</strong>
-                </div>
-
-                <div class="probability-row">
-                    <span>Sideways</span>
-                    <div class="bar">
-                        <div class="fill sideways-fill" id="sidewaysBar"></div>
-                    </div>
-                    <strong id="sidewaysProbability">--</strong>
-                </div>
-
-                <div class="probability-row">
-                    <span>Bearish</span>
-                    <div class="bar">
-                        <div class="fill bearish-fill" id="bearishBar"></div>
-                    </div>
-                    <strong id="bearishProbability">--</strong>
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Option Chain Levels</div>
-
-            <div class="levels">
-                <div class="level-box">
-                    <div class="label">Immediate Support</div>
-                    <div class="value positive" id="immediateSupport">--</div>
-                </div>
-
-                <div class="level-box">
-                    <div class="label">Immediate Resistance</div>
-                    <div class="value negative" id="immediateResistance">--</div>
-                </div>
-
-                <div class="level-box">
-                    <div class="label">Major Support</div>
-                    <div class="small-value positive" id="majorSupport">--</div>
-                </div>
-
-                <div class="level-box">
-                    <div class="label">Major Resistance</div>
-                    <div class="small-value negative" id="majorResistance">--</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Derivatives Snapshot</div>
-
-            <div class="signal-row">
-                <span class="signal-name">ATM Strike</span>
-                <span class="signal-value" id="atmStrike">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">OI PCR</span>
-                <span class="signal-value" id="pcrOi">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Change-OI PCR</span>
-                <span class="signal-value" id="pcrChangeOi">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Max Pain</span>
-                <span class="signal-value" id="maxPain">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Option Bias</span>
-                <span class="signal-value" id="optionBias">--</span>
-            </div>
-        </div>
-    </div>
-
-    <div class="grid-2">
-        <div class="card">
-            <div class="section-title">Signal Summary</div>
-
-            <div class="signal-row">
-                <span class="signal-name">Technical</span>
-                <span class="signal-value" id="technicalBias">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">5m / 15m Price Action</span>
-                <span class="signal-value" id="priceActionBias">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Candle Pattern</span>
-                <span class="signal-value" id="candlestickBias">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">News</span>
-                <span class="signal-value" id="newsBias">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Global Markets</span>
-                <span class="signal-value" id="globalBias">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">FII / DII</span>
-                <span class="signal-value" id="institutionalBias">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Option Chain</span>
-                <span class="signal-value" id="optionChainBias">--</span>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Market Risk & Technicals</div>
-
-            <div class="signal-row">
-                <span class="signal-name">India VIX</span>
-                <span class="signal-value" id="vixValue">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">VIX Risk</span>
-                <span class="signal-value" id="vixRisk">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">RSI 14</span>
-                <span class="signal-value" id="rsi14">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">EMA 20</span>
-                <span class="signal-value" id="ema20">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">EMA 50</span>
-                <span class="signal-value" id="ema50">--</span>
-            </div>
-        </div>
-    </div>
-
-    <div class="grid-2">
-        <div class="card">
-            <div class="section-title">Institutional Flow</div>
-
-            <div class="signal-row">
-                <span class="signal-name">FII/FPI Net</span>
-                <span class="signal-value" id="fiiNet">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">DII Net</span>
-                <span class="signal-value" id="diiNet">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Flow Date</span>
-                <span class="signal-value" id="flowDate">--</span>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Global Cues</div>
-
-            <div class="signal-row">
-                <span class="signal-name">S&P 500</span>
-                <span class="signal-value" id="sp500">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">NASDAQ</span>
-                <span class="signal-value" id="nasdaq">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Nikkei</span>
-                <span class="signal-value" id="nikkei">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Hang Seng</span>
-                <span class="signal-value" id="hangSeng">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">WTI Crude</span>
-                <span class="signal-value" id="crude">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">USD/INR</span>
-                <span class="signal-value" id="usdInr">--</span>
-            </div>
-        </div>
-    </div>
-
-    <div class="grid-2">
-        <div class="card">
-            <div class="section-title">Advanced Prediction Signals</div>
-
-            <div class="signal-row">
-                <span class="signal-name">Market Regime</span>
-                <span class="signal-value" id="marketRegime">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">NIFTY 50 Breadth</span>
-                <span class="signal-value" id="breadthBias">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Advances / Declines</span>
-                <span class="signal-value" id="breadthCounts">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">NIFTY Futures</span>
-                <span class="signal-value" id="futuresPositioning">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">GIFT / Opening Gap</span>
-                <span class="signal-value" id="premarketBias">--</span>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Volatility & Model Quality</div>
-
-            <div class="signal-row">
-                <span class="signal-name">ATM Option IV</span>
-                <span class="signal-value" id="atmIv">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Put - Call IV Skew</span>
-                <span class="signal-value" id="ivSkew">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">IV Risk</span>
-                <span class="signal-value" id="ivRisk">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Live Data Coverage</span>
-                <span class="signal-value" id="dataCoverage">--</span>
-            </div>
-
-            <div class="signal-row">
-                <span class="signal-name">Backtest</span>
-                <span class="signal-value"><a href="/backtest?period=2y" target="_blank" style="color:#60a5fa;">Run 2Y Core Backtest</a></span>
-            </div>
-        </div>
-    </div>
-
-    <div class="footer-note">
-        This dashboard is a heuristic F&O decision-support tool. Version 8 adds completed-candle
-        multi-timeframe confirmation and browser-side signal-change timestamps/alerts. Alerts work
-        while this page is open and notifications are permitted. "Current signal strength" is not
-        proven historical accuracy; validate changes with backtesting and forward testing before
-        relying on the model with real capital.
-    </div>
+  <div class="footer">All detailed inputs — technicals, 5m/15m/30m price action, candlestick patterns, option chain/OI/IV, futures, breadth, FII/DII, VIX, global cues and news — continue to run in the backend. BUY is shown only when the stricter live rule set triggers; WATCH is a setup to monitor, not an instruction to enter.</div>
 </div>
-
-<div class="signal-toast" id="signalToast">
-    <div class="signal-toast-title" id="signalToastTitle">NIFTY AI Signal</div>
-    <div class="muted" id="signalToastBody">--</div>
-</div>
-
+<div class="toast" id="toast"><div class="toast-title" id="toastTitle">NIFTY AI</div><div class="muted" id="toastBody">--</div></div>
 <script>
-    let niftyChartInstance = null;
-    let candleSeries = null;
-    let ema20Series = null;
-    let ema50Series = null;
-    let currentChartInterval = "5m";
-    let currentOptionLevels = {};
-
-    function destroyChart() {
-        if (niftyChartInstance) {
-            niftyChartInstance.remove();
-            niftyChartInstance = null;
-            candleSeries = null;
-            ema20Series = null;
-            ema50Series = null;
-        }
-    }
-
-    function updateIntervalButtons() {
-        document.querySelectorAll(
-            ".interval-btn"
-        ).forEach((button) => {
-            button.classList.toggle(
-                "active",
-                button.dataset.interval
-                    === currentChartInterval
-            );
-        });
-    }
-
-    async function changeChartInterval(interval) {
-        currentChartInterval = interval;
-        updateIntervalButtons();
-
-        await loadChart(
-            currentOptionLevels,
-            true,
-            latestPredictionData
-        );
-    }
-
-    function addChartPriceLine(
-        series,
-        price,
-        title,
-        color
-    ) {
-        if (
-            !series
-            || price === null
-            || price === undefined
-            || Number.isNaN(Number(price))
-        ) {
-            return;
-        }
-
-        series.createPriceLine({
-            price: Number(price),
-            color: color,
-            lineWidth: 1,
-            lineStyle: 2,
-            axisLabelVisible: true,
-            title: title
-        });
-    }
-
-    async function loadChart(
-        optionChain = currentOptionLevels,
-        fitContent = false,
-        predictionData = latestPredictionData
-    ) {
-        const chartContainer = document.getElementById(
-            "niftyChart"
-        );
-
-        const chartStatus = document.getElementById(
-            "chartStatus"
-        );
-
-        if (
-            !chartContainer
-            || typeof LightweightCharts === "undefined"
-        ) {
-            if (chartStatus) {
-                chartStatus.textContent =
-                    "Chart library could not be loaded.";
-            }
-
-            return;
-        }
-
-        try {
-            if (chartStatus) {
-                chartStatus.textContent =
-                    "Loading "
-                    + currentChartInterval
-                    + " candles...";
-            }
-
-            const response = await fetch(
-                "/chart-data?interval="
-                + encodeURIComponent(
-                    currentChartInterval
-                )
-                + "&ts="
-                + Date.now(),
-                {
-                    cache: "no-store"
-                }
-            );
-
-            const chartData = await response.json();
-
-            if (
-                !response.ok
-                || chartData.status !== "success"
-            ) {
-                throw new Error(
-                    chartData.message
-                    || "Chart data is unavailable."
-                );
-            }
-
-            destroyChart();
-
-            niftyChartInstance =
-                LightweightCharts.createChart(
-                    chartContainer,
-                    {
-                        width:
-                            chartContainer.clientWidth,
-                        height: 430,
-                        layout: {
-                            background: {
-                                type: "solid",
-                                color: "#111827"
-                            },
-                            textColor: "#94a3b8"
-                        },
-                        grid: {
-                            vertLines: {
-                                color: "#1d2637"
-                            },
-                            horzLines: {
-                                color: "#1d2637"
-                            }
-                        },
-                        rightPriceScale: {
-                            borderColor: "#2b364d"
-                        },
-                        timeScale: {
-                            borderColor: "#2b364d",
-                            timeVisible: true,
-                            secondsVisible: false
-                        },
-                        crosshair: {
-                            mode:
-                                LightweightCharts
-                                    .CrosshairMode
-                                    .Normal
-                        }
-                    }
-                );
-
-            candleSeries =
-                niftyChartInstance.addSeries(
-                    LightweightCharts
-                        .CandlestickSeries,
-                    {
-                        upColor: "#22c55e",
-                        downColor: "#ef4444",
-                        wickUpColor: "#22c55e",
-                        wickDownColor: "#ef4444",
-                        borderVisible: false
-                    }
-                );
-
-            ema20Series =
-                niftyChartInstance.addSeries(
-                    LightweightCharts.LineSeries,
-                    {
-                        color: "#60a5fa",
-                        lineWidth: 2,
-                        priceLineVisible: false,
-                        lastValueVisible: false
-                    }
-                );
-
-            ema50Series =
-                niftyChartInstance.addSeries(
-                    LightweightCharts.LineSeries,
-                    {
-                        color: "#a78bfa",
-                        lineWidth: 2,
-                        priceLineVisible: false,
-                        lastValueVisible: false
-                    }
-                );
-
-            candleSeries.setData(
-                chartData.candles || []
-            );
-
-            ema20Series.setData(
-                chartData.ema20 || []
-            );
-
-            ema50Series.setData(
-                chartData.ema50 || []
-            );
-
-            // Plot recent signal changes plus the current CE/PE/WAIT decision.
-            try {
-                let markers = buildChartSignalMarkers(chartData);
-                const currentMarker = markerForCurrentPrediction(
-                    predictionData,
-                    chartData
-                );
-
-                if (currentMarker) {
-                    const duplicate = markers.some((item) => (
-                        Number(item.time) === Number(currentMarker.time)
-                        && String(item.text).startsWith(
-                            String(predictionData?.fno_setup || "WAIT").toUpperCase()
-                        )
-                    ));
-                    if (!duplicate) markers.push(currentMarker);
-                }
-
-                markers = markers
-                    .filter((item) => (chartData.candles || []).some(
-                        (candle) => Number(candle.time) === Number(item.time)
-                    ))
-                    .sort((a, b) => Number(a.time) - Number(b.time));
-
-                if (
-                    typeof LightweightCharts.createSeriesMarkers === "function"
-                ) {
-                    LightweightCharts.createSeriesMarkers(
-                        candleSeries,
-                        markers
-                    );
-                }
-                else if (typeof candleSeries.setMarkers === "function") {
-                    candleSeries.setMarkers(markers);
-                }
-            }
-            catch (markerError) {
-                console.warn("Prediction marker error", markerError);
-            }
-
-            currentOptionLevels =
-                optionChain || {};
-
-            addChartPriceLine(
-                candleSeries,
-                currentOptionLevels
-                    .immediate_support,
-                "Support",
-                "#22c55e"
-            );
-
-            addChartPriceLine(
-                candleSeries,
-                currentOptionLevels
-                    .immediate_resistance,
-                "Resistance",
-                "#ef4444"
-            );
-
-            addChartPriceLine(
-                candleSeries,
-                currentOptionLevels
-                    .max_pain,
-                "Max Pain",
-                "#f59e0b"
-            );
-
-            addChartPriceLine(
-                candleSeries,
-                currentOptionLevels
-                    .major_support,
-                "Major S",
-                "#15803d"
-            );
-
-            addChartPriceLine(
-                candleSeries,
-                currentOptionLevels
-                    .major_resistance,
-                "Major R",
-                "#b91c1c"
-            );
-
-            if (fitContent) {
-                niftyChartInstance
-                    .timeScale()
-                    .fitContent();
-            }
-            else {
-                // Show the most recent part of the chart by default.
-                const candleCount =
-                    (chartData.candles || []).length;
-
-                if (candleCount > 90) {
-                    niftyChartInstance
-                        .timeScale()
-                        .setVisibleLogicalRange({
-                            from:
-                                candleCount - 90,
-                            to:
-                                candleCount + 4
-                        });
-                }
-                else {
-                    niftyChartInstance
-                        .timeScale()
-                        .fitContent();
-                }
-            }
-
-            if (chartStatus) {
-                const candleTime =
-                    chartData.last_candle_time
-                    ? new Date(
-                        chartData.last_candle_time
-                    ).toLocaleString()
-                    : "--";
-
-                chartStatus.textContent =
-                    currentChartInterval
-                    + " candles • Last candle: "
-                    + candleTime
-                    + " • "
-                    + chartData.bars
-                    + " bars";
-            }
-        }
-        catch (error) {
-            if (chartStatus) {
-                chartStatus.textContent =
-                    "Chart error: "
-                    + error.message;
-            }
-        }
-    }
-
-    window.addEventListener(
-        "resize",
-        () => {
-            const chartContainer =
-                document.getElementById(
-                    "niftyChart"
-                );
-
-            if (
-                niftyChartInstance
-                && chartContainer
-            ) {
-                niftyChartInstance.applyOptions({
-                    width:
-                        chartContainer.clientWidth
-                });
-            }
-        }
-    );
-
-
-
-    const mainSignalStateKey = "niftyAiMainSignalStateV8";
-    const mainSignalHistoryKey = "niftyAiMainSignalHistoryV8";
-    let latestPredictionData = null;
-
-    function playSignalTone() {
-        try {
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContext) return;
-            const context = new AudioContext();
-            const oscillator = context.createOscillator();
-            const gain = context.createGain();
-            oscillator.connect(gain);
-            gain.connect(context.destination);
-            oscillator.frequency.value = 880;
-            gain.gain.value = 0.035;
-            oscillator.start();
-            setTimeout(() => {
-                oscillator.stop();
-                context.close();
-            }, 180);
-        }
-        catch (error) {
-            // Alert sound is optional.
-        }
-    }
-
-    function showSignalToast(title, body) {
-        const toast = document.getElementById("signalToast");
-        const titleEl = document.getElementById("signalToastTitle");
-        const bodyEl = document.getElementById("signalToastBody");
-        if (!toast || !titleEl || !bodyEl) return;
-
-        titleEl.textContent = title;
-        bodyEl.textContent = body;
-        toast.classList.add("show");
-        setTimeout(() => toast.classList.remove("show"), 6500);
-    }
-
-    function sendSignalNotification(title, body) {
-        playSignalTone();
-        showSignalToast(title, body);
-
-        if (
-            "Notification" in window
-            && Notification.permission === "granted"
-        ) {
-            try {
-                new Notification(title, { body: body });
-            }
-            catch (error) {
-                // Browser notification failure must not break refresh.
-            }
-        }
-    }
-
-    function enableSignalNotifications() {
-        const button = document.getElementById("enableSignalAlertsBtn");
-        if (!("Notification" in window)) {
-            if (button) button.textContent = "Notifications Unsupported";
-            showSignalToast(
-                "NIFTY AI Alerts",
-                "This browser does not support system notifications. In-page alerts will still appear."
-            );
-            return;
-        }
-
-        Notification.requestPermission().then((permission) => {
-            if (button) {
-                button.textContent =
-                    permission === "granted"
-                        ? "Alerts Enabled"
-                        : "Alerts Blocked";
-            }
-
-            showSignalToast(
-                "NIFTY AI Alerts",
-                permission === "granted"
-                    ? "Browser alerts are enabled for WAIT → CE/PE and CE ↔ PE changes while this page is open."
-                    : "Browser permission was not granted. In-page alerts will still appear."
-            );
-        });
-    }
-
-    function readMainSignalState() {
-        try {
-            return JSON.parse(localStorage.getItem(mainSignalStateKey) || "null");
-        }
-        catch (error) {
-            return null;
-        }
-    }
-
-    function readMainSignalHistory() {
-        try {
-            return JSON.parse(localStorage.getItem(mainSignalHistoryKey) || "[]");
-        }
-        catch (error) {
-            return [];
-        }
-    }
-
-    function saveMainSignalHistory(history) {
-        localStorage.setItem(
-            mainSignalHistoryKey,
-            JSON.stringify(history.slice(0, 30))
-        );
-    }
-
-    function renderMainSignalHistory() {
-        const container = document.getElementById("mainSignalHistory");
-        if (!container) return;
-
-        const history = readMainSignalHistory();
-        if (!history.length) {
-            container.innerHTML = '<div class="muted">No signal changes recorded yet.</div>';
-            return;
-        }
-
-        container.innerHTML = history.slice(0, 8).map((item) => {
-            const when = new Date(item.changedAt).toLocaleString();
-            const pattern = item.pattern && item.pattern !== "NO CLEAR PATTERN"
-                ? " • " + item.pattern
-                : "";
-            return (
-                '<div class="history-item">'
-                + '<span><strong>'
-                + (item.previous || "START")
-                + ' → '
-                + item.current
-                + '</strong> • NIFTY '
-                + (item.price ?? "--")
-                + pattern
-                + '</span>'
-                + '<span class="history-time">'
-                + when
-                + '</span>'
-                + '</div>'
-            );
-        }).join("");
-    }
-
-    function clearMainSignalHistory() {
-        localStorage.removeItem(mainSignalHistoryKey);
-        renderMainSignalHistory();
-    }
-
-    function signalStrengthFor(data) {
-        const setup = String(data.fno_setup || "WAIT").toUpperCase();
-        if (setup.includes("CE")) return data.bullish_probability;
-        if (setup.includes("PE")) return data.bearish_probability;
-        return data.sideways_probability;
-    }
-
-    function updateMainSignalState(data) {
-        const current = String(data.fno_setup || "WAIT").toUpperCase();
-        const now = new Date();
-        let state = readMainSignalState();
-        const candlestick = ((data.signals || {}).candlestick || {});
-        const pattern = candlestick.primary_pattern || "NO CLEAR PATTERN";
-
-        if (!state) {
-            state = {
-                current: current,
-                previous: null,
-                since: now.toISOString(),
-                changedAt: now.toISOString()
-            };
-            localStorage.setItem(mainSignalStateKey, JSON.stringify(state));
-        }
-        else if (state.current !== current) {
-            const previous = state.current;
-            const event = {
-                previous: previous,
-                current: current,
-                changedAt: now.toISOString(),
-                price: data.price,
-                confidence: data.confidence,
-                strength: signalStrengthFor(data),
-                pattern: pattern
-            };
-
-            const history = readMainSignalHistory();
-            history.unshift(event);
-            saveMainSignalHistory(history);
-
-            state = {
-                current: current,
-                previous: previous,
-                since: now.toISOString(),
-                changedAt: now.toISOString()
-            };
-            localStorage.setItem(mainSignalStateKey, JSON.stringify(state));
-
-            const importantChange =
-                (previous === "WAIT" && current !== "WAIT")
-                || (previous.includes("CE") && current.includes("PE"))
-                || (previous.includes("PE") && current.includes("CE"));
-
-            if (importantChange) {
-                const body =
-                    previous
-                    + " → "
-                    + current
-                    + " | NIFTY "
-                    + (data.price ?? "--")
-                    + " | strength "
-                    + (signalStrengthFor(data) ?? "--")
-                    + "%"
-                    + (pattern && pattern !== "NO CLEAR PATTERN" ? " | " + pattern : "");
-
-                sendSignalNotification(
-                    "NIFTY AI Signal Changed",
-                    body
-                );
-            }
-            else {
-                showSignalToast(
-                    "NIFTY AI Signal Updated",
-                    previous + " → " + current + " at " + now.toLocaleTimeString()
-                );
-            }
-        }
-
-        const timeText = new Date(state.since).toLocaleString();
-        if (current === "WAIT") {
-            setText("fnoTimestamp", "WAIT since " + timeText);
-        }
-        else if (state.previous === "WAIT") {
-            setText("fnoTimestamp", "Changed from WAIT at " + timeText);
-        }
-        else if (state.previous) {
-            setText("fnoTimestamp", "Changed from " + state.previous + " at " + timeText);
-        }
-        else {
-            setText("fnoTimestamp", current + " since " + timeText);
-        }
-
-        renderMainSignalHistory();
-        return state;
-    }
-
-    function buildChartSignalMarkers(chartData) {
-        const markers = [];
-        const history = readMainSignalHistory().slice().reverse();
-        const candleTimes = (chartData?.candles || []).map((item) => Number(item.time));
-
-        function nearestCandleTime(target) {
-            if (!candleTimes.length) return target;
-            return candleTimes.reduce((best, value) =>
-                Math.abs(value - target) < Math.abs(best - target) ? value : best
-            );
-        }
-
-        history.forEach((item) => {
-            const rawTime = Math.floor(new Date(item.changedAt).getTime() / 1000);
-            if (!Number.isFinite(rawTime)) return;
-            const unixTime = nearestCandleTime(rawTime);
-
-            const current = String(item.current || "WAIT").toUpperCase();
-            let position = "aboveBar";
-            let shape = "circle";
-            let color = "#f59e0b";
-
-            if (current.includes("CE")) {
-                position = "belowBar";
-                shape = "arrowUp";
-                color = "#22c55e";
-            }
-            else if (current.includes("PE")) {
-                position = "aboveBar";
-                shape = "arrowDown";
-                color = "#ef4444";
-            }
-
-            markers.push({
-                time: unixTime,
-                position: position,
-                shape: shape,
-                color: color,
-                text: current + (item.pattern && item.pattern !== "NO CLEAR PATTERN" ? " • " + item.pattern : "")
-            });
-        });
-
-        return markers;
-    }
-
-    function markerForCurrentPrediction(data, chartData) {
-        if (!data || !chartData || !(chartData.candles || []).length) return null;
-
-        const setup = String(data.fno_setup || "WAIT").toUpperCase();
-        const candlestick = ((data.signals || {}).candlestick || {});
-        const pattern = candlestick.primary_pattern || "NO CLEAR PATTERN";
-        const completed = candlestick.last_completed_candle;
-
-        let markerTime = completed
-            ? Math.floor(new Date(completed).getTime() / 1000)
-            : chartData.candles[chartData.candles.length - 1].time;
-
-        const chartTimes = new Set((chartData.candles || []).map((item) => Number(item.time)));
-        if (!chartTimes.has(markerTime)) {
-            markerTime = chartData.candles[chartData.candles.length - 1].time;
-        }
-
-        let position = "aboveBar";
-        let shape = "circle";
-        let color = "#f59e0b";
-        if (setup.includes("CE")) {
-            position = "belowBar";
-            shape = "arrowUp";
-            color = "#22c55e";
-        }
-        else if (setup.includes("PE")) {
-            position = "aboveBar";
-            shape = "arrowDown";
-            color = "#ef4444";
-        }
-
-        return {
-            time: markerTime,
-            position: position,
-            shape: shape,
-            color: color,
-            text: setup + (pattern && pattern !== "NO CLEAR PATTERN" ? " • " + pattern : "")
-        };
-    }
-
-    function formatNumber(value, decimals = 2) {
-        if (value === null || value === undefined || Number.isNaN(Number(value))) {
-            return "--";
-        }
-
-        return Number(value).toLocaleString(
-            "en-IN",
-            {
-                minimumFractionDigits: decimals,
-                maximumFractionDigits: decimals
-            }
-        );
-    }
-
-    function setBiasColor(element, text) {
-        element.classList.remove(
-            "positive",
-            "negative",
-            "neutral",
-            "info"
-        );
-
-        const value = String(text || "").toUpperCase();
-
-        if (
-            value.includes("BULLISH")
-            || value.includes("CE WATCH")
-        ) {
-            element.classList.add("positive");
-        }
-        else if (
-            value.includes("BEARISH")
-            || value.includes("PE WATCH")
-        ) {
-            element.classList.add("negative");
-        }
-        else if (
-            value.includes("WAIT")
-            || value.includes("SIDEWAYS")
-            || value.includes("NEUTRAL")
-        ) {
-            element.classList.add("neutral");
-        }
-        else {
-            element.classList.add("info");
-        }
-    }
-
-    function setText(id, value) {
-        const el = document.getElementById(id);
-
-        if (el) {
-            el.textContent = value ?? "--";
-        }
-    }
-
-    function setBias(id, value) {
-        const el = document.getElementById(id);
-
-        if (!el) {
-            return;
-        }
-
-        el.textContent = value ?? "--";
-        setBiasColor(el, value);
-    }
-
-    function setMarketChange(id, market) {
-        const el = document.getElementById(id);
-
-        if (!el || !market) {
-            return;
-        }
-
-        const change = market.change_percent;
-
-        if (change === null || change === undefined) {
-            el.textContent = "--";
-            return;
-        }
-
-        el.textContent =
-            formatNumber(market.price, 2)
-            + "  ("
-            + (change >= 0 ? "+" : "")
-            + formatNumber(change, 2)
-            + "%)";
-
-        el.classList.remove(
-            "positive",
-            "negative",
-            "neutral"
-        );
-
-        if (change > 0) {
-            el.classList.add("positive");
-        }
-        else if (change < 0) {
-            el.classList.add("negative");
-        }
-        else {
-            el.classList.add("neutral");
-        }
-    }
-
-    async function loadDashboard() {
-        const root = document.getElementById("dashboardRoot");
-        const errorBox = document.getElementById("errorBox");
-
-        root.classList.add("loading");
-        errorBox.style.display = "none";
-
-        try {
-            const response = await fetch(
-                "/prediction?ts=" + Date.now(),
-                {
-                    cache: "no-store"
-                }
-            );
-
-            const data = await response.json();
-
-            if (!response.ok || data.status !== "success") {
-                throw new Error(
-                    data.message
-                    || "Prediction endpoint returned an error."
-                );
-            }
-
-            const signals = data.signals || {};
-            const technical = signals.technical || {};
-            const priceAction = signals.price_action || {};
-            const candlestick = signals.candlestick || {};
-            const news = signals.news || {};
-            const vix = signals.vix || {};
-            const global = signals.global || {};
-            const globalMarkets = global.markets || {};
-            const institutional = signals.institutional_flow || {};
-            const optionChain = signals.option_chain || {};
-            const breadth = signals.market_breadth || {};
-            const futures = signals.futures || {};
-            const premarket = signals.premarket || {};
-            const regime = signals.market_regime || {};
-
-            setText(
-                "price",
-                formatNumber(data.price, 2)
-            );
-
-            setBias(
-                "prediction",
-                data.prediction
-            );
-
-            setText(
-                "confidence",
-                "Confidence: " + (data.confidence || "--")
-            );
-
-            let selectedProbability = null;
-            const predictionText = String(
-                data.prediction || ""
-            ).toUpperCase();
-
-            if (predictionText.includes("BULLISH")) {
-                selectedProbability = data.bullish_probability;
-            }
-            else if (predictionText.includes("BEARISH")) {
-                selectedProbability = data.bearish_probability;
-            }
-            else {
-                selectedProbability = data.sideways_probability;
-            }
-
-            setText(
-                "predictionAccuracy",
-                "Current signal strength: "
-                + (
-                    selectedProbability === null
-                    || selectedProbability === undefined
-                    ? "--"
-                    : selectedProbability
-                )
-                + "%"
-            );
-
-            setBias(
-                "fnoSetup",
-                data.fno_setup
-            );
-
-            setText(
-                "fnoReason",
-                data.fno_setup_reason
-                    || "Waiting for confirmation details."
-            );
-
-            latestPredictionData = data;
-            updateMainSignalState(data);
-
-            setText(
-                "combinedScore",
-                data.combined_score ?? "--"
-            );
-
-            setText(
-                "bullishProbability",
-                (data.bullish_probability ?? 0) + "%"
-            );
-
-            setText(
-                "sidewaysProbability",
-                (data.sideways_probability ?? 0) + "%"
-            );
-
-            setText(
-                "bearishProbability",
-                (data.bearish_probability ?? 0) + "%"
-            );
-
-            document.getElementById(
-                "bullishBar"
-            ).style.width =
-                (data.bullish_probability ?? 0) + "%";
-
-            document.getElementById(
-                "sidewaysBar"
-            ).style.width =
-                (data.sideways_probability ?? 0) + "%";
-
-            document.getElementById(
-                "bearishBar"
-            ).style.width =
-                (data.bearish_probability ?? 0) + "%";
-
-            setText(
-                "expiryText",
-                "Expiry: " + (
-                    optionChain.expiry
-                    || "--"
-                )
-            );
-
-            setText(
-                "immediateSupport",
-                formatNumber(
-                    optionChain.immediate_support,
-                    0
-                )
-            );
-
-            setText(
-                "immediateResistance",
-                formatNumber(
-                    optionChain.immediate_resistance,
-                    0
-                )
-            );
-
-            setText(
-                "majorSupport",
-                formatNumber(
-                    optionChain.major_support,
-                    0
-                )
-            );
-
-            setText(
-                "majorResistance",
-                formatNumber(
-                    optionChain.major_resistance,
-                    0
-                )
-            );
-
-            setText(
-                "atmStrike",
-                formatNumber(
-                    optionChain.atm_strike,
-                    0
-                )
-            );
-
-            setText(
-                "pcrOi",
-                optionChain.pcr_oi ?? "--"
-            );
-
-            setText(
-                "pcrChangeOi",
-                optionChain.pcr_change_oi ?? "--"
-            );
-
-            setText(
-                "maxPain",
-                formatNumber(
-                    optionChain.max_pain,
-                    0
-                )
-            );
-
-            setBias(
-                "optionBias",
-                optionChain.bias
-            );
-
-            setBias(
-                "technicalBias",
-                technical.bias
-            );
-
-            const priceActionDisplay =
-                (priceAction.bias || "NEUTRAL")
-                + " • 5m "
-                + (priceAction.five_minute_trend || "--")
-                + " / 15m "
-                + (priceAction.fifteen_minute_trend || "--");
-
-            setBias(
-                "priceActionBias",
-                priceActionDisplay
-            );
-
-            const candleDisplay = (
-                candlestick.primary_pattern
-                && candlestick.primary_pattern !== "NO CLEAR PATTERN"
-            )
-                ? (
-                    (candlestick.bias || "NEUTRAL")
-                    + " • "
-                    + candlestick.primary_pattern
-                )
-                : (
-                    candlestick.bias || "NEUTRAL"
-                );
-
-            setBias(
-                "candlestickBias",
-                candleDisplay
-            );
-
-            setBias(
-                "newsBias",
-                news.bias
-            );
-
-            setBias(
-                "globalBias",
-                global.bias
-            );
-
-            setBias(
-                "institutionalBias",
-                institutional.bias
-            );
-
-            setBias(
-                "optionChainBias",
-                optionChain.bias
-            );
-
-            setText(
-                "marketRegime",
-                regime.regime || "--"
-            );
-
-            setBias(
-                "breadthBias",
-                breadth.bias || "NEUTRAL"
-            );
-
-            setText(
-                "breadthCounts",
-                (breadth.advances ?? "--")
-                + " / "
-                + (breadth.declines ?? "--")
-            );
-
-            setBias(
-                "futuresPositioning",
-                futures.positioning || futures.bias || "--"
-            );
-
-            setBias(
-                "premarketBias",
-                premarket.bias || "--"
-            );
-
-            setText(
-                "atmIv",
-                optionChain.atm_iv === null || optionChain.atm_iv === undefined
-                    ? "--"
-                    : formatNumber(optionChain.atm_iv, 2) + "%"
-            );
-
-            setText(
-                "ivSkew",
-                optionChain.iv_skew === null || optionChain.iv_skew === undefined
-                    ? "--"
-                    : formatNumber(optionChain.iv_skew, 2) + " vol pts"
-            );
-
-            setBias(
-                "ivRisk",
-                optionChain.iv_risk || "UNKNOWN"
-            );
-
-            setText(
-                "dataCoverage",
-                data.data_coverage_percent === null || data.data_coverage_percent === undefined
-                    ? "--"
-                    : data.data_coverage_percent + "%"
-            );
-
-            setText(
-                "vixValue",
-                formatNumber(
-                    vix.value,
-                    2
-                )
-            );
-
-            setBias(
-                "vixRisk",
-                vix.risk
-            );
-
-            setText(
-                "rsi14",
-                formatNumber(
-                    technical.rsi_14,
-                    2
-                )
-            );
-
-            setText(
-                "ema20",
-                formatNumber(
-                    technical.ema_20,
-                    2
-                )
-            );
-
-            setText(
-                "ema50",
-                formatNumber(
-                    technical.ema_50,
-                    2
-                )
-            );
-
-            const fii = institutional.fii_fpi || {};
-            const dii = institutional.dii || {};
-
-            const fiiNet = fii.net_crore;
-            const diiNet = dii.net_crore;
-
-            setText(
-                "fiiNet",
-                fiiNet === null || fiiNet === undefined
-                    ? "--"
-                    : "₹"
-                      + formatNumber(fiiNet, 2)
-                      + " Cr"
-            );
-
-            setText(
-                "diiNet",
-                diiNet === null || diiNet === undefined
-                    ? "--"
-                    : "₹"
-                      + formatNumber(diiNet, 2)
-                      + " Cr"
-            );
-
-            setText(
-                "flowDate",
-                institutional.report_date || "--"
-            );
-
-            setMarketChange(
-                "sp500",
-                globalMarkets.sp500
-            );
-
-            setMarketChange(
-                "nasdaq",
-                globalMarkets.nasdaq
-            );
-
-            setMarketChange(
-                "nikkei",
-                globalMarkets.nikkei
-            );
-
-            setMarketChange(
-                "hangSeng",
-                globalMarkets.hang_seng
-            );
-
-            setMarketChange(
-                "crude",
-                globalMarkets.crude_oil
-            );
-
-            setMarketChange(
-                "usdInr",
-                globalMarkets.usd_inr
-            );
-
-            currentOptionLevels =
-                optionChain || {};
-
-            await loadChart(
-                currentOptionLevels,
-                false,
-                data
-            );
-
-            setText(
-                "lastUpdated",
-                "Updated: "
-                + new Date().toLocaleTimeString()
-            );
-        }
-        catch (error) {
-            errorBox.textContent =
-                "Unable to load dashboard: "
-                + error.message;
-
-            errorBox.style.display = "block";
-
-            setText(
-                "lastUpdated",
-                "Update failed"
-            );
-        }
-        finally {
-            root.classList.remove("loading");
-        }
-    }
-
-    loadDashboard();
-    renderMainSignalHistory();
-
-    // Main prediction dashboard refresh.
-    setInterval(
-        loadDashboard,
-        60000
-    );
-
-
+let chart=null,candles=null,ema20=null,ema50=null,currentInterval="5m",latestData=null,currentLevels={};
+const stateKey="niftyAiUnifiedSignalV9", historyKey="niftyAiUnifiedHistoryV9";
+function fmt(v,d=2){if(v===null||v===undefined||Number.isNaN(Number(v)))return"--";return Number(v).toLocaleString("en-IN",{minimumFractionDigits:d,maximumFractionDigits:d})}
+function money(v){return v===null||v===undefined||Number.isNaN(Number(v))?"--":"₹"+Number(v).toFixed(2)}
+function setText(id,v){const e=document.getElementById(id);if(e)e.textContent=v??"--"}
+function colorBias(id,text){const e=document.getElementById(id);if(!e)return;e.classList.remove("positive","negative","neutral","info");const t=String(text||"").toUpperCase();if(t.includes("BULLISH")||t.includes("CE"))e.classList.add("positive");else if(t.includes("BEARISH")||t.includes("PE"))e.classList.add("negative");else if(t.includes("WAIT")||t.includes("SIDEWAYS")||t.includes("NEUTRAL"))e.classList.add("neutral");else e.classList.add("info")}
+function showToast(title,body){setText("toastTitle",title);setText("toastBody",body);const t=document.getElementById("toast");t.classList.add("show");setTimeout(()=>t.classList.remove("show"),5500)}
+function tone(){try{const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;const c=new AC(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=880;g.gain.value=.035;o.start();setTimeout(()=>{o.stop();c.close()},180)}catch(e){}}
+function notify(title,body){tone();showToast(title,body);if("Notification" in window&&Notification.permission==="granted"){try{new Notification(title,{body})}catch(e){}}}
+function enableNotifications(){if(!("Notification" in window)){showToast("NIFTY AI","Browser notifications are not supported; in-page alerts still work.");return}Notification.requestPermission().then(p=>{setText("enableAlertsBtn",p==="granted"?"Alerts Enabled":"Alerts Blocked");showToast("NIFTY AI",p==="granted"?"WAIT → CE/PE and CE ↔ PE alerts enabled while this page is open.":"Notification permission not granted.")})}
+function readState(){try{return JSON.parse(localStorage.getItem(stateKey)||"null")}catch(e){return null}}
+function readHistory(){try{return JSON.parse(localStorage.getItem(historyKey)||"[]")}catch(e){return[]}}
+function saveHistory(h){localStorage.setItem(historyKey,JSON.stringify(h.slice(0,30)))}
+function clearHistory(){localStorage.removeItem(historyKey);renderHistory()}
+function renderHistory(){const box=document.getElementById("signalHistory"),h=readHistory();if(!h.length){box.innerHTML='<div class="muted">No signal changes recorded yet.</div>';return}box.innerHTML=h.slice(0,10).map(x=>'<div class="history-item"><span><strong>'+x.previous+' → '+x.current+'</strong> • NIFTY '+(x.price??'--')+(x.contract?' • '+x.contract:'')+'</span><span class="history-time">'+new Date(x.changedAt).toLocaleString()+'</span></div>').join("")}
+function updateSignalState(data){const current=String(data.trade_decision||data.fno_setup||"WAIT").toUpperCase(),now=new Date();let s=readState();if(!s){s={current,previous:null,since:now.toISOString()};localStorage.setItem(stateKey,JSON.stringify(s))}else if(s.current!==current){const previous=s.current,trade=data.suggested_trade||{};const event={previous,current,changedAt:now.toISOString(),price:data.price,contract:trade.contract||null};const h=readHistory();h.unshift(event);saveHistory(h);s={current,previous,since:now.toISOString()};localStorage.setItem(stateKey,JSON.stringify(s));const important=(previous==="WAIT"&&current!=="WAIT")||(previous.includes("CE")&&current.includes("PE"))||(previous.includes("PE")&&current.includes("CE"));if(important)notify("NIFTY AI Signal Changed",previous+" → "+current+" | NIFTY "+(data.price??"--")+(trade.contract?" | "+trade.contract:""));else showToast("NIFTY AI",previous+" → "+current)}const when=new Date(s.since).toLocaleString();if(current==="WAIT")setText("signalTimestamp","WAIT since "+when);else if(s.previous==="WAIT")setText("signalTimestamp","Changed from WAIT at "+when);else if(s.previous)setText("signalTimestamp","Changed from "+s.previous+" at "+when);else setText("signalTimestamp",current+" since "+when);renderHistory();return s}
+function nearestCandleTime(target,chartData){const arr=(chartData.candles||[]).map(x=>Number(x.time));if(!arr.length)return target;return arr.reduce((b,v)=>Math.abs(v-target)<Math.abs(b-target)?v:b)}
+function markersFor(chartData,data){const markers=[];readHistory().slice().reverse().forEach(x=>{const raw=Math.floor(new Date(x.changedAt).getTime()/1000);if(!Number.isFinite(raw))return;const t=nearestCandleTime(raw,chartData),c=String(x.current||"WAIT").toUpperCase();let position="aboveBar",shape="circle",color="#f59e0b";if(c.includes("CE")){position="belowBar";shape="arrowUp";color="#22c55e"}else if(c.includes("PE")){position="aboveBar";shape="arrowDown";color="#ef4444"}markers.push({time:t,position,shape,color,text:c})});if(data&&chartData.candles&&chartData.candles.length){const c=String(data.trade_decision||"WAIT").toUpperCase(),last=chartData.candles[chartData.candles.length-1].time;let position="aboveBar",shape="circle",color="#f59e0b";if(c.includes("CE")){position="belowBar";shape="arrowUp";color="#22c55e"}else if(c.includes("PE")){shape="arrowDown";color="#ef4444"}markers.push({time:last,position,shape,color,text:c})}return markers.sort((a,b)=>Number(a.time)-Number(b.time))}
+function destroyChart(){if(chart){chart.remove();chart=null;candles=ema20=ema50=null}}
+function priceLine(series,price,title,color){if(!series||price===null||price===undefined||Number.isNaN(Number(price)))return;series.createPriceLine({price:Number(price),color,lineWidth:1,lineStyle:2,axisLabelVisible:true,title})}
+function updateButtons(){document.querySelectorAll(".interval-btn").forEach(b=>b.classList.toggle("active",b.dataset.interval===currentInterval))}
+async function changeChartInterval(i){currentInterval=i;updateButtons();await loadChart(true)}
+async function loadChart(fit=false){const box=document.getElementById("niftyChart");try{setText("chartStatus","Loading "+currentInterval+" candles...");const r=await fetch("/chart-data?interval="+encodeURIComponent(currentInterval)+"&ts="+Date.now(),{cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Chart unavailable");destroyChart();chart=LightweightCharts.createChart(box,{width:box.clientWidth,height:500,layout:{background:{type:"solid",color:"#111827"},textColor:"#94a3b8"},grid:{vertLines:{color:"#1d2637"},horzLines:{color:"#1d2637"}},rightPriceScale:{borderColor:"#2b364d"},timeScale:{borderColor:"#2b364d",timeVisible:true,secondsVisible:false},crosshair:{mode:LightweightCharts.CrosshairMode.Normal}});candles=chart.addSeries(LightweightCharts.CandlestickSeries,{upColor:"#22c55e",downColor:"#ef4444",wickUpColor:"#22c55e",wickDownColor:"#ef4444",borderVisible:false});ema20=chart.addSeries(LightweightCharts.LineSeries,{color:"#60a5fa",lineWidth:2,priceLineVisible:false,lastValueVisible:false});ema50=chart.addSeries(LightweightCharts.LineSeries,{color:"#a78bfa",lineWidth:2,priceLineVisible:false,lastValueVisible:false});candles.setData(d.candles||[]);ema20.setData(d.ema20||[]);ema50.setData(d.ema50||[]);try{const m=markersFor(d,latestData);if(typeof LightweightCharts.createSeriesMarkers==="function")LightweightCharts.createSeriesMarkers(candles,m);else if(typeof candles.setMarkers==="function")candles.setMarkers(m)}catch(e){}priceLine(candles,currentLevels.immediate_support,"Support","#22c55e");priceLine(candles,currentLevels.immediate_resistance,"Resistance","#ef4444");priceLine(candles,currentLevels.max_pain,"Max Pain","#f59e0b");if(latestData&&latestData.prediction_target_15m)priceLine(candles,latestData.prediction_target_15m,"AI 15m Target","#60a5fa");if(fit)chart.timeScale().fitContent();else{const n=(d.candles||[]).length;if(n>90)chart.timeScale().setVisibleLogicalRange({from:n-90,to:n+4});else chart.timeScale().fitContent()}setText("chartStatus",currentInterval+" candles • Last candle: "+(d.last_candle_time?new Date(d.last_candle_time).toLocaleString():"--")+" • "+d.bars+" bars")}catch(e){setText("chartStatus","Chart error: "+e.message)}}
+window.addEventListener("resize",()=>{const b=document.getElementById("niftyChart");if(chart&&b)chart.applyOptions({width:b.clientWidth})});
+function renderTrade(data){const decision=String(data.trade_decision||"WAIT").toUpperCase(),trade=data.suggested_trade||{},card=document.getElementById("tradeCard");card.classList.remove("buy","pe");if(decision.includes("CE"))card.classList.add("buy");if(decision.includes("PE"))card.classList.add("pe");setText("tradeDecision",decision);colorBias("tradeDecision",decision);if(decision==="WAIT"||!trade.contract){setText("contractName","No option buy suggested");setText("contractMeta","The engine is waiting for stronger alignment before suggesting a contract.");setText("entryZone","--");setText("stopLoss","--");setText("target1","--");setText("target2","--");setText("optionLtp","LTP --");setText("optionIv","IV --");setText("optionDelta","Δ --");setText("selectionScore","Contract score --");setText("tradeReason",data.fno_setup_reason||"Signals are mixed.");return}setText("contractName",trade.contract);setText("contractMeta",(data.signals?.option_chain?.expiry?"Expiry "+data.signals.option_chain.expiry+" • ":"")+(trade.signal||decision));const z=trade.entry_zone||{};setText("entryZone",z.low!=null&&z.high!=null?money(z.low)+" – "+money(z.high):"--");setText("stopLoss",money(trade.stop_loss));setText("target1",money(trade.target_1));setText("target2",money(trade.target_2));setText("optionLtp","LTP "+money(trade.ltp));setText("optionIv","IV "+(trade.iv!=null?fmt(trade.iv,2)+"%":"--"));setText("optionDelta","Δ "+(trade.estimated_delta!=null?fmt(trade.estimated_delta,3):"--"));setText("selectionScore","Contract score "+(trade.selection_score_percent!=null?fmt(trade.selection_score_percent,1)+"%":"--"));setText("tradeReason",(trade.selection_reason?"Contract: "+trade.selection_reason+". ":"")+(trade.reason||data.fno_setup_reason||""))}
+async function loadDashboard(){const root=document.getElementById("dashboardRoot"),err=document.getElementById("errorBox");root.classList.add("loading");err.style.display="none";try{const r=await fetch("/prediction?include_alerts=true&ts="+Date.now(),{cache:"no-store"}),data=await r.json();if(!r.ok||data.status!=="success")throw new Error(data.message||"Prediction unavailable");latestData=data;const sig=data.signals||{},opt=sig.option_chain||{},mom=sig.momentum||{},ctx=data.market_context||{},conf=data.conflict||{};currentLevels=opt;setText("price",fmt(data.price,2));const ch=Number(mom.change_5min);setText("niftyChange","5m change: "+(Number.isFinite(ch)&&ch>=0?"+":"")+(Number.isFinite(ch)?fmt(ch,2):"--"));setText("expiryText","Expiry: "+(opt.expiry||"--"));setText("prediction",data.prediction||"--");colorBias("prediction",data.prediction);setText("confidenceChip","Confidence "+(data.confidence_percent??"--")+"% • "+(data.confidence||"--"));setText("scoreChip","Score "+(data.combined_score??"--"));setText("conflictChip","Conflict "+(conf.level||"--"));setText("predictionReason",data.fno_setup_reason||"Unified backend model is evaluating the latest signals.");setText("marketPhase","Market: "+(ctx.phase||"--"));setText("projectionLegend",data.prediction_target_15m!=null?"15m projected level: "+fmt(data.prediction_target_15m,2)+" (± model estimate)":"15m projection: no directional edge");updateSignalState(data);renderTrade(data);await loadChart(false);setText("lastUpdated","Updated: "+new Date().toLocaleTimeString())}catch(e){err.textContent="Unable to load dashboard: "+e.message;err.style.display="block";setText("lastUpdated","Update failed")}finally{root.classList.remove("loading")}}
+renderHistory();loadDashboard();setInterval(loadDashboard,60000);
 </script>
-
 </body>
 </html>
 """
 
 
 
-
-
-
 # ============================================================
-# F&O ALERT ENGINE - VERSION 7
+# F&O ALERT ENGINE - VERSION 9
 # ============================================================
 
 def _calculate_intraday_atr(data, period=14):
@@ -6356,6 +4080,294 @@ def _nearest_option_row(option_data, spot):
     return usable[0][1]
 
 
+
+def _normal_cdf(value):
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def _parse_nse_expiry(expiry):
+    if not expiry:
+        return None
+    for fmt in ("%d-%b-%Y", "%d-%b-%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(expiry), fmt)
+        except Exception:
+            pass
+    return None
+
+
+def _india_market_context(market_data=None, expiry=None):
+    """IST market phase, expiry distance and freshness gate for live trade calls."""
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+    open_dt = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+    close_dt = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    weekday = now_ist.weekday() < 5
+    market_open = weekday and open_dt <= now_ist <= close_dt
+
+    if not weekday:
+        phase = "WEEKEND"
+    elif now_ist < open_dt:
+        phase = "PRE-MARKET"
+    elif now_ist > close_dt:
+        phase = "CLOSED"
+    elif now_ist < open_dt + timedelta(minutes=15):
+        phase = "OPENING 15 MIN"
+    elif now_ist >= close_dt - timedelta(minutes=45):
+        phase = "CLOSING HOUR"
+    else:
+        phase = "REGULAR SESSION"
+
+    latest_candle = None
+    data_age_minutes = None
+    data_fresh = True
+    try:
+        if market_data is not None and not market_data.empty:
+            ts = market_data.index[-1]
+            if getattr(ts, "tzinfo", None) is None:
+                ts = pd.Timestamp(ts).tz_localize("Asia/Kolkata")
+            else:
+                ts = pd.Timestamp(ts).tz_convert("Asia/Kolkata")
+            latest_candle = ts.isoformat()
+            data_age_minutes = max(
+                0.0,
+                (pd.Timestamp(now_ist) - ts).total_seconds() / 60.0
+            )
+            if market_open:
+                # yfinance intraday bars are near-live, not exchange-grade.
+                data_fresh = data_age_minutes <= 20
+    except Exception:
+        data_fresh = not market_open
+
+    expiry_dt = _parse_nse_expiry(expiry)
+    days_to_expiry = None
+    if expiry_dt is not None:
+        days_to_expiry = (expiry_dt.date() - now_ist.date()).days
+
+    return {
+        "now_ist": now_ist.isoformat(timespec="seconds"),
+        "market_open": market_open,
+        "phase": phase,
+        "opening_phase": phase == "OPENING 15 MIN",
+        "data_fresh": data_fresh,
+        "latest_market_candle": latest_candle,
+        "data_age_minutes": round(data_age_minutes, 1) if data_age_minutes is not None else None,
+        "days_to_expiry": days_to_expiry,
+        "expiry_day": days_to_expiry == 0
+    }
+
+
+def _estimate_option_delta(side, spot, strike, iv_percent, expiry):
+    """Approximate Black-Scholes absolute delta for strike-selection ranking."""
+    try:
+        spot = float(spot)
+        strike = float(strike)
+        iv = float(iv_percent) / 100.0
+        expiry_dt = _parse_nse_expiry(expiry)
+        if spot <= 0 or strike <= 0 or iv <= 0 or expiry_dt is None:
+            return None
+
+        expiry_ist = expiry_dt.replace(hour=15, minute=30, tzinfo=ZoneInfo("Asia/Kolkata"))
+        now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+        seconds = max(900.0, (expiry_ist - now_ist).total_seconds())
+        t = seconds / (365.0 * 24.0 * 3600.0)
+        r = 0.065
+        sigma_sqrt_t = iv * math.sqrt(t)
+        if sigma_sqrt_t <= 0:
+            return None
+        d1 = (
+            math.log(spot / strike)
+            + (r + 0.5 * iv * iv) * t
+        ) / sigma_sqrt_t
+        call_delta = _normal_cdf(d1)
+        if str(side).upper() == "CE":
+            return max(0.0, min(1.0, call_delta))
+        put_delta = call_delta - 1.0
+        return max(0.0, min(1.0, abs(put_delta)))
+    except Exception:
+        return None
+
+
+def _estimate_strike_step(rows):
+    strikes = sorted({
+        float(row.get("strike"))
+        for row in rows
+        if _safe_float(row.get("strike"), None) is not None
+    })
+    diffs = [b - a for a, b in zip(strikes, strikes[1:]) if b > a]
+    if not diffs:
+        return 50.0
+    diffs.sort()
+    return diffs[len(diffs) // 2]
+
+
+def _select_suggested_option(option_data, side, spot):
+    """
+    Rank nearby strikes for a directional option BUY candidate.
+
+    This is contract-selection ranking, not a direction forecast. Direction still
+    comes from the unified model. Ranking uses distance/moneyness, OI, volume,
+    bid-ask spread when available, IV and an estimated delta target.
+    """
+    rows = option_data.get("nearby_strikes", []) or []
+    if not rows:
+        return None
+
+    side = str(side).upper()
+    expiry = option_data.get("expiry")
+    context = _india_market_context(expiry=expiry)
+    step = _estimate_strike_step(rows)
+    max_oi = max([
+        _safe_float(row.get("call_oi" if side == "CE" else "put_oi"), 0.0) or 0.0
+        for row in rows
+    ] + [1.0])
+    max_volume = max([
+        _safe_float(row.get("call_volume" if side == "CE" else "put_volume"), 0.0) or 0.0
+        for row in rows
+    ] + [0.0])
+    max_change = max([
+        abs(_safe_float(row.get("call_change_oi" if side == "CE" else "put_change_oi"), 0.0) or 0.0)
+        for row in rows
+    ] + [1.0])
+
+    # On expiry day prefer a little more delta (ATM/slightly ITM) to reduce
+    # dependence on a large underlying move while theta is accelerating.
+    target_delta = 0.62 if context.get("expiry_day") else 0.55
+    preferred_strike = spot - step * 0.5 if side == "CE" else spot + step * 0.5
+    window = max(step * 4.0, spot * 0.015)
+
+    candidates = []
+    for row in rows:
+        strike = _safe_float(row.get("strike"), None)
+        ltp = _safe_float(row.get("call_ltp" if side == "CE" else "put_ltp"), None)
+        iv = _safe_float(row.get("call_iv" if side == "CE" else "put_iv"), None)
+        oi = _safe_float(row.get("call_oi" if side == "CE" else "put_oi"), 0.0) or 0.0
+        volume = _safe_float(row.get("call_volume" if side == "CE" else "put_volume"), 0.0) or 0.0
+        change_oi = _safe_float(row.get("call_change_oi" if side == "CE" else "put_change_oi"), 0.0) or 0.0
+        bid = _safe_float(row.get("call_bid" if side == "CE" else "put_bid"), None)
+        ask = _safe_float(row.get("call_ask" if side == "CE" else "put_ask"), None)
+
+        if strike is None or ltp is None or ltp <= 0:
+            continue
+        if abs(strike - spot) > window:
+            continue
+
+        distance_score = max(0.0, 1.0 - abs(strike - preferred_strike) / window)
+        oi_score = max(0.0, min(1.0, oi / max_oi))
+        volume_score = 0.50 if max_volume <= 0 else max(0.0, min(1.0, volume / max_volume))
+        change_score = max(0.0, min(1.0, abs(change_oi) / max_change))
+
+        spread_score = 0.50
+        spread_percent = None
+        if bid is not None and ask is not None and bid > 0 and ask >= bid:
+            mid = (bid + ask) / 2.0
+            if mid > 0:
+                spread_percent = (ask - bid) / mid * 100.0
+                spread_score = max(0.0, min(1.0, 1.0 - spread_percent / 8.0))
+
+        iv_score = 0.50
+        if iv is not None and iv > 0:
+            if 9 <= iv <= 25:
+                iv_score = 1.0
+            elif iv <= 35:
+                iv_score = 0.75
+            else:
+                iv_score = 0.40
+
+        delta = _estimate_option_delta(side, spot, strike, iv, expiry) if iv else None
+        delta_score = 0.50
+        if delta is not None:
+            delta_score = max(0.0, min(1.0, 1.0 - abs(delta - target_delta) / 0.40))
+
+        # Mild ITM preference for buying when all else is equal.
+        itm = strike <= spot if side == "CE" else strike >= spot
+        moneyness_score = 1.0 if itm else 0.65
+
+        score = (
+            distance_score * 0.26
+            + oi_score * 0.14
+            + volume_score * 0.16
+            + spread_score * 0.14
+            + iv_score * 0.10
+            + delta_score * 0.14
+            + change_score * 0.03
+            + moneyness_score * 0.03
+        )
+
+        candidates.append({
+            "row": row,
+            "score": score,
+            "strike": strike,
+            "ltp": ltp,
+            "iv": iv,
+            "oi": oi,
+            "volume": volume,
+            "bid": bid,
+            "ask": ask,
+            "spread_percent": spread_percent,
+            "estimated_delta": delta,
+            "itm": itm
+        })
+
+    if not candidates:
+        return None
+
+    best = max(candidates, key=lambda item: item["score"])
+    reason_parts = [
+        "near-ATM/slightly-ITM fit",
+        "liquidity/OI ranking"
+    ]
+    if best["spread_percent"] is not None:
+        reason_parts.append("bid-ask spread checked")
+    if best["estimated_delta"] is not None:
+        reason_parts.append("delta fit")
+
+    return {
+        "row": best["row"],
+        "selection_score": round(best["score"] * 100, 1),
+        "selection_reason": ", ".join(reason_parts),
+        "estimated_delta": round(best["estimated_delta"], 3) if best["estimated_delta"] is not None else None,
+        "spread_percent": round(best["spread_percent"], 2) if best["spread_percent"] is not None else None,
+        "itm": best["itm"]
+    }
+
+
+def detect_signal_conflict(signal_scores, availability, combined_score):
+    """Detect disagreement between the main intraday layers before issuing a trade."""
+    key_names = ["technical", "price_action", "option_chain", "candlestick", "breadth", "futures"]
+    direction = 1 if combined_score > 0.05 else (-1 if combined_score < -0.05 else 0)
+    supporting = 0
+    opposing = 0
+    neutral = 0
+
+    for name in key_names:
+        if not availability.get(name, False):
+            continue
+        value = float(signal_scores.get(name, 0) or 0)
+        if direction == 0 or abs(value) < 0.10:
+            neutral += 1
+        elif value * direction >= 0.10:
+            supporting += 1
+        elif value * direction <= -0.15:
+            opposing += 1
+        else:
+            neutral += 1
+
+    if direction == 0:
+        level = "HIGH"
+    elif opposing >= 2 and supporting >= 2:
+        level = "HIGH"
+    elif opposing >= 1:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+
+    return {
+        "level": level,
+        "supporting_layers": supporting,
+        "opposing_layers": opposing,
+        "neutral_layers": neutral
+    }
+
 def _premium_levels(ltp, stop_percent):
     if ltp is None or ltp <= 0:
         return {
@@ -6401,524 +4413,269 @@ def build_fno_alert_engine(
     futures_available,
     candle_score,
     vix_risk,
-    market_regime
+    market_regime,
+    price_action_score=0.0,
+    conflict_level="LOW"
 ):
-    """
-    Build independent CE and PE decision-support alerts.
+    """Independent CE/PE signals plus ranked option-contract suggestions."""
 
-    The engine intentionally allows BOTH sides to remain WAIT.
-    It does not force a trade simply because one side has a slightly
-    better score.
-
-    BUY SIGNAL means the project's rule set has triggered. It is not a
-    guarantee of profit and it does not place an order.
-    """
-
+    generated_at = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
     neutral = {
         "status": "unavailable",
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": generated_at,
         "expiry": option_data.get("expiry"),
         "spot": option_data.get("spot"),
-        "call": {
-            "side": "CE",
-            "signal": "WAIT",
-            "reason": "Option-chain premium data unavailable."
-        },
-        "put": {
-            "side": "PE",
-            "signal": "WAIT",
-            "reason": "Option-chain premium data unavailable."
-        }
+        "call": {"side": "CE", "signal": "WAIT", "reason": "Option-chain premium data unavailable."},
+        "put": {"side": "PE", "signal": "WAIT", "reason": "Option-chain premium data unavailable."}
     }
 
     if option_data.get("status") != "success":
         return neutral
 
-    spot = _safe_float(
-        option_data.get("spot")
-    )
-
+    spot = _safe_float(option_data.get("spot"), None)
     if spot is None:
         try:
-            spot = _safe_float(
-                market_data["Close"].iloc[-1]
-            )
+            spot = _safe_float(market_data["Close"].iloc[-1], None)
         except Exception:
             spot = None
-
     if spot is None:
         return neutral
 
-    atm_row = _nearest_option_row(
-        option_data,
-        spot
-    )
-
-    if not atm_row:
+    call_pick = _select_suggested_option(option_data, "CE", spot)
+    put_pick = _select_suggested_option(option_data, "PE", spot)
+    if not call_pick and not put_pick:
         return neutral
 
-    strike = _safe_float(
-        atm_row.get("strike")
-    )
-    call_ltp = _safe_float(
-        atm_row.get("call_ltp")
-    )
-    put_ltp = _safe_float(
-        atm_row.get("put_ltp")
-    )
+    call_row = (call_pick or {}).get("row") or {}
+    put_row = (put_pick or {}).get("row") or {}
+    call_strike = _safe_float(call_row.get("strike"), None)
+    put_strike = _safe_float(put_row.get("strike"), None)
+    call_ltp = _safe_float(call_row.get("call_ltp"), None)
+    put_ltp = _safe_float(put_row.get("put_ltp"), None)
 
-    atr = _calculate_intraday_atr(
-        market_data
-    )
+    atr = _calculate_intraday_atr(market_data)
+    immediate_support = _safe_float(option_data.get("immediate_support"), None)
+    immediate_resistance = _safe_float(option_data.get("immediate_resistance"), None)
+    iv_risk = str(option_data.get("iv_risk") or "UNKNOWN").upper()
+    market_context = _india_market_context(market_data, option_data.get("expiry"))
 
-    immediate_support = _safe_float(
-        option_data.get("immediate_support")
-    )
-    immediate_resistance = _safe_float(
-        option_data.get("immediate_resistance")
-    )
-
-    iv_risk = str(
-        option_data.get("iv_risk")
-        or "UNKNOWN"
-    ).upper()
-
-    # Premium stop expands modestly in high-volatility regimes so ordinary
-    # option noise is less likely to trigger an immediate false stop.
     stop_percent = 18.0
-
     if iv_risk == "HIGH":
         stop_percent = 21.0
     elif iv_risk == "VERY HIGH":
         stop_percent = 24.0
-
     if str(market_regime).upper() == "EVENT / HIGH VOLATILITY":
         stop_percent += 2.0
-
     if str(vix_risk).upper() == "VERY HIGH":
         stop_percent += 2.0
+    if market_context.get("expiry_day"):
+        stop_percent += 2.0
+    stop_percent = min(30.0, max(15.0, stop_percent))
 
-    stop_percent = min(
-        28.0,
-        max(15.0, stop_percent)
-    )
+    call_levels = _premium_levels(call_ltp, stop_percent)
+    put_levels = _premium_levels(put_ltp, stop_percent)
 
-    call_levels = _premium_levels(
-        call_ltp,
-        stop_percent
-    )
-    put_levels = _premium_levels(
-        put_ltp,
-        stop_percent
-    )
+    atr_distance = atr * 1.5 if atr is not None else spot * 0.0035
+    fallback_call_invalidation = spot - atr_distance
+    fallback_put_invalidation = spot + atr_distance
 
-    # Underlying invalidation combines option-chain structure and intraday ATR.
-    atr_distance = (
-        atr * 1.5
-        if atr is not None
-        else spot * 0.0035
-    )
-
-    fallback_call_invalidation = (
-        spot - atr_distance
-    )
-    fallback_put_invalidation = (
-        spot + atr_distance
-    )
-
-    if (
-        immediate_support is not None
-        and immediate_support < spot
-    ):
-        call_invalidation = max(
-            immediate_support,
-            fallback_call_invalidation
-        )
+    if immediate_support is not None and immediate_support < spot:
+        call_invalidation = max(immediate_support, fallback_call_invalidation)
     else:
         call_invalidation = fallback_call_invalidation
 
-    if (
-        immediate_resistance is not None
-        and immediate_resistance > spot
-    ):
-        put_invalidation = min(
-            immediate_resistance,
-            fallback_put_invalidation
-        )
+    if immediate_resistance is not None and immediate_resistance > spot:
+        put_invalidation = min(immediate_resistance, fallback_put_invalidation)
     else:
         put_invalidation = fallback_put_invalidation
 
-    coverage_percent = (
-        float(data_coverage) * 100.0
-        if data_coverage <= 1.0
-        else float(data_coverage)
+    coverage_percent = float(data_coverage) * 100.0 if data_coverage <= 1.0 else float(data_coverage)
+    minimum_coverage = 72.0
+
+    critical_live_ok = (
+        market_context.get("market_open")
+        and market_context.get("data_fresh")
+        and coverage_percent >= minimum_coverage
+        and str(conflict_level).upper() != "HIGH"
     )
 
-    # --------------------------------------------------------
-    # CE confirmations
-    # --------------------------------------------------------
     call_confirmations = []
     call_warnings = []
-
-    if combined_score >= 0.35:
-        call_confirmations.append(
-            "Combined model score is bullish."
-        )
-    else:
-        call_warnings.append(
-            "Combined model score is below the CE buy threshold."
-        )
-
-    if bullish_probability >= 50:
-        call_confirmations.append(
-            "Bullish scenario probability is at least 50%."
-        )
-    else:
-        call_warnings.append(
-            "Bullish probability is below 50%."
-        )
-
-    if option_score >= 0.12:
-        call_confirmations.append(
-            "Option-chain positioning confirms bullish direction."
-        )
-    else:
-        call_warnings.append(
-            "Option chain is not sufficiently bullish."
-        )
-
-    if not breadth_available:
-        call_warnings.append(
-            "Market breadth is unavailable."
-        )
-    elif breadth_score >= 0:
-        call_confirmations.append(
-            "NIFTY breadth is not opposing the CE signal."
-        )
-    else:
-        call_warnings.append(
-            "Market breadth is opposing the CE signal."
-        )
-
-    if not futures_available:
-        call_warnings.append(
-            "Futures OI confirmation is unavailable."
-        )
-    elif futures_score >= 0:
-        call_confirmations.append(
-            "Futures positioning is not opposing the CE signal."
-        )
-    else:
-        call_warnings.append(
-            "Futures positioning is opposing the CE signal."
-        )
-
-    if candle_score > -0.35:
-        call_confirmations.append(
-            "Candlestick structure is not strongly bearish."
-        )
-    else:
-        call_warnings.append(
-            "Candlestick structure strongly opposes CE."
-        )
-
-    # --------------------------------------------------------
-    # PE confirmations
-    # --------------------------------------------------------
     put_confirmations = []
     put_warnings = []
 
+    if combined_score >= 0.35:
+        call_confirmations.append("Unified model score is bullish.")
+    else:
+        call_warnings.append("Unified score is below the CE buy threshold.")
+    if bullish_probability >= 50:
+        call_confirmations.append("Bullish probability is at least 50%.")
+    else:
+        call_warnings.append("Bullish probability is below 50%.")
+    if option_score >= 0.12:
+        call_confirmations.append("Option chain confirms bullish direction.")
+    else:
+        call_warnings.append("Option chain is not sufficiently bullish.")
+    if price_action_score >= 0.12:
+        call_confirmations.append("5m/15m/30m price action confirms bullish direction.")
+    elif price_action_score < -0.15:
+        call_warnings.append("Price action opposes CE.")
+    if breadth_available and breadth_score < -0.10:
+        call_warnings.append("Market breadth opposes CE.")
+    if futures_available and futures_score < -0.10:
+        call_warnings.append("Futures positioning opposes CE.")
+    if candle_score <= -0.35:
+        call_warnings.append("Completed candle structure strongly opposes CE.")
+
     if combined_score <= -0.35:
-        put_confirmations.append(
-            "Combined model score is bearish."
-        )
+        put_confirmations.append("Unified model score is bearish.")
     else:
-        put_warnings.append(
-            "Combined model score is above the PE buy threshold."
-        )
-
+        put_warnings.append("Unified score is above the PE buy threshold.")
     if bearish_probability >= 50:
-        put_confirmations.append(
-            "Bearish scenario probability is at least 50%."
-        )
+        put_confirmations.append("Bearish probability is at least 50%.")
     else:
-        put_warnings.append(
-            "Bearish probability is below 50%."
-        )
-
+        put_warnings.append("Bearish probability is below 50%.")
     if option_score <= -0.12:
-        put_confirmations.append(
-            "Option-chain positioning confirms bearish direction."
-        )
+        put_confirmations.append("Option chain confirms bearish direction.")
     else:
-        put_warnings.append(
-            "Option chain is not sufficiently bearish."
-        )
+        put_warnings.append("Option chain is not sufficiently bearish.")
+    if price_action_score <= -0.12:
+        put_confirmations.append("5m/15m/30m price action confirms bearish direction.")
+    elif price_action_score > 0.15:
+        put_warnings.append("Price action opposes PE.")
+    if breadth_available and breadth_score > 0.10:
+        put_warnings.append("Market breadth opposes PE.")
+    if futures_available and futures_score > 0.10:
+        put_warnings.append("Futures positioning opposes PE.")
+    if candle_score >= 0.35:
+        put_warnings.append("Completed candle structure strongly opposes PE.")
 
-    if not breadth_available:
-        put_warnings.append(
-            "Market breadth is unavailable."
-        )
-    elif breadth_score <= 0:
-        put_confirmations.append(
-            "NIFTY breadth is not opposing the PE signal."
-        )
-    else:
-        put_warnings.append(
-            "Market breadth is opposing the PE signal."
-        )
-
-    if not futures_available:
-        put_warnings.append(
-            "Futures OI confirmation is unavailable."
-        )
-    elif futures_score <= 0:
-        put_confirmations.append(
-            "Futures positioning is not opposing the PE signal."
-        )
-    else:
-        put_warnings.append(
-            "Futures positioning is opposing the PE signal."
-        )
-
-    if candle_score < 0.35:
-        put_confirmations.append(
-            "Candlestick structure is not strongly bullish."
-        )
-    else:
-        put_warnings.append(
-            "Candlestick structure strongly opposes PE."
-        )
-
-    # --------------------------------------------------------
-    # Independent signal states
-    # --------------------------------------------------------
-    minimum_coverage = 72.0
+    if not market_context.get("market_open"):
+        call_warnings.append("Indian cash market is closed; no live BUY signal is issued.")
+        put_warnings.append("Indian cash market is closed; no live BUY signal is issued.")
+    elif not market_context.get("data_fresh"):
+        call_warnings.append("Latest NIFTY candle is stale; live BUY is blocked.")
+        put_warnings.append("Latest NIFTY candle is stale; live BUY is blocked.")
+    if str(conflict_level).upper() == "HIGH":
+        call_warnings.append("Major model layers conflict; trade is blocked.")
+        put_warnings.append("Major model layers conflict; trade is blocked.")
 
     call_buy = (
-        coverage_percent >= minimum_coverage
+        critical_live_ok
         and combined_score >= 0.35
         and bullish_probability >= 50
         and option_score >= 0.12
+        and price_action_score >= -0.05
         and candle_score > -0.35
-        and (
-            not breadth_available
-            or breadth_score >= -0.10
-        )
-        and (
-            not futures_available
-            or futures_score >= -0.10
-        )
-        and call_ltp is not None
-        and call_ltp > 0
+        and (not breadth_available or breadth_score >= -0.10)
+        and (not futures_available or futures_score >= -0.10)
+        and call_ltp is not None and call_ltp > 0
     )
-
     put_buy = (
-        coverage_percent >= minimum_coverage
+        critical_live_ok
         and combined_score <= -0.35
         and bearish_probability >= 50
         and option_score <= -0.12
+        and price_action_score <= 0.05
         and candle_score < 0.35
-        and (
-            not breadth_available
-            or breadth_score <= 0.10
-        )
-        and (
-            not futures_available
-            or futures_score <= 0.10
-        )
-        and put_ltp is not None
-        and put_ltp > 0
+        and (not breadth_available or breadth_score <= 0.10)
+        and (not futures_available or futures_score <= 0.10)
+        and put_ltp is not None and put_ltp > 0
     )
 
     call_watch = (
-        not call_buy
+        market_context.get("market_open")
+        and not call_buy
+        and str(conflict_level).upper() != "HIGH"
         and combined_score >= 0.18
         and bullish_probability >= 43
-        and call_ltp is not None
-        and call_ltp > 0
+        and call_ltp is not None and call_ltp > 0
     )
-
     put_watch = (
-        not put_buy
+        market_context.get("market_open")
+        and not put_buy
+        and str(conflict_level).upper() != "HIGH"
         and combined_score <= -0.18
         and bearish_probability >= 43
-        and put_ltp is not None
-        and put_ltp > 0
+        and put_ltp is not None and put_ltp > 0
     )
 
-    call_signal = (
-        "BUY SIGNAL"
-        if call_buy
-        else (
-            "WATCH"
-            if call_watch
-            else "WAIT"
-        )
-    )
+    call_signal = "BUY SIGNAL" if call_buy else ("WATCH" if call_watch else "WAIT")
+    put_signal = "BUY SIGNAL" if put_buy else ("WATCH" if put_watch else "WAIT")
 
-    put_signal = (
-        "BUY SIGNAL"
-        if put_buy
-        else (
-            "WATCH"
-            if put_watch
-            else "WAIT"
-        )
-    )
-
-    # Do not allow both sides to be BUY SIGNAL at the same time.
-    # In an ambiguous conflict, the weaker side is downgraded to WATCH.
     if call_signal == "BUY SIGNAL" and put_signal == "BUY SIGNAL":
         if bullish_probability > bearish_probability:
             put_signal = "WATCH"
-            put_warnings.append(
-                "Downgraded because the CE setup has stronger model probability."
-            )
         elif bearish_probability > bullish_probability:
             call_signal = "WATCH"
-            call_warnings.append(
-                "Downgraded because the PE setup has stronger model probability."
-            )
         else:
-            call_signal = "WATCH"
-            put_signal = "WATCH"
-            call_warnings.append(
-                "Both sides conflicted; no forced trade."
-            )
-            put_warnings.append(
-                "Both sides conflicted; no forced trade."
-            )
+            call_signal = put_signal = "WATCH"
 
-    call_strength = max(
-        0,
-        min(
-            100,
-            round(
-                bullish_probability * 0.65
-                + max(0.0, combined_score) * 20
-                + max(0.0, option_score) * 15
-            )
-        )
-    )
+    call_strength = max(0, min(100, round(
+        bullish_probability * 0.60
+        + max(0.0, combined_score) * 18
+        + max(0.0, option_score) * 12
+        + max(0.0, price_action_score) * 10
+    )))
+    put_strength = max(0, min(100, round(
+        bearish_probability * 0.60
+        + max(0.0, -combined_score) * 18
+        + max(0.0, -option_score) * 12
+        + max(0.0, -price_action_score) * 10
+    )))
 
-    put_strength = max(
-        0,
-        min(
-            100,
-            round(
-                bearish_probability * 0.65
-                + max(0.0, -combined_score) * 20
-                + max(0.0, -option_score) * 15
-            )
-        )
-    )
-
-    call_exit_rules = [
-        "Exit if premium reaches the generated stop-loss.",
-        (
-            "Exit if NIFTY falls below "
-            + str(round(call_invalidation, 2))
-            + "."
-        ),
-        "Exit/avoid CE if the combined model reverses to bearish.",
-        "Target 1 can be used for partial profit; Target 2 is the extended objective."
-    ]
-
-    put_exit_rules = [
-        "Exit if premium reaches the generated stop-loss.",
-        (
-            "Exit if NIFTY rises above "
-            + str(round(put_invalidation, 2))
-            + "."
-        ),
-        "Exit/avoid PE if the combined model reverses to bullish.",
-        "Target 1 can be used for partial profit; Target 2 is the extended objective."
-    ]
+    def contract_payload(side, signal, pick, row, strike, ltp, levels, invalidation, strength, confirmations, warnings):
+        return {
+            "side": side,
+            "signal": signal,
+            "contract": (
+                f"NIFTY {int(round(strike))} {side}" if strike is not None else None
+            ),
+            "strike": round(strike, 2) if strike is not None else None,
+            "ltp": round(ltp, 2) if ltp is not None else None,
+            "entry_zone": {"low": levels["entry_low"], "high": levels["entry_high"]},
+            "stop_loss": levels["stop_loss"],
+            "target_1": levels["target_1"],
+            "target_2": levels["target_2"],
+            "nifty_invalidation": round(invalidation, 2),
+            "signal_strength_percent": strength,
+            "selection_score_percent": (pick or {}).get("selection_score"),
+            "selection_reason": (pick or {}).get("selection_reason"),
+            "estimated_delta": (pick or {}).get("estimated_delta"),
+            "spread_percent": (pick or {}).get("spread_percent"),
+            "open_interest": _safe_float(row.get("call_oi" if side == "CE" else "put_oi"), None),
+            "change_in_oi": _safe_float(row.get("call_change_oi" if side == "CE" else "put_change_oi"), None),
+            "volume": _safe_float(row.get("call_volume" if side == "CE" else "put_volume"), None),
+            "iv": _safe_float(row.get("call_iv" if side == "CE" else "put_iv"), None),
+            "bid": _safe_float(row.get("call_bid" if side == "CE" else "put_bid"), None),
+            "ask": _safe_float(row.get("call_ask" if side == "CE" else "put_ask"), None),
+            "confirmations": confirmations,
+            "warnings": warnings,
+            "reason": " ".join((confirmations + warnings)[:4])
+        }
 
     return {
         "status": "success",
-        "generated_at": datetime.now().isoformat(
-            timespec="seconds"
-        ),
+        "generated_at": generated_at,
         "expiry": option_data.get("expiry"),
         "spot": round(spot, 2),
-        "data_coverage_percent": round(
-            coverage_percent,
-            1
-        ),
+        "data_coverage_percent": round(coverage_percent, 1),
         "market_regime": market_regime,
-        "atr_5m": (
-            round(atr, 2)
-            if atr is not None
-            else None
+        "market_context": market_context,
+        "conflict_level": conflict_level,
+        "atr_5m": round(atr, 2) if atr is not None else None,
+        "premium_stop_percent": round(stop_percent, 1),
+        "call": contract_payload(
+            "CE", call_signal, call_pick, call_row, call_strike, call_ltp,
+            call_levels, call_invalidation, call_strength, call_confirmations, call_warnings
         ),
-        "premium_stop_percent": round(
-            stop_percent,
-            1
+        "put": contract_payload(
+            "PE", put_signal, put_pick, put_row, put_strike, put_ltp,
+            put_levels, put_invalidation, put_strength, put_confirmations, put_warnings
         ),
-        "call": {
-            "side": "CE",
-            "signal": call_signal,
-            "strike": (
-                round(strike, 2)
-                if strike is not None
-                else None
-            ),
-            "ltp": (
-                round(call_ltp, 2)
-                if call_ltp is not None
-                else None
-            ),
-            "entry_zone": {
-                "low": call_levels["entry_low"],
-                "high": call_levels["entry_high"]
-            },
-            "stop_loss": call_levels["stop_loss"],
-            "target_1": call_levels["target_1"],
-            "target_2": call_levels["target_2"],
-            "nifty_invalidation": round(
-                call_invalidation,
-                2
-            ),
-            "signal_strength_percent": call_strength,
-            "confirmations": call_confirmations,
-            "warnings": call_warnings,
-            "exit_rules": call_exit_rules
-        },
-        "put": {
-            "side": "PE",
-            "signal": put_signal,
-            "strike": (
-                round(strike, 2)
-                if strike is not None
-                else None
-            ),
-            "ltp": (
-                round(put_ltp, 2)
-                if put_ltp is not None
-                else None
-            ),
-            "entry_zone": {
-                "low": put_levels["entry_low"],
-                "high": put_levels["entry_high"]
-            },
-            "stop_loss": put_levels["stop_loss"],
-            "target_1": put_levels["target_1"],
-            "target_2": put_levels["target_2"],
-            "nifty_invalidation": round(
-                put_invalidation,
-                2
-            ),
-            "signal_strength_percent": put_strength,
-            "confirmations": put_confirmations,
-            "warnings": put_warnings,
-            "exit_rules": put_exit_rules
-        },
         "note": (
-            "BUY SIGNAL means the project rule set triggered. "
-            "The engine does not place orders. CE and PE are evaluated "
-            "independently and both can remain WAIT."
+            "Direction comes from the unified model. Suggested strikes are ranked from nearby "
+            "contracts using moneyness, OI, volume, spread when available, IV and estimated delta."
         )
     }
 
@@ -7127,6 +4884,13 @@ def prediction(include_alerts: bool = False):
             availability=availability
         )
 
+        conflict_data = detect_signal_conflict(
+            signal_scores=signal_scores,
+            availability=availability,
+            combined_score=combined_score
+        )
+        market_context = _india_market_context(market_data, option_data.get("expiry"))
+
         # -----------------------------
         # 15. PROBABILITY MODEL
         # -----------------------------
@@ -7168,7 +4932,12 @@ def prediction(include_alerts: bool = False):
         elif consensus_count <= 1 and direction_strength >= 0.20:
             sideways_probability += 5
 
-        sideways_probability = max(12, min(60, sideways_probability))
+        if conflict_data["level"] == "HIGH":
+            sideways_probability += 8
+        elif conflict_data["level"] == "MEDIUM":
+            sideways_probability += 3
+
+        sideways_probability = max(12, min(65, sideways_probability))
         directional_probability = 100 - sideways_probability
         bullish_probability = directional_probability * (0.5 + combined_score / 2)
         bearish_probability = directional_probability - bullish_probability
@@ -7212,6 +4981,11 @@ def prediction(include_alerts: bool = False):
         elif data_coverage < 0.85 and confidence == "HIGH":
             confidence = "MEDIUM"
 
+        if conflict_data["level"] == "HIGH":
+            confidence = "LOW"
+        elif conflict_data["level"] == "MEDIUM" and confidence == "HIGH":
+            confidence = "MEDIUM"
+
         # -----------------------------
         # 18. CONSERVATIVE F&O WATCH
         # -----------------------------
@@ -7229,7 +5003,10 @@ def prediction(include_alerts: bool = False):
         )
 
         if (
-            option_available
+            market_context.get("market_open")
+            and market_context.get("data_fresh")
+            and conflict_data["level"] != "HIGH"
+            and option_available
             and combined_score >= 0.25
             and option_score >= 0.12
             and candle_score > -0.35
@@ -7240,7 +5017,10 @@ def prediction(include_alerts: bool = False):
         ):
             fno_setup = "CE WATCH"
         elif (
-            option_available
+            market_context.get("market_open")
+            and market_context.get("data_fresh")
+            and conflict_data["level"] != "HIGH"
+            and option_available
             and combined_score <= -0.25
             and option_score <= -0.12
             and candle_score < 0.35
@@ -7264,6 +5044,12 @@ def prediction(include_alerts: bool = False):
             if candle_data.get("primary_pattern") not in (None, "NO CLEAR PATTERN"):
                 setup_reasons.append("Latest completed candle: " + str(candle_data.get("primary_pattern")) + ".")
         else:
+            if not market_context.get("market_open"):
+                setup_reasons.append("Indian cash market is closed; live CE/PE calls are paused.")
+            elif not market_context.get("data_fresh"):
+                setup_reasons.append("Latest NIFTY candle is stale; waiting for fresh market data.")
+            if conflict_data["level"] == "HIGH":
+                setup_reasons.append("Major prediction layers are in conflict.")
             if abs(combined_score) < 0.25:
                 setup_reasons.append("Directional score has not reached ±0.25.")
             if not option_available:
@@ -7306,19 +5092,65 @@ def prediction(include_alerts: bool = False):
                 futures_available=futures_available,
                 candle_score=candle_score,
                 vix_risk=vix_risk,
-                market_regime=regime_data["regime"]
+                market_regime=regime_data["regime"],
+                price_action_score=price_action_score,
+                conflict_level=conflict_data["level"]
             )
+
+        # Unified trade decision and one suggested contract for the dashboard.
+        trade_decision = fno_setup
+        suggested_trade = None
+        if fno_alerts and fno_alerts.get("status") == "success":
+            call_alert = fno_alerts.get("call") or {}
+            put_alert = fno_alerts.get("put") or {}
+            if call_alert.get("signal") == "BUY SIGNAL":
+                trade_decision = "CE BUY"
+                suggested_trade = call_alert
+            elif put_alert.get("signal") == "BUY SIGNAL":
+                trade_decision = "PE BUY"
+                suggested_trade = put_alert
+            elif fno_setup == "CE WATCH":
+                trade_decision = "CE WATCH"
+                suggested_trade = call_alert
+            elif fno_setup == "PE WATCH":
+                trade_decision = "PE WATCH"
+                suggested_trade = put_alert
+            else:
+                trade_decision = "WAIT"
+
+        selected_probability = (
+            bullish_probability if "CE" in trade_decision or "BULLISH" in prediction_label
+            else bearish_probability if "PE" in trade_decision or "BEARISH" in prediction_label
+            else sideways_probability
+        )
+
+        atr_for_projection = _calculate_intraday_atr(market_data)
+        prediction_target_15m = None
+        expected_move_points = None
+        if atr_for_projection is not None and abs(combined_score) >= 0.20:
+            base_range_15m = atr_for_projection * math.sqrt(3.0)
+            confidence_factor = max(0.55, min(1.10, 0.55 + abs(combined_score)))
+            expected_move_points = base_range_15m * confidence_factor
+            direction = 1 if combined_score > 0 else -1
+            prediction_target_15m = latest_close + direction * expected_move_points
 
         return {
             "status": "success",
-            "model_version": "8.0",
+            "model_version": "9.0",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
             "confidence": confidence,
             "fno_setup": fno_setup,
+            "trade_decision": trade_decision,
+            "suggested_trade": suggested_trade,
             "fno_setup_reason": fno_setup_reason,
-            "signal_generated_at": datetime.now().isoformat(timespec="seconds"),
+            "signal_generated_at": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds"),
+            "confidence_percent": selected_probability,
+            "conflict": conflict_data,
+            "market_context": market_context,
+            "expected_15m_move_points": round(expected_move_points, 2) if expected_move_points is not None else None,
+            "prediction_target_15m": round(prediction_target_15m, 2) if prediction_target_15m is not None else None,
             "fno_alerts": fno_alerts,
             "bullish_probability": bullish_probability,
             "sideways_probability": sideways_probability,
@@ -7407,11 +5239,14 @@ def prediction(include_alerts: bool = False):
                     "score": round(price_action_score, 3),
                     "five_minute_trend": price_action_data.get("five_minute_trend"),
                     "fifteen_minute_trend": price_action_data.get("fifteen_minute_trend"),
+                    "thirty_minute_trend": price_action_data.get("thirty_minute_trend"),
                     "vwap": price_action_data.get("vwap"),
                     "vwap_position": price_action_data.get("vwap_position"),
                     "adx_14": price_action_data.get("adx_14"),
                     "di_direction": price_action_data.get("di_direction"),
                     "breakout_state": price_action_data.get("breakout_state"),
+                    "relative_volume": price_action_data.get("relative_volume"),
+                    "volume_confirmation": price_action_data.get("volume_confirmation"),
                     "last_completed_candle": price_action_data.get("last_completed_candle"),
                     "message": price_action_data.get("message")
                 },
@@ -7468,7 +5303,7 @@ def prediction(include_alerts: bool = False):
                 "market_regime": regime_data
             },
             "note": (
-                "Version 8 dynamically blends technicals, completed-candle price action, candlesticks, news, "
+                "Version 9 dynamically blends technicals, 5m/15m/30m completed-candle price action, candlesticks, news, "
                 "global cues, FII/DII, options with IV skew, NIFTY breadth, "
                 "futures positioning, momentum and pre-market/opening-gap context. "
                 "It can also generate independent CE/PE watch, buy, stop-loss, target "
@@ -7510,6 +5345,11 @@ def fno_alerts():
         "price": result.get("price"),
         "prediction": result.get("prediction"),
         "confidence": result.get("confidence"),
+        "confidence_percent": result.get("confidence_percent"),
+        "trade_decision": result.get("trade_decision"),
+        "suggested_trade": result.get("suggested_trade"),
+        "conflict": result.get("conflict"),
+        "market_context": result.get("market_context"),
         "combined_score": result.get("combined_score"),
         "data_coverage_percent": result.get("data_coverage_percent"),
         "option_chain": (
