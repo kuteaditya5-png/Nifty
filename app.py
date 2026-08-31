@@ -17,7 +17,7 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 app = FastAPI(
     title="NIFTY AI",
     description="AI powered NIFTY 50 market analysis",
-    version="9.0"
+    version="9.1"
 )
 
 
@@ -34,7 +34,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "9.0",
+        "version": "9.1",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -3925,7 +3925,7 @@ button.secondary{background:#172033;border:1px solid #334155;color:#e2e8f0}.stat
 .prediction-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.chip{padding:6px 9px;border-radius:999px;background:#0f172a;border:1px solid #26334d;color:#cbd5e1;font-size:11px;font-weight:700}.reason{margin-top:11px;color:#cbd5e1;font-size:12px;line-height:1.5}.signal-time{margin-top:9px;color:#60a5fa;font-size:12px;font-weight:800}
 .trade-card{position:relative;overflow:hidden}.trade-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#64748b}.trade-card.buy:before{background:#22c55e}.trade-card.pe:before{background:#ef4444}.trade-status{font-size:25px;font-weight:900}.contract{font-size:18px;font-weight:850;margin-top:8px}.trade-levels{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}.level{padding:10px;border:1px solid #25304a;background:#0d1526;border-radius:10px}.level .label{font-size:9px;margin-bottom:4px}.level strong{font-size:14px}.trade-extra{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:#94a3b8}
 .chart-card{padding:0;overflow:hidden;margin-bottom:14px}.chart-header{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;padding:17px 18px 9px}.section-title{font-size:18px;font-weight:900}.chart-status{color:#94a3b8;font-size:12px;margin-top:4px}.chart-controls{display:flex;gap:7px}.interval-btn{padding:7px 11px;background:#172033;border:1px solid #26334d;color:#9ca3af;font-size:11px}.interval-btn.active{background:#2563eb;border-color:#2563eb;color:white}.chart-legend{display:flex;gap:14px;flex-wrap:wrap;padding:0 18px 10px;color:#94a3b8;font-size:11px}#niftyChart{width:100%;height:500px}.chart-message{padding:10px 18px 15px;color:#64748b;font-size:11px;line-height:1.4}
-.history-card{margin-bottom:14px}.history-head{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.history-list{display:grid;gap:8px;margin-top:12px}.history-item{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;border-radius:9px;background:#0d1526;border:1px solid #25304a;font-size:12px}.history-time{color:#64748b;white-space:nowrap}.footer{color:#64748b;font-size:11px;line-height:1.5;margin-top:10px}.error{display:none;padding:12px;border-radius:10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);color:#fecaca;margin-bottom:12px}.loading{opacity:.7}.toast{position:fixed;right:18px;bottom:18px;z-index:2500;width:min(390px,calc(100vw - 36px));padding:14px 16px;border-radius:14px;background:#111827;border:1px solid #334155;box-shadow:0 18px 48px rgba(0,0,0,.38);opacity:0;transform:translateY(20px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:translateY(0)}.toast-title{font-weight:900;margin-bottom:5px}
+.history-card{margin-bottom:14px}.history-head{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.history-list{display:grid;gap:8px;margin-top:12px}.history-item{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;border-radius:9px;background:#0d1526;border:1px solid #25304a;font-size:12px}.history-time{color:#64748b;white-space:nowrap}.footer{color:#64748b;font-size:11px;line-height:1.5;margin-top:10px}.option-card{margin-bottom:14px}.option-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px}.option-summary{display:flex;gap:8px;flex-wrap:wrap}.option-chip{padding:7px 10px;border-radius:999px;background:#0f172a;border:1px solid #26334d;color:#cbd5e1;font-size:11px;font-weight:800}.table-wrap{width:100%;overflow-x:auto;border:1px solid #25304a;border-radius:12px}.option-table{width:100%;border-collapse:collapse;min-width:900px;font-size:12px}.option-table th,.option-table td{padding:10px 9px;text-align:right;border-bottom:1px solid #1f2937;white-space:nowrap}.option-table th{background:#0d1526;color:#94a3b8;font-size:10px;text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0}.option-table th.strike,.option-table td.strike{text-align:center;font-weight:900}.option-table tr:last-child td{border-bottom:0}.option-table tr.atm-row{background:rgba(37,99,235,.10)}.ce-head{color:#22c55e!important}.pe-head{color:#ef4444!important}.option-empty{padding:18px;color:#94a3b8;text-align:center}.error{display:none;padding:12px;border-radius:10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);color:#fecaca;margin-bottom:12px}.loading{opacity:.7}.toast{position:fixed;right:18px;bottom:18px;z-index:2500;width:min(390px,calc(100vw - 36px));padding:14px 16px;border-radius:14px;background:#111827;border:1px solid #334155;box-shadow:0 18px 48px rgba(0,0,0,.38);opacity:0;transform:translateY(20px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:translateY(0)}.toast-title{font-weight:900;margin-bottom:5px}
 @media(max-width:1000px){.hero{grid-template-columns:1fr 1fr}.trade-card{grid-column:1/-1}}@media(max-width:700px){.hero{grid-template-columns:1fr}.trade-card{grid-column:auto}.trade-levels{grid-template-columns:repeat(2,1fr)}#niftyChart{height:430px}.value{font-size:26px}.container{width:94%}}
 </style>
 </head>
@@ -3979,12 +3979,45 @@ button.secondary{background:#172033;border:1px solid #334155;color:#e2e8f0}.stat
     <div class="chart-message">The chart uses near-live yfinance candles. Prediction markers are decision-support signals, not exchange orders or guaranteed forecasts.</div>
   </div>
 
-  <div class="card history-card">
-    <div class="history-head"><div><div class="section-title">Recent Prediction Changes</div><div class="muted small">Stored in this browser with the exact time the unified CE/PE/WAIT state changed.</div></div><button class="secondary" onclick="clearHistory()">Clear History</button></div>
-    <div class="history-list" id="signalHistory"><div class="muted">No signal changes recorded yet.</div></div>
+  <div class="card option-card">
+    <div class="option-head">
+      <div>
+        <div class="section-title">NIFTY Option Chain</div>
+        <div class="muted small">Only nearby strikes are shown. The full option-chain logic continues to run in the prediction engine.</div>
+      </div>
+      <div class="option-summary">
+        <span class="option-chip" id="ocExpiry">Expiry --</span>
+        <span class="option-chip" id="ocPcr">PCR --</span>
+        <span class="option-chip" id="ocMaxPain">Max Pain --</span>
+        <span class="option-chip" id="ocIv">ATM IV --</span>
+        <span class="option-chip" id="ocLevels">S/R --</span>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="option-table">
+        <thead>
+          <tr>
+            <th class="ce-head">CE OI</th>
+            <th class="ce-head">CE ΔOI</th>
+            <th class="ce-head">CE IV</th>
+            <th class="ce-head">CE LTP</th>
+            <th class="strike">Strike</th>
+            <th class="pe-head">PE LTP</th>
+            <th class="pe-head">PE IV</th>
+            <th class="pe-head">PE ΔOI</th>
+            <th class="pe-head">PE OI</th>
+          </tr>
+        </thead>
+        <tbody id="optionChainBody">
+          <tr><td colspan="9" class="option-empty">Loading option chain...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
-  <div class="footer">All detailed inputs — technicals, 5m/15m/30m price action, candlestick patterns, option chain/OI/IV, futures, breadth, FII/DII, VIX, global cues and news — continue to run in the backend. BUY is shown only when the stricter live rule set triggers; WATCH is a setup to monitor, not an instruction to enter.</div>
+  <div id="signalHistory" style="display:none"></div>
+
+  <div class="footer">Only the unified prediction, suggested option, prediction chart and nearby option chain are shown. All other detailed inputs — technicals, 5m/15m/30m price action, candlestick patterns, futures, breadth, FII/DII, VIX, global cues and news — continue to run in the backend. BUY is shown only when the stricter live rule set triggers; WATCH is a setup to monitor, not an instruction to enter.</div>
 </div>
 <div class="toast" id="toast"><div class="toast-title" id="toastTitle">NIFTY AI</div><div class="muted" id="toastBody">--</div></div>
 <script>
@@ -4002,7 +4035,7 @@ function readState(){try{return JSON.parse(localStorage.getItem(stateKey)||"null
 function readHistory(){try{return JSON.parse(localStorage.getItem(historyKey)||"[]")}catch(e){return[]}}
 function saveHistory(h){localStorage.setItem(historyKey,JSON.stringify(h.slice(0,30)))}
 function clearHistory(){localStorage.removeItem(historyKey);renderHistory()}
-function renderHistory(){const box=document.getElementById("signalHistory"),h=readHistory();if(!h.length){box.innerHTML='<div class="muted">No signal changes recorded yet.</div>';return}box.innerHTML=h.slice(0,10).map(x=>'<div class="history-item"><span><strong>'+x.previous+' → '+x.current+'</strong> • NIFTY '+(x.price??'--')+(x.contract?' • '+x.contract:'')+'</span><span class="history-time">'+new Date(x.changedAt).toLocaleString()+'</span></div>').join("")}
+function renderHistory(){const box=document.getElementById("signalHistory"),h=readHistory();if(!box)return;if(!h.length){box.innerHTML='<div class="muted">No signal changes recorded yet.</div>';return}box.innerHTML=h.slice(0,10).map(x=>'<div class="history-item"><span><strong>'+x.previous+' → '+x.current+'</strong> • NIFTY '+(x.price??'--')+(x.contract?' • '+x.contract:'')+'</span><span class="history-time">'+new Date(x.changedAt).toLocaleString()+'</span></div>').join("")}
 function updateSignalState(data){const current=String(data.trade_decision||data.fno_setup||"WAIT").toUpperCase(),now=new Date();let s=readState();if(!s){s={current,previous:null,since:now.toISOString()};localStorage.setItem(stateKey,JSON.stringify(s))}else if(s.current!==current){const previous=s.current,trade=data.suggested_trade||{};const event={previous,current,changedAt:now.toISOString(),price:data.price,contract:trade.contract||null};const h=readHistory();h.unshift(event);saveHistory(h);s={current,previous,since:now.toISOString()};localStorage.setItem(stateKey,JSON.stringify(s));const important=(previous==="WAIT"&&current!=="WAIT")||(previous.includes("CE")&&current.includes("PE"))||(previous.includes("PE")&&current.includes("CE"));if(important)notify("NIFTY AI Signal Changed",previous+" → "+current+" | NIFTY "+(data.price??"--")+(trade.contract?" | "+trade.contract:""));else showToast("NIFTY AI",previous+" → "+current)}const when=new Date(s.since).toLocaleString();if(current==="WAIT")setText("signalTimestamp","WAIT since "+when);else if(s.previous==="WAIT")setText("signalTimestamp","Changed from WAIT at "+when);else if(s.previous)setText("signalTimestamp","Changed from "+s.previous+" at "+when);else setText("signalTimestamp",current+" since "+when);renderHistory();return s}
 function nearestCandleTime(target,chartData){const arr=(chartData.candles||[]).map(x=>Number(x.time));if(!arr.length)return target;return arr.reduce((b,v)=>Math.abs(v-target)<Math.abs(b-target)?v:b)}
 function markersFor(chartData,data){const markers=[];readHistory().slice().reverse().forEach(x=>{const raw=Math.floor(new Date(x.changedAt).getTime()/1000);if(!Number.isFinite(raw))return;const t=nearestCandleTime(raw,chartData),c=String(x.current||"WAIT").toUpperCase();let position="aboveBar",shape="circle",color="#f59e0b";if(c.includes("CE")){position="belowBar";shape="arrowUp";color="#22c55e"}else if(c.includes("PE")){position="aboveBar";shape="arrowDown";color="#ef4444"}markers.push({time:t,position,shape,color,text:c})});if(data&&chartData.candles&&chartData.candles.length){const c=String(data.trade_decision||"WAIT").toUpperCase(),last=chartData.candles[chartData.candles.length-1].time;let position="aboveBar",shape="circle",color="#f59e0b";if(c.includes("CE")){position="belowBar";shape="arrowUp";color="#22c55e"}else if(c.includes("PE")){shape="arrowDown";color="#ef4444"}markers.push({time:last,position,shape,color,text:c})}return markers.sort((a,b)=>Number(a.time)-Number(b.time))}
@@ -4012,8 +4045,38 @@ function updateButtons(){document.querySelectorAll(".interval-btn").forEach(b=>b
 async function changeChartInterval(i){currentInterval=i;updateButtons();await loadChart(true)}
 async function loadChart(fit=false){const box=document.getElementById("niftyChart");try{setText("chartStatus","Loading "+currentInterval+" candles...");const r=await fetch("/chart-data?interval="+encodeURIComponent(currentInterval)+"&ts="+Date.now(),{cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Chart unavailable");destroyChart();chart=LightweightCharts.createChart(box,{width:box.clientWidth,height:500,layout:{background:{type:"solid",color:"#111827"},textColor:"#94a3b8"},grid:{vertLines:{color:"#1d2637"},horzLines:{color:"#1d2637"}},rightPriceScale:{borderColor:"#2b364d"},timeScale:{borderColor:"#2b364d",timeVisible:true,secondsVisible:false},crosshair:{mode:LightweightCharts.CrosshairMode.Normal}});candles=chart.addSeries(LightweightCharts.CandlestickSeries,{upColor:"#22c55e",downColor:"#ef4444",wickUpColor:"#22c55e",wickDownColor:"#ef4444",borderVisible:false});ema20=chart.addSeries(LightweightCharts.LineSeries,{color:"#60a5fa",lineWidth:2,priceLineVisible:false,lastValueVisible:false});ema50=chart.addSeries(LightweightCharts.LineSeries,{color:"#a78bfa",lineWidth:2,priceLineVisible:false,lastValueVisible:false});candles.setData(d.candles||[]);ema20.setData(d.ema20||[]);ema50.setData(d.ema50||[]);try{const m=markersFor(d,latestData);if(typeof LightweightCharts.createSeriesMarkers==="function")LightweightCharts.createSeriesMarkers(candles,m);else if(typeof candles.setMarkers==="function")candles.setMarkers(m)}catch(e){}priceLine(candles,currentLevels.immediate_support,"Support","#22c55e");priceLine(candles,currentLevels.immediate_resistance,"Resistance","#ef4444");priceLine(candles,currentLevels.max_pain,"Max Pain","#f59e0b");if(latestData&&latestData.prediction_target_15m)priceLine(candles,latestData.prediction_target_15m,"AI 15m Target","#60a5fa");if(fit)chart.timeScale().fitContent();else{const n=(d.candles||[]).length;if(n>90)chart.timeScale().setVisibleLogicalRange({from:n-90,to:n+4});else chart.timeScale().fitContent()}setText("chartStatus",currentInterval+" candles • Last candle: "+(d.last_candle_time?new Date(d.last_candle_time).toLocaleString():"--")+" • "+d.bars+" bars")}catch(e){setText("chartStatus","Chart error: "+e.message)}}
 window.addEventListener("resize",()=>{const b=document.getElementById("niftyChart");if(chart&&b)chart.applyOptions({width:b.clientWidth})});
+function renderOptionChain(opt){
+  opt=opt||{};
+  setText("ocExpiry","Expiry "+(opt.expiry||"--"));
+  setText("ocPcr","PCR "+(opt.pcr_oi??"--"));
+  setText("ocMaxPain","Max Pain "+(opt.max_pain!=null?fmt(opt.max_pain,0):"--"));
+  setText("ocIv","ATM IV "+(opt.atm_iv!=null?fmt(opt.atm_iv,2)+"%":"--"));
+  const sup=opt.immediate_support!=null?fmt(opt.immediate_support,0):"--";
+  const res=opt.immediate_resistance!=null?fmt(opt.immediate_resistance,0):"--";
+  setText("ocLevels","S "+sup+" / R "+res);
+  const body=document.getElementById("optionChainBody");
+  if(!body)return;
+  const rows=Array.isArray(opt.nearby_strikes)?opt.nearby_strikes:[];
+  if(!rows.length){body.innerHTML='<tr><td colspan="9" class="option-empty">Option-chain rows are currently unavailable.</td></tr>';return;}
+  const atm=Number(opt.atm_strike);
+  body.innerHTML=rows.map(row=>{
+    const strike=Number(row.strike);
+    const cls=Number.isFinite(atm)&&Number.isFinite(strike)&&strike===atm?' class="atm-row"':'';
+    return '<tr'+cls+'>'
+      +'<td>'+fmt(row.call_oi,0)+'</td>'
+      +'<td>'+fmt(row.call_change_oi,0)+'</td>'
+      +'<td>'+(row.call_iv!=null?fmt(row.call_iv,2):'--')+'</td>'
+      +'<td>'+money(row.call_ltp)+'</td>'
+      +'<td class="strike">'+fmt(row.strike,0)+'</td>'
+      +'<td>'+money(row.put_ltp)+'</td>'
+      +'<td>'+(row.put_iv!=null?fmt(row.put_iv,2):'--')+'</td>'
+      +'<td>'+fmt(row.put_change_oi,0)+'</td>'
+      +'<td>'+fmt(row.put_oi,0)+'</td>'
+      +'</tr>';
+  }).join('');
+}
 function renderTrade(data){const decision=String(data.trade_decision||"WAIT").toUpperCase(),trade=data.suggested_trade||{},card=document.getElementById("tradeCard");card.classList.remove("buy","pe");if(decision.includes("CE"))card.classList.add("buy");if(decision.includes("PE"))card.classList.add("pe");setText("tradeDecision",decision);colorBias("tradeDecision",decision);if(decision==="WAIT"||!trade.contract){setText("contractName","No option buy suggested");setText("contractMeta","The engine is waiting for stronger alignment before suggesting a contract.");setText("entryZone","--");setText("stopLoss","--");setText("target1","--");setText("target2","--");setText("optionLtp","LTP --");setText("optionIv","IV --");setText("optionDelta","Δ --");setText("selectionScore","Contract score --");setText("tradeReason",data.fno_setup_reason||"Signals are mixed.");return}setText("contractName",trade.contract);setText("contractMeta",(data.signals?.option_chain?.expiry?"Expiry "+data.signals.option_chain.expiry+" • ":"")+(trade.signal||decision));const z=trade.entry_zone||{};setText("entryZone",z.low!=null&&z.high!=null?money(z.low)+" – "+money(z.high):"--");setText("stopLoss",money(trade.stop_loss));setText("target1",money(trade.target_1));setText("target2",money(trade.target_2));setText("optionLtp","LTP "+money(trade.ltp));setText("optionIv","IV "+(trade.iv!=null?fmt(trade.iv,2)+"%":"--"));setText("optionDelta","Δ "+(trade.estimated_delta!=null?fmt(trade.estimated_delta,3):"--"));setText("selectionScore","Contract score "+(trade.selection_score_percent!=null?fmt(trade.selection_score_percent,1)+"%":"--"));setText("tradeReason",(trade.selection_reason?"Contract: "+trade.selection_reason+". ":"")+(trade.reason||data.fno_setup_reason||""))}
-async function loadDashboard(){const root=document.getElementById("dashboardRoot"),err=document.getElementById("errorBox");root.classList.add("loading");err.style.display="none";try{const r=await fetch("/prediction?include_alerts=true&ts="+Date.now(),{cache:"no-store"}),data=await r.json();if(!r.ok||data.status!=="success")throw new Error(data.message||"Prediction unavailable");latestData=data;const sig=data.signals||{},opt=sig.option_chain||{},mom=sig.momentum||{},ctx=data.market_context||{},conf=data.conflict||{};currentLevels=opt;setText("price",fmt(data.price,2));const ch=Number(mom.change_5min);setText("niftyChange","5m change: "+(Number.isFinite(ch)&&ch>=0?"+":"")+(Number.isFinite(ch)?fmt(ch,2):"--"));setText("expiryText","Expiry: "+(opt.expiry||"--"));setText("prediction",data.prediction||"--");colorBias("prediction",data.prediction);setText("confidenceChip","Confidence "+(data.confidence_percent??"--")+"% • "+(data.confidence||"--"));setText("scoreChip","Score "+(data.combined_score??"--"));setText("conflictChip","Conflict "+(conf.level||"--"));setText("predictionReason",data.fno_setup_reason||"Unified backend model is evaluating the latest signals.");setText("marketPhase","Market: "+(ctx.phase||"--"));setText("projectionLegend",data.prediction_target_15m!=null?"15m projected level: "+fmt(data.prediction_target_15m,2)+" (± model estimate)":"15m projection: no directional edge");updateSignalState(data);renderTrade(data);await loadChart(false);setText("lastUpdated","Updated: "+new Date().toLocaleTimeString())}catch(e){err.textContent="Unable to load dashboard: "+e.message;err.style.display="block";setText("lastUpdated","Update failed")}finally{root.classList.remove("loading")}}
+async function loadDashboard(){const root=document.getElementById("dashboardRoot"),err=document.getElementById("errorBox");root.classList.add("loading");err.style.display="none";try{const r=await fetch("/prediction?include_alerts=true&ts="+Date.now(),{cache:"no-store"}),data=await r.json();if(!r.ok||data.status!=="success")throw new Error(data.message||"Prediction unavailable");latestData=data;const sig=data.signals||{},opt=sig.option_chain||{},mom=sig.momentum||{},ctx=data.market_context||{},conf=data.conflict||{};currentLevels=opt;renderOptionChain(opt);setText("price",fmt(data.price,2));const ch=Number(mom.change_5min);setText("niftyChange","5m change: "+(Number.isFinite(ch)&&ch>=0?"+":"")+(Number.isFinite(ch)?fmt(ch,2):"--"));setText("expiryText","Expiry: "+(opt.expiry||"--"));setText("prediction",data.prediction||"--");colorBias("prediction",data.prediction);setText("confidenceChip","Confidence "+(data.confidence_percent??"--")+"% • "+(data.confidence||"--"));setText("scoreChip","Score "+(data.combined_score??"--"));setText("conflictChip","Conflict "+(conf.level||"--"));setText("predictionReason",data.fno_setup_reason||"Unified backend model is evaluating the latest signals.");setText("marketPhase","Market: "+(ctx.phase||"--"));setText("projectionLegend",data.prediction_target_15m!=null?"15m projected level: "+fmt(data.prediction_target_15m,2)+" (± model estimate)":"15m projection: no directional edge");updateSignalState(data);renderTrade(data);await loadChart(false);setText("lastUpdated","Updated: "+new Date().toLocaleTimeString())}catch(e){err.textContent="Unable to load dashboard: "+e.message;err.style.display="block";setText("lastUpdated","Update failed")}finally{root.classList.remove("loading")}}
 renderHistory();loadDashboard();setInterval(loadDashboard,60000);
 </script>
 </body>
@@ -5136,7 +5199,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "9.0",
+            "model_version": "9.1",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -5303,7 +5366,7 @@ def prediction(include_alerts: bool = False):
                 "market_regime": regime_data
             },
             "note": (
-                "Version 9 dynamically blends technicals, 5m/15m/30m completed-candle price action, candlesticks, news, "
+                "Version 9.1 dynamically blends technicals, 5m/15m/30m completed-candle price action, candlesticks, news, "
                 "global cues, FII/DII, options with IV skew, NIFTY breadth, "
                 "futures positioning, momentum and pre-market/opening-gap context. "
                 "It can also generate independent CE/PE watch, buy, stop-loss, target "

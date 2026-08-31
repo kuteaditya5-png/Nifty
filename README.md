@@ -1,4 +1,4 @@
-# NIFTY AI V9 – Vercel Deployment
+# NIFTY AI V9.1 – Vercel Deployment
 
 This package is built from the latest uploaded V8 `main.py`.
 
@@ -12,7 +12,7 @@ This package is built from the latest uploaded V8 `main.py`.
 
 All detailed signal engines continue to run in the backend.
 
-## V9 model additions
+## V9.1 model additions
 - 5m + 15m + 30m completed-candle price-action confirmation
 - ADX/DI, optional VWAP and relative-volume confirmation
 - conflict detector between major signal layers
@@ -25,8 +25,12 @@ All detailed signal engines continue to run in the backend.
 2. Keep `app.py` at the root.
 3. In Vercel Environment Variables, keep/set `NEWS_API_KEY`.
 4. Deploy.
-5. Check `/health`; it should return version `9.0`.
+5. Check `/health`; it should return version `9.1`.
 6. Open `/dashboard` and click **Enable Alerts** once.
 
 ## Important
 The app uses public/near-live data sources. yfinance is not exchange-grade tick data, and NSE endpoints can occasionally block/change. BUY/WATCH signals are heuristic decision support and do not place orders.
+
+
+## Dashboard visibility in V9.1
+Only these sections are visible: NIFTY/unified prediction/suggested F&O setup, prediction candlestick chart, and a compact nearby-strike NIFTY option chain. All other model inputs still run in the backend.
