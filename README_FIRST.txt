@@ -1,38 +1,15 @@
-NIFTY AI v8.1 — VERCEL FIX 2
-=============================
+NIFTY AI v9 - Password Login + Paper Trading
 
-THIS FIX
---------
-The previous build failed with:
+Replace these 5 files in GitHub root and redeploy Vercel.
 
-Could not find a top-level "app", "application", or "handler"
-in "vercel_entry.py".
+1 main.py
+2 auth_whatsapp.py
+3 vercel_entry.py
+4 requirements.txt
+5 vercel.json
 
-This version exposes:
+Twilio Verify/OTP is no longer used. TWILIO_VERIFY_SERVICE_SID can be removed.
+Keep DATABASE_URL and JWT_SECRET. Keep Twilio Account/Auth/WhatsApp variables only if WhatsApp alerts are still required.
 
-    app = main_app
-
-at the TOP LEVEL of vercel_entry.py so Vercel can detect the FastAPI app.
-
-UPLOAD
-------
-Keep your existing working main.py.
-
-Replace these files with this package:
-- vercel_entry.py
-- auth_whatsapp.py
-- requirements.txt
-- vercel.json
-
-You may also keep:
-- schema.sql
-- dashboard_whatsapp_ui_patch.html
-- scheduled_alert_whatsapp_patch.js
-
-TEST AFTER DEPLOY
------------------
-1. /health
-2. /login
-3. /auth/status
-
-If those work, then configure/test OTP and WhatsApp.
+First-time login: choose Create Password on /login. Later login with mobile + password.
+Paper account starts at Rs 100,000 and stores trades in your existing PostgreSQL database.
