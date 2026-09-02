@@ -1,31 +1,17 @@
-NIFTY AI v9.1 FIXED
+NIFTY AI v9.2 - BLANK DASHBOARD FIX
 
-This package fixes the blank dashboard issue in v9.
+This build fixes the browser JavaScript syntax error that kept the whole dashboard at Loading... and -- values.
 
-CAUSE FIXED:
-The previous main.py contained literal \n characters inside the dashboard JavaScript.
-That caused the browser JavaScript to stop before prediction, chart and paper trading loaded.
-
-REPLACE THESE FILES IN GITHUB ROOT:
+Replace these files in the GitHub repo root and redeploy Vercel:
 - main.py
 - auth_whatsapp.py
 - vercel_entry.py
 - requirements.txt
 - vercel.json
 
-Then redeploy Vercel.
-
-KEEP:
+Keep existing Vercel variables:
 DATABASE_URL
 JWT_SECRET
 NEWS_API_KEY
 
-Twilio Verify is NOT required for login.
-Twilio WhatsApp variables are only needed if WhatsApp alerts are enabled.
-
-Expected after deploy:
-- Mobile number + password login
-- Prediction values populate
-- Trade Plan values populate when F&O alert data is available
-- Paper portfolio shows starting virtual balance
-- Chart loads
+Twilio Verify is not required for login. WhatsApp Twilio variables are optional unless WhatsApp alerts are enabled.
