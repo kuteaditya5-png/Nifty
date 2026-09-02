@@ -1,15 +1,31 @@
-NIFTY AI v9 - Password Login + Paper Trading
+NIFTY AI v9.1 FIXED
 
-Replace these 5 files in GitHub root and redeploy Vercel.
+This package fixes the blank dashboard issue in v9.
 
-1 main.py
-2 auth_whatsapp.py
-3 vercel_entry.py
-4 requirements.txt
-5 vercel.json
+CAUSE FIXED:
+The previous main.py contained literal \n characters inside the dashboard JavaScript.
+That caused the browser JavaScript to stop before prediction, chart and paper trading loaded.
 
-Twilio Verify/OTP is no longer used. TWILIO_VERIFY_SERVICE_SID can be removed.
-Keep DATABASE_URL and JWT_SECRET. Keep Twilio Account/Auth/WhatsApp variables only if WhatsApp alerts are still required.
+REPLACE THESE FILES IN GITHUB ROOT:
+- main.py
+- auth_whatsapp.py
+- vercel_entry.py
+- requirements.txt
+- vercel.json
 
-First-time login: choose Create Password on /login. Later login with mobile + password.
-Paper account starts at Rs 100,000 and stores trades in your existing PostgreSQL database.
+Then redeploy Vercel.
+
+KEEP:
+DATABASE_URL
+JWT_SECRET
+NEWS_API_KEY
+
+Twilio Verify is NOT required for login.
+Twilio WhatsApp variables are only needed if WhatsApp alerts are enabled.
+
+Expected after deploy:
+- Mobile number + password login
+- Prediction values populate
+- Trade Plan values populate when F&O alert data is available
+- Paper portfolio shows starting virtual balance
+- Chart loads
