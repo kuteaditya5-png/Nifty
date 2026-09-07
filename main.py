@@ -3920,6 +3920,25 @@ button{cursor:pointer;font-weight:700}button.primary{background:#eef5ff;color:#0
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button id="paperBuyBtn" onclick="paperBuy()">Paper Buy Current Signal</button><button onclick="paperReset()">Reset Paper Account</button></div>
     <div style="overflow:auto;margin-top:14px"><table style="width:100%;min-width:760px;border-collapse:collapse"><thead><tr><th>Time</th><th>Signal</th><th>Strike</th><th>Entry</th><th>Exit/Current</th><th>P&L</th><th>Status</th><th>Action</th></tr></thead><tbody id="paperHistory"></tbody></table></div>
   </div>
+  <div class="card" style="margin-top:16px">
+    <div class="chart-head">
+      <div>
+        <div class="chart-title">Prediction Accuracy Tracker</div>
+        <div class="chart-sub">Measured from completed BUY CE/PE signals, not model confidence.</div>
+      </div>
+      <span class="pill" id="accuracySample">0 completed</span>
+    </div>
+    <div class="paper-grid">
+      <div class="metric"><span class="label">Overall Accuracy</span><b id="accuracyOverall">--%</b></div>
+      <div class="metric"><span class="label">CE Accuracy</span><b id="accuracyCE">--%</b></div>
+      <div class="metric"><span class="label">PE Accuracy</span><b id="accuracyPE">--%</b></div>
+      <div class="metric"><span class="label">Wins / Losses</span><b id="accuracyWL">--</b></div>
+      <div class="metric"><span class="label">Open Signals</span><b id="accuracyOpen">--</b></div>
+      <div class="metric"><span class="label">Profit Factor*</span><b id="accuracyPF">--</b></div>
+    </div>
+    <div class="footer-note" id="accuracyNote">Collecting signals. We should not judge real-money readiness from a small sample.</div>
+  </div>
+
   <div class="card chart-card">
     <div class="chart-head">
       <div>
@@ -4050,10 +4069,35 @@ async function loadChart(prediction){
 }
 
 async function loadPaper(){
-  try{await fetch("/api/paper/sync",{method:"POST"});const [a,b]=await Promise.all([fetch("/api/paper/summary"),fetch("/api/paper/history")]);const s=await a.json(),h=await b.json();if(s.status==="success"){const x=s.summary;setText("paperEquity","₹"+Number(x.equity).toFixed(2));setText("paperCash","₹"+Number(x.cash_balance).toFixed(2));setText("paperOpenPnl","₹"+Number(x.open_pnl).toFixed(2));setText("paperRealized","₹"+Number(x.realized_pnl).toFixed(2));setText("paperWinRate",Number(x.win_rate).toFixed(1)+"%");setText("paperOpenCount",x.open_positions)}document.getElementById("paperHistory").innerHTML=(h.trades||[]).map(t=>`<tr><td>${new Date(t.opened_at).toLocaleString()}</td><td>${t.signal}</td><td>${t.strike_price} ${t.option_type}</td><td>${t.entry_price}</td><td>${t.status==="OPEN"?(t.current_price??t.entry_price):(t.exit_price??"--")}</td><td>₹${Number(t.pnl).toFixed(2)}</td><td>${t.status}</td><td>${t.status==="OPEN"?`<button onclick="paperExit(${t.trade_id},${t.current_price||t.entry_price})">Exit</button>`:""}</td></tr>`).join("")||'<tr><td colspan="8">No paper trades yet.</td></tr>';}catch(e){console.warn(e)}}
-async function paperBuy(){const d=await (await fetch("/prediction?include_alerts=true",{cache:"no-store"})).json();const setup=String(d.fno_setup||"WAIT").toUpperCase(),alerts=d.fno_alerts||{};let typ,trade;if(setup.includes("CE")){typ="CE";trade=alerts.call||{}}else if(setup.includes("PE")){typ="PE";trade=alerts.put||{}}else{return alert("Current final signal is WAIT. Paper trade not opened.")}if(!String(trade.signal||"").toUpperCase().includes("BUY"))return alert("No BUY confirmation yet.");const z=trade.entry_zone||{};const entry=trade.ltp??trade.option_ltp??trade.premium??((z.low!=null&&z.high!=null)?(Number(z.low)+Number(z.high))/2:null);if(!entry)return alert("Option premium unavailable.");const body={signal:trade.signal,option_type:typ,strike_price:trade.strike,nifty_price:d.price,entry_price:entry,stop_loss:trade.stop_loss,target1:trade.target_1,target2:trade.target_2,confidence:trade.signal_strength_percent,quantity:75};const r=await fetch("/api/paper/open",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const x=await r.json();if(!r.ok)alert(x.message||"Unable to open paper trade");loadPaper()}
+  try{await fetch("/api/paper/sync",{method:"POST"});const [a,b]=await Promise.all([fetch("/api/paper/summary"),fetch("/api/paper/history")]);const s=await a.json(),h=await b.json();if(s.status==="success"){const x=s.summary;setText("paperEquity","₹"+Number(x.equity).toFixed(2));setText("paperCash","₹"+Number(x.cash_balance).toFixed(2));setText("paperOpenPnl","₹"+Number(x.open_pnl).toFixed(2));setText("paperRealized","₹"+Number(x.realized_pnl).toFixed(2));setText("paperWinRate",Number(x.win_rate).toFixed(1)+"%");setText("paperOpenCount",x.open_positions)}document.getElementById("paperHistory").innerHTML=(h.trades||[]).map(t=>`<tr><td>${new Date(t.opened_at).toLocaleString()}</td><td>${t.signal}</td><td>${t.strike_price} ${t.option_type}${t.expiry?`<div style="font-size:10px;color:#7188a3">${t.expiry}</div>`:""}</td><td>${t.entry_price}</td><td>${t.status==="OPEN"?(t.current_price??t.entry_price):(t.exit_price??"--")}${t.last_price_at?`<div style="font-size:10px;color:#7188a3">${new Date(t.last_price_at).toLocaleTimeString()}</div>`:""}</td><td>₹${Number(t.pnl).toFixed(2)}</td><td>${t.status}</td><td>${t.status==="OPEN"?`<button onclick="paperExit(${t.trade_id},${t.current_price||t.entry_price})">Exit</button>`:""}</td></tr>`).join("")||'<tr><td colspan="8">No paper trades yet.</td></tr>';}catch(e){console.warn(e)}}
+async function paperBuy(){const d=await (await fetch("/prediction?include_alerts=true",{cache:"no-store"})).json();const setup=String(d.fno_setup||"WAIT").toUpperCase(),alerts=d.fno_alerts||{};let typ,trade;if(setup.includes("CE")){typ="CE";trade=alerts.call||{}}else if(setup.includes("PE")){typ="PE";trade=alerts.put||{}}else{return alert("Current final signal is WAIT. Paper trade not opened.")}if(!String(trade.signal||"").toUpperCase().includes("BUY"))return alert("No BUY confirmation yet.");const z=trade.entry_zone||{};const entry=trade.ltp??trade.option_ltp??trade.premium??((z.low!=null&&z.high!=null)?(Number(z.low)+Number(z.high))/2:null);if(!entry)return alert("Option premium unavailable.");const body={signal:trade.signal,option_type:typ,strike_price:trade.strike,nifty_price:d.price,entry_price:entry,stop_loss:trade.stop_loss,target1:trade.target_1,target2:trade.target_2,confidence:trade.signal_strength_percent,quantity:75,expiry:((d.signals||{}).option_chain||{}).expiry};const r=await fetch("/api/paper/open",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const x=await r.json();if(!r.ok)alert(x.message||"Unable to open paper trade");loadPaper()}
 async function paperExit(id,px){const v=prompt("Exit price",px);if(!v)return;const r=await fetch("/api/paper/close",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trade_id:id,exit_price:Number(v)})});const x=await r.json();if(!r.ok)alert(x.message||"Unable to exit");loadPaper()}
 async function paperReset(){if(!confirm("Reset paper balance and delete paper trade history?"))return;await fetch("/api/paper/reset",{method:"POST"});loadPaper()}
+
+
+async function loadAccuracy(){
+  try{
+    const r=await fetch("/api/accuracy/summary",{cache:"no-store"});
+    const d=await r.json();
+    if(!r.ok||d.status!=="success")return;
+    const x=d.summary||{};
+    setText("accuracyOverall",Number(x.accuracy||0).toFixed(1)+"%");
+    setText("accuracyCE",Number(x.ce_accuracy||0).toFixed(1)+"%");
+    setText("accuracyPE",Number(x.pe_accuracy||0).toFixed(1)+"%");
+    setText("accuracyWL",(x.wins||0)+" / "+(x.losses||0));
+    setText("accuracyOpen",x.open_signals||0);
+    setText("accuracyPF",x.profit_factor_points==null?"--":Number(x.profit_factor_points).toFixed(2));
+    setText("accuracySample",(x.completed||0)+" completed");
+    const sample=Number(x.completed||0);
+    setText("accuracyNote",
+      sample<30
+      ?"Sample is still small ("+sample+"). Keep this in paper mode."
+      : sample<100
+        ?"Accuracy is becoming informative, but 100+ completed signals is preferred before considering real money."
+        :"100+ completed signals collected. Review accuracy, drawdown and profit factor together before any real-money decision."
+    );
+  }catch(e){console.warn("Accuracy tracker:",e)}
+}
 
 async function loadAll(){
   const box=document.getElementById("errorBox");
@@ -4062,7 +4106,8 @@ async function loadAll(){
     const p=await loadPrediction();
     await Promise.all([
       loadChart(p),
-      loadPaper()
+      loadPaper(),
+      loadAccuracy()
     ]);
     setText("lastUpdated","Updated: "+new Date().toLocaleTimeString());
   }catch(e){

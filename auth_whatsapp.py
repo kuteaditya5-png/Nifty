@@ -118,6 +118,36 @@ def _init_db():
                     opened_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, closed_at TIMESTAMPTZ
                 )
             """)
+            cur.execute("ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS expiry VARCHAR(30)")
+            cur.execute("ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS last_price_at TIMESTAMPTZ")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS prediction_audit (
+                    audit_id BIGSERIAL PRIMARY KEY,
+                    signal_key VARCHAR(220) UNIQUE NOT NULL,
+                    model_version VARCHAR(30),
+                    prediction VARCHAR(40),
+                    option_type VARCHAR(5) NOT NULL,
+                    expiry VARCHAR(30),
+                    strike_price NUMERIC(12,2) NOT NULL,
+                    nifty_price NUMERIC(12,2),
+                    entry_price NUMERIC(12,2) NOT NULL,
+                    current_price NUMERIC(12,2),
+                    stop_loss NUMERIC(12,2),
+                    target1 NUMERIC(12,2),
+                    target2 NUMERIC(12,2),
+                    confidence NUMERIC(5,2),
+                    status VARCHAR(12) NOT NULL DEFAULT 'OPEN',
+                    result VARCHAR(12),
+                    pnl_points NUMERIC(12,2) NOT NULL DEFAULT 0,
+                    generated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TIMESTAMPTZ,
+                    last_checked_at TIMESTAMPTZ
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS ix_prediction_audit_status
+                ON prediction_audit(status, generated_at DESC)
+            """)
         conn.commit()
 
 
@@ -288,6 +318,249 @@ def _num(value):
         return None
 
 
+def _exact_contract_price(snapshot, option_type, strike_price, expiry=None):
+    """Return the latest premium for the exact saved strike/type from option-chain rows."""
+    if not isinstance(snapshot, dict):
+        return None
+    chain = snapshot.get("option_chain") or {}
+    snap_expiry = chain.get("expiry")
+    if expiry and snap_expiry and str(expiry) != str(snap_expiry):
+        return None
+    rows = chain.get("nearby_strikes") or []
+    for row in rows:
+        try:
+            if abs(float(row.get("strike")) - float(strike_price)) > 0.01:
+                continue
+            key = "call_ltp" if str(option_type).upper() == "CE" else "put_ltp"
+            value = row.get(key)
+            if value is None:
+                return None
+            value = float(value)
+            return value if value > 0 else None
+        except Exception:
+            continue
+    return None
+
+
+def _alert_entry_price(side):
+    if not isinstance(side, dict):
+        return None
+    for key in ("ltp", "option_ltp", "premium", "entry_price"):
+        try:
+            value = side.get(key)
+            if value is not None and float(value) > 0:
+                return float(value)
+        except Exception:
+            pass
+    zone = side.get("entry_zone") or {}
+    if isinstance(zone, dict):
+        try:
+            low = zone.get("low")
+            high = zone.get("high")
+            if low is not None and high is not None:
+                return (float(low) + float(high)) / 2.0
+        except Exception:
+            pass
+    return None
+
+
+def _record_and_evaluate_prediction(snapshot):
+    """
+    Audit every qualifying BUY CE/PE signal globally.
+    A prediction is a WIN when Target 1 is observed before the stop;
+    a LOSS when the stop is observed first. OPEN signals remain pending.
+    """
+    if not isinstance(snapshot, dict) or snapshot.get("status") != "success":
+        return {"created": 0, "evaluated": 0}
+
+    chain = snapshot.get("option_chain") or {}
+    expiry = chain.get("expiry")
+    alerts = snapshot.get("alerts") or {}
+    created = 0
+    evaluated = 0
+
+    # First update every open audit using its exact saved contract.
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT audit_id, option_type, strike_price, expiry, entry_price,
+                       stop_loss, target1, target2
+                FROM prediction_audit
+                WHERE status='OPEN'
+                ORDER BY audit_id
+            """)
+            open_rows = cur.fetchall()
+
+            for row in open_rows:
+                audit_id, typ, strike, saved_expiry, entry, stop, t1, t2 = row
+                live = _exact_contract_price(snapshot, typ, strike, saved_expiry)
+                if live is None:
+                    continue
+                pnl_points = float(live) - float(entry)
+                status = "OPEN"
+                result = None
+                closed = False
+
+                # Conservative evaluation: stop takes precedence if both appear crossed
+                # between sparse refreshes.
+                if stop is not None and live <= float(stop):
+                    status, result, closed = "CLOSED", "LOSS", True
+                elif t1 is not None and live >= float(t1):
+                    status, result, closed = "CLOSED", "WIN", True
+
+                cur.execute("""
+                    UPDATE prediction_audit
+                    SET current_price=%s, pnl_points=%s, status=%s, result=%s,
+                        last_checked_at=CURRENT_TIMESTAMP,
+                        closed_at=CASE WHEN %s THEN CURRENT_TIMESTAMP ELSE closed_at END
+                    WHERE audit_id=%s
+                """, (live, pnl_points, status, result, closed, audit_id))
+                evaluated += 1
+
+        conn.commit()
+
+    # Then record current qualifying BUY signals, deduped by contract + rounded minute.
+    for typ, key in (("CE", "call"), ("PE", "put")):
+        side = alerts.get(key) or {}
+        signal = str(side.get("signal") or "").upper()
+        if "BUY" not in signal:
+            continue
+
+        try:
+            strike = float(side.get("strike"))
+        except Exception:
+            continue
+        entry = _alert_entry_price(side)
+        if entry is None:
+            continue
+
+        confidence = side.get("signal_strength_percent")
+        try:
+            confidence = float(confidence) if confidence is not None else None
+        except Exception:
+            confidence = None
+
+        # One audit row per same contract / 15-minute window.
+        bucket = datetime.now().strftime("%Y%m%d%H")
+        minute_bucket = int(datetime.now().minute // 15)
+        signal_key = f"{typ}|{expiry}|{strike:.2f}|{bucket}|{minute_bucket}"
+
+        with _db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO prediction_audit(
+                        signal_key, model_version, prediction, option_type, expiry,
+                        strike_price, nifty_price, entry_price, current_price,
+                        stop_loss, target1, target2, confidence, status, generated_at,
+                        last_checked_at
+                    )
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'OPEN',
+                           CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                    ON CONFLICT(signal_key) DO NOTHING
+                """, (
+                    signal_key,
+                    snapshot.get("model_version"),
+                    snapshot.get("prediction"),
+                    typ,
+                    expiry,
+                    strike,
+                    snapshot.get("price"),
+                    entry,
+                    entry,
+                    side.get("stop_loss"),
+                    side.get("target_1"),
+                    side.get("target_2"),
+                    confidence
+                ))
+                created += cur.rowcount
+            conn.commit()
+
+    return {"created": created, "evaluated": evaluated}
+
+
+def _accuracy_summary():
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE status='CLOSED') AS completed,
+                    COUNT(*) FILTER (WHERE result='WIN') AS wins,
+                    COUNT(*) FILTER (WHERE result='LOSS') AS losses,
+                    COUNT(*) FILTER (WHERE status='OPEN') AS open_signals,
+                    COALESCE(SUM(CASE WHEN result='WIN' THEN pnl_points ELSE 0 END),0) AS gross_win_pts,
+                    ABS(COALESCE(SUM(CASE WHEN result='LOSS' THEN pnl_points ELSE 0 END),0)) AS gross_loss_pts
+                FROM prediction_audit
+            """)
+            overall = cur.fetchone()
+
+            cur.execute("""
+                SELECT option_type,
+                       COUNT(*) FILTER (WHERE status='CLOSED'),
+                       COUNT(*) FILTER (WHERE result='WIN')
+                FROM prediction_audit
+                GROUP BY option_type
+            """)
+            side_rows = cur.fetchall()
+
+            cur.execute("""
+                SELECT
+                  CASE
+                    WHEN confidence >= 80 THEN '80%+'
+                    WHEN confidence >= 70 THEN '70-79%'
+                    WHEN confidence >= 60 THEN '60-69%'
+                    ELSE '<60%'
+                  END AS bucket,
+                  COUNT(*) FILTER (WHERE status='CLOSED') AS completed,
+                  COUNT(*) FILTER (WHERE result='WIN') AS wins
+                FROM prediction_audit
+                GROUP BY 1
+                ORDER BY 1
+            """)
+            buckets = cur.fetchall()
+
+    completed = int(overall[0] or 0)
+    wins = int(overall[1] or 0)
+    losses = int(overall[2] or 0)
+    open_signals = int(overall[3] or 0)
+    gross_win = float(overall[4] or 0)
+    gross_loss = float(overall[5] or 0)
+
+    by_side = {}
+    for typ, total, side_wins in side_rows:
+        total = int(total or 0)
+        side_wins = int(side_wins or 0)
+        by_side[typ] = {
+            "completed": total,
+            "wins": side_wins,
+            "accuracy": round(side_wins / total * 100, 1) if total else 0.0
+        }
+
+    confidence_buckets = []
+    for bucket, total, bwins in buckets:
+        total = int(total or 0)
+        bwins = int(bwins or 0)
+        confidence_buckets.append({
+            "bucket": bucket,
+            "completed": total,
+            "wins": bwins,
+            "accuracy": round(bwins / total * 100, 1) if total else 0.0
+        })
+
+    return {
+        "completed": completed,
+        "wins": wins,
+        "losses": losses,
+        "open_signals": open_signals,
+        "accuracy": round(wins / completed * 100, 1) if completed else 0.0,
+        "profit_factor_points": round(gross_win / gross_loss, 2) if gross_loss > 0 else None,
+        "ce_accuracy": by_side.get("CE", {}).get("accuracy", 0.0),
+        "pe_accuracy": by_side.get("PE", {}).get("accuracy", 0.0),
+        "by_side": by_side,
+        "confidence_buckets": confidence_buckets,
+        "note": "Accuracy is measured only on completed BUY signals: Target 1 observed first = WIN; stop observed first = LOSS."
+    }
+
+
 def setup_auth_whatsapp(app, fno_alert_provider=None):
     try:
         _init_db()
@@ -394,8 +667,8 @@ def setup_auth_whatsapp(app, fno_alert_provider=None):
         user=_current_user(request)
         with _db() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT trade_id,signal,option_type,strike_price,entry_price,current_price,exit_price,quantity,status,pnl,exit_reason,opened_at FROM paper_trades WHERE user_id=%s ORDER BY trade_id DESC LIMIT 50",(user["user_id"],)); rows=cur.fetchall()
-        return {"status":"success","trades":[{"trade_id":r[0],"signal":r[1],"option_type":r[2],"strike_price":float(r[3]),"entry_price":float(r[4]),"current_price":float(r[5]) if r[5] is not None else None,"exit_price":float(r[6]) if r[6] is not None else None,"quantity":r[7],"status":r[8],"pnl":float(r[9]),"exit_reason":r[10],"opened_at":r[11].isoformat()} for r in rows]}
+                cur.execute("SELECT trade_id,signal,option_type,strike_price,entry_price,current_price,exit_price,quantity,status,pnl,exit_reason,opened_at,expiry,last_price_at FROM paper_trades WHERE user_id=%s ORDER BY trade_id DESC LIMIT 50",(user["user_id"],)); rows=cur.fetchall()
+        return {"status":"success","trades":[{"trade_id":r[0],"signal":r[1],"option_type":r[2],"strike_price":float(r[3]),"entry_price":float(r[4]),"current_price":float(r[5]) if r[5] is not None else None,"exit_price":float(r[6]) if r[6] is not None else None,"quantity":r[7],"status":r[8],"pnl":float(r[9]),"exit_reason":r[10],"opened_at":r[11].isoformat(),"expiry":r[12],"last_price_at":r[13].isoformat() if r[13] else None} for r in rows]}
 
     @app.post("/api/paper/open")
     async def paper_open(request: Request):
@@ -405,7 +678,8 @@ def setup_auth_whatsapp(app, fno_alert_provider=None):
             with conn.cursor() as cur:
                 cur.execute("SELECT cash_balance FROM paper_accounts WHERE user_id=%s FOR UPDATE",(user["user_id"],)); cash=float(cur.fetchone()[0])
                 if cost>cash: return JSONResponse({"status":"error","message":"Not enough paper balance."},status_code=400)
-                cur.execute("INSERT INTO paper_trades(user_id,signal,option_type,strike_price,nifty_price,entry_price,current_price,stop_loss,target1,target2,confidence,quantity) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING trade_id",(user["user_id"],d.get("signal"),d.get("option_type"),d.get("strike_price"),d.get("nifty_price"),entry,entry,d.get("stop_loss"),d.get("target1"),d.get("target2"),d.get("confidence"),qty)); tid=cur.fetchone()[0]
+                expiry=d.get("expiry")
+                cur.execute("INSERT INTO paper_trades(user_id,signal,option_type,strike_price,nifty_price,entry_price,current_price,stop_loss,target1,target2,confidence,quantity,expiry,last_price_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,CURRENT_TIMESTAMP) RETURNING trade_id",(user["user_id"],d.get("signal"),d.get("option_type"),d.get("strike_price"),d.get("nifty_price"),entry,entry,d.get("stop_loss"),d.get("target1"),d.get("target2"),d.get("confidence"),qty,expiry)); tid=cur.fetchone()[0]
                 cur.execute("UPDATE paper_accounts SET cash_balance=cash_balance-%s WHERE user_id=%s",(cost,user["user_id"]))
             conn.commit()
         return {"status":"success","trade_id":tid}
@@ -427,32 +701,107 @@ def setup_auth_whatsapp(app, fno_alert_provider=None):
     def paper_sync(request: Request):
         user=_current_user(request)
         if fno_alert_provider is None:
-            return {"status":"success","updated":0}
+            return {"status":"success","updated":0,"message":"F&O provider unavailable."}
         try:
             snap=fno_alert_provider()
-            alerts=(snap or {}).get("alerts") or {}
+            if not isinstance(snap, dict) or snap.get("status") != "success":
+                return {"status":"success","updated":0,"message":"Market snapshot unavailable."}
+
+            audit_result = _record_and_evaluate_prediction(snap)
+            updated=0
+            closed=0
+
             with _db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT trade_id,option_type,strike_price,entry_price,quantity FROM paper_trades WHERE user_id=%s AND status='OPEN'",(user["user_id"],))
+                    cur.execute("""
+                        SELECT trade_id,option_type,strike_price,entry_price,quantity,
+                               stop_loss,target1,target2,expiry
+                        FROM paper_trades
+                        WHERE user_id=%s AND status='OPEN'
+                        ORDER BY trade_id
+                    """,(user["user_id"],))
                     rows=cur.fetchall()
-                    updated=0
+
                     for r in rows:
-                        side=(alerts.get("call") if r[1]=='CE' else alerts.get("put")) or {}
-                        if side.get("strike") is not None and abs(float(side.get("strike"))-float(r[2]))>0.01:
-                            continue
-                        live=side.get("ltp") or side.get("option_ltp") or side.get("premium")
-                        if live is None:
-                            z=side.get("entry_zone") or {}
-                            if z.get("low") is not None and z.get("high") is not None:
-                                live=(float(z.get("low"))+float(z.get("high")))/2
+                        tid,typ,strike,entry,qty,stop,t1,t2,expiry=r
+                        live=_exact_contract_price(snap,typ,strike,expiry)
                         if live is None:
                             continue
-                        live=float(live); pnl=(live-float(r[3]))*int(r[4])
-                        cur.execute("UPDATE paper_trades SET current_price=%s,pnl=%s WHERE trade_id=%s",(live,pnl,r[0])); updated+=1
+
+                        pnl=(float(live)-float(entry))*int(qty)
+                        exit_reason=None
+                        if stop is not None and live <= float(stop):
+                            exit_reason="STOP LOSS"
+                        elif t2 is not None and live >= float(t2):
+                            exit_reason="TARGET 2"
+                        elif t1 is not None and live >= float(t1):
+                            exit_reason="TARGET 1"
+
+                        if exit_reason:
+                            proceeds=float(live)*int(qty)
+                            cur.execute("""
+                                UPDATE paper_trades
+                                SET current_price=%s,exit_price=%s,pnl=%s,status='CLOSED',
+                                    exit_reason=%s,closed_at=CURRENT_TIMESTAMP,last_price_at=CURRENT_TIMESTAMP
+                                WHERE trade_id=%s
+                            """,(live,live,pnl,exit_reason,tid))
+                            cur.execute("UPDATE paper_accounts SET cash_balance=cash_balance+%s WHERE user_id=%s",(proceeds,user["user_id"]))
+                            closed+=1
+                        else:
+                            cur.execute("""
+                                UPDATE paper_trades
+                                SET current_price=%s,pnl=%s,last_price_at=CURRENT_TIMESTAMP
+                                WHERE trade_id=%s
+                            """,(live,pnl,tid))
+                        updated+=1
                 conn.commit()
-            return {"status":"success","updated":updated}
+
+            return {
+                "status":"success",
+                "updated":updated,
+                "closed":closed,
+                "audit_created":audit_result.get("created",0),
+                "audit_evaluated":audit_result.get("evaluated",0)
+            }
         except Exception as e:
             return {"status":"success","updated":0,"message":str(e)}
+
+    @app.get("/api/accuracy/summary")
+    def accuracy_summary(request: Request):
+        try:
+            if fno_alert_provider is not None:
+                snap=fno_alert_provider()
+                _record_and_evaluate_prediction(snap)
+            return {"status":"success","summary":_accuracy_summary()}
+        except Exception as e:
+            return JSONResponse({"status":"error","message":str(e)},status_code=400)
+
+    @app.get("/api/accuracy/history")
+    def accuracy_history(request: Request, limit: int = 30):
+        limit=max(1,min(100,int(limit)))
+        with _db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT audit_id,prediction,option_type,expiry,strike_price,entry_price,
+                           current_price,stop_loss,target1,target2,confidence,status,result,
+                           pnl_points,generated_at,closed_at
+                    FROM prediction_audit
+                    ORDER BY audit_id DESC
+                    LIMIT %s
+                """,(limit,))
+                rows=cur.fetchall()
+        return {"status":"success","signals":[{
+            "audit_id":r[0],"prediction":r[1],"option_type":r[2],"expiry":r[3],
+            "strike_price":float(r[4]),"entry_price":float(r[5]),
+            "current_price":float(r[6]) if r[6] is not None else None,
+            "stop_loss":float(r[7]) if r[7] is not None else None,
+            "target1":float(r[8]) if r[8] is not None else None,
+            "target2":float(r[9]) if r[9] is not None else None,
+            "confidence":float(r[10]) if r[10] is not None else None,
+            "status":r[11],"result":r[12],"pnl_points":float(r[13] or 0),
+            "generated_at":r[14].isoformat() if r[14] else None,
+            "closed_at":r[15].isoformat() if r[15] else None
+        } for r in rows]}
 
     @app.post("/api/paper/reset")
     def paper_reset(request: Request):
