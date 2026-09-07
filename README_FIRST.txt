@@ -1,43 +1,56 @@
-NIFTY AI v12 - Backtest Sidebar
+NIFTY AI v12.2 - Backtest Audit & Validation
+
+WHY THIS VERSION
+The previous 30-day result showed roughly:
+- Rs 60k final capital from Rs 1 lakh
+- ~40% win rate
+- profit factor below 1
+- severe drawdown
+
+v12.2 does NOT try to hide that failure by changing settings blindly.
+It audits the backtest.
 
 NEW
-- Left-side navigation panel.
-- Dashboard button.
-- Backtest button.
-- Backtest opens as a left-side panel without replacing the main dashboard.
-- Starting capital defaults to Rs 1,00,000.
-- 30-day / 60-day historical replay.
-- Configurable signal threshold.
-- Configurable risk per trade.
-- Configurable reward:risk.
-- Compounding ON/OFF.
-- Final capital, return %, trades, win rate, profit factor and max drawdown.
-- Equity curve.
-- Trade-by-trade backtest history.
+- PASS / CAUTION / FAIL verdict
+- CE / PE / WAIT counts
+- WAIT ratio
+- CE win rate
+- PE win rate
+- expectancy per trade
+- average win / average loss
+- max consecutive losses
+- regime breakdown
+- risk-adjusted dynamic threshold
+- configurable fees
+- configurable slippage
+- detailed trade audit:
+  timestamp, CE/PE, score, threshold, regime, entry, exit reason, P&L, capital
 
-BACKTEST MODE
-This first v12 backtest is a NIFTY DIRECTION PROXY.
-It replays historical NIFTY candles chronologically and uses only information
-available at each candle.
+BACKTEST LOGIC
+- one open position at a time
+- WAIT creates no trade
+- high-volatility and sideways regimes require stronger signal thresholds
+- opening/closing periods are more selective
+- stop is checked before target inside the same bar (conservative)
+- fees and slippage reduce P&L
 
-It DOES NOT invent historical option premiums/OI/IV.
-Therefore the Rs 1,00,000 simulation uses risk-per-trade capital sizing rather
-than pretending we bought historical CE/PE contracts at unavailable prices.
+IMPORTANT
+This is still a NIFTY directional proxy backtest because the project does not
+contain historical option premium/OI/IV snapshots for every past candle.
+Do not interpret proxy capital results as literal historical CE/PE contract P&L.
 
-Existing features retained:
-- mobile + password login
-- no WhatsApp/Twilio
-- v11 feature engine
-- paper trading
-- exact-contract live paper P&L
-- prediction accuracy tracker
-- walk-forward validation
-- AI Prediction Zone
+PASS guideline in this build:
+- profit factor >= 1.30
+- positive expectancy
+- max drawdown <= 20%
+
+CAUTION:
+- profit factor >= 1.0
+- non-negative expectancy
+- max drawdown <= 30%
+
+Otherwise: FAIL.
 
 DEPLOY
-Replace the GitHub root files with the files from this ZIP and redeploy Vercel.
-
-Core environment variables:
-DATABASE_URL
-JWT_SECRET
-NEWS_API_KEY
+Replace the files in your GitHub repo root with the files in this ZIP,
+then redeploy Vercel.

@@ -33,7 +33,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "12.0",
+        "version": "12.2",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4414,6 +4414,14 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
       <label>Compounding</label>
       <select id="btCompound"><option value="true" selected>ON</option><option value="false">OFF</option></select>
     </div>
+    <div class="backtest-field">
+      <label>Fee Per Trade ₹</label>
+      <input id="btFee" type="number" value="40" min="0" step="10">
+    </div>
+    <div class="backtest-field">
+      <label>Slippage Points</label>
+      <input id="btSlip" type="number" value="2" min="0" step="0.5">
+    </div>
   </div>
 
   <button class="primary" style="width:100%;margin-top:12px" onclick="runBacktest()">Run Backtest</button>
@@ -4426,19 +4434,27 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     <div class="btmetric"><span>Win Rate</span><b id="btWinRate">--%</b></div>
     <div class="btmetric"><span>Profit Factor</span><b id="btPF">--</b></div>
     <div class="btmetric"><span>Max Drawdown</span><b id="btDD">--%</b></div>
+    <div class="btmetric"><span>Expectancy / Trade</span><b id="btExpectancy">₹--</b></div>
+    <div class="btmetric"><span>Max Consecutive Losses</span><b id="btConsec">--</b></div>
+    <div class="btmetric"><span>WAIT Ratio</span><b id="btWait">--%</b></div>
+    <div class="btmetric"><span>Verdict</span><b id="btVerdict">--</b></div>
   </div>
 
   <div id="btEquityChart"></div>
 
   <div class="bt-table-wrap">
     <table>
-      <thead><tr><th>Entry</th><th>Signal</th><th>P&L</th><th>Exit</th><th>Capital</th></tr></thead>
-      <tbody id="btHistory"><tr><td colspan="5">Run the backtest to see simulated trades.</td></tr></tbody>
+      <thead><tr><th>Entry</th><th>Signal</th><th>Score</th><th>Threshold</th><th>Regime</th><th>P&L</th><th>Exit</th><th>Capital</th></tr></thead>
+      <tbody id="btHistory"><tr><td colspan="8">Run the backtest to see simulated trades.</td></tr></tbody>
     </table>
   </div>
 
+  <div class="bt-note" id="btDiagnostics">
+    CE/PE/WAIT diagnostics will appear after the backtest.
+  </div>
+
   <div class="bt-note">
-    Proxy mode: uses historical NIFTY candles and v12 price/statistical logic. It does not pretend historical option premiums are available. This is for strategy validation before full F&O historical data is added.
+    Proxy mode: uses historical NIFTY candles and v12.2 audited price/statistical logic. It does not pretend historical option premiums are available. This is for strategy validation before full F&O historical data is added.
   </div>
 </div>
 <div class="shell">
@@ -4777,14 +4793,18 @@ async function runBacktest(){
   const risk=Number(el("btRisk").value||2)/100;
   const rr=Number(el("btRR").value||1.5);
   const comp=el("btCompound").value==="true";
-  setText("btStatus","Running chronological backtest...");
+  const fee=Number(el("btFee").value||40);
+  const slip=Number(el("btSlip").value||2);
+  setText("btStatus","Running chronological audited backtest...");
   const qs=new URLSearchParams({
     starting_capital:String(capital),
     period,
     threshold:String(threshold),
     risk_per_trade:String(risk),
     reward_risk:String(rr),
-    compounding:String(comp)
+    compounding:String(comp),
+    fee_per_trade:String(fee),
+    slippage_points:String(slip)
   });
   try{
     const r=await fetch("/backtest/run?"+qs.toString(),{cache:"no-store"});
@@ -4796,16 +4816,33 @@ async function runBacktest(){
     setText("btWinRate",Number(d.win_rate).toFixed(1)+"%");
     setText("btPF",d.profit_factor==null?"--":Number(d.profit_factor).toFixed(2));
     setText("btDD",Number(d.max_drawdown_percent).toFixed(2)+"%");
-    setText("btStatus",`Completed · ${d.total_trades} trades · ${d.period}`);
+    setText("btExpectancy","₹"+Number(d.expectancy_per_trade||0).toFixed(2));
+    setText("btConsec",d.max_consecutive_losses||0);
+    setText("btWait",Number(d.wait_ratio_percent||0).toFixed(1)+"%");
+    setText("btVerdict",d.verdict||"--");
+    const verdictEl=el("btVerdict");
+    if(verdictEl){
+      verdictEl.style.color=d.verdict==="PASS"?"#22d3a6":d.verdict==="CAUTION"?"#f7b84b":"#fb5b6b";
+    }
+    const ce=d.ce_stats||{},pe=d.pe_stats||{};
+    setText("btDiagnostics",
+      `Signals → CE ${d.signal_counts?.CE||0}, PE ${d.signal_counts?.PE||0}, WAIT ${d.signal_counts?.WAIT||0}. `
+      + `CE win rate ${Number(ce.win_rate||0).toFixed(1)}%, PE win rate ${Number(pe.win_rate||0).toFixed(1)}%. `
+      + `Verdict: ${d.verdict||"--"}.`
+    );
+    setText("btStatus",`Completed · ${d.total_trades} trades · ${d.period} · ${d.verdict||"--"}`);
     renderBacktestEquity(d.equity_curve||[]);
     el("btHistory").innerHTML=(d.trades||[]).slice().reverse().map(t=>`
       <tr>
         <td>${new Date(t.entry_time).toLocaleString()}</td>
         <td>${t.signal}</td>
+        <td>${Number(t.score).toFixed(2)}</td>
+        <td>${Number(t.threshold).toFixed(2)}</td>
+        <td>${t.regime}</td>
         <td>${Number(t.pnl)>=0?"+":""}₹${Number(t.pnl).toFixed(2)}</td>
         <td>${t.exit_reason}</td>
         <td>₹${Number(t.capital_after).toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
-      </tr>`).join("")||'<tr><td colspan="5">No qualifying signals in this period.</td></tr>';
+      </tr>`).join("")||'<tr><td colspan="8">No qualifying signals in this period.</td></tr>';
   }catch(e){
     setText("btStatus","Error: "+e.message);
   }
@@ -5894,7 +5931,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "12.0",
+            "model_version": "12.2",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -6737,7 +6774,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "11.0",
+            "model_version": "12.2",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -6760,31 +6797,51 @@ def walk_forward_validation():
 
 
 # ============================================================
-# V12 NIFTY PROXY BACKTEST ENGINE
+# V12.2 AUDITABLE BACKTEST ENGINE
 # ============================================================
 
-def _v12_backtest_signal_frame(period="60d", interval="15m"):
-    """
-    Chronological price-feature backtest frame.
+def _bt_classify_regime(close, ema20, ema50, atr, i):
+    try:
+        c = float(close.iloc[i])
+        e20 = float(ema20.iloc[i])
+        e50 = float(ema50.iloc[i])
+        a = float(atr.iloc[i])
+        if not all(math.isfinite(x) for x in (c, e20, e50, a)):
+            return "UNKNOWN"
+        spread = abs(e20 - e50) / c if c else 0.0
+        atr_pct = a / c if c else 0.0
+        if atr_pct >= 0.006:
+            return "HIGH VOLATILITY"
+        if spread >= 0.003:
+            return "TRENDING"
+        return "SIDEWAYS"
+    except Exception:
+        return "UNKNOWN"
 
-    IMPORTANT:
-    - Uses only data available up to each candle.
-    - This is a NIFTY directional proxy backtest.
-    - It is NOT a historical options-premium backtest.
+
+def _bt_prepare_frame(period="60d", interval="15m"):
+    """
+    Chronological price-feature replay.
+
+    This deliberately uses only current/past candle information.
+    It is still a NIFTY-direction proxy until historical option-premium
+    snapshots are available.
     """
     data = yf.Ticker("^NSEI").history(period=period, interval=interval)
-
     if data is None or data.empty or len(data) < 120:
         return pd.DataFrame()
 
     df = data.dropna(subset=["Open", "High", "Low", "Close"]).copy()
 
-    close = df["Close"].astype(float)
+    open_ = df["Open"].astype(float)
     high = df["High"].astype(float)
     low = df["Low"].astype(float)
+    close = df["Close"].astype(float)
 
     ema20 = close.ewm(span=20, adjust=False).mean()
     ema50 = close.ewm(span=50, adjust=False).mean()
+    sma20 = close.rolling(20).mean()
+    sma50 = close.rolling(50).mean()
 
     delta = close.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
@@ -6797,78 +6854,157 @@ def _v12_backtest_signal_frame(period="60d", interval="15m"):
     low14 = low.rolling(14).min()
     high14 = high.rolling(14).max()
     stochastic_k = 100 * (close - low14) / (high14 - low14).replace(0, float("nan"))
+    stochastic_d = stochastic_k.rolling(3).mean()
 
-    mean20 = close.rolling(20).mean()
-    std20 = close.rolling(20).std()
-    zscore = (close - mean20) / std20.replace(0, float("nan"))
+    bb_mid = close.rolling(20).mean()
+    bb_std = close.rolling(20).std()
+    bb_upper = bb_mid + 2 * bb_std
+    bb_lower = bb_mid - 2 * bb_std
+    bb_percent_b = (close - bb_lower) / (bb_upper - bb_lower).replace(0, float("nan"))
 
-    ret3 = close.pct_change(3)
-    ret6 = close.pct_change(6)
-
-    previous_close = close.shift(1)
+    prev_close = close.shift(1)
     tr = pd.concat(
         [
             high - low,
-            (high - previous_close).abs(),
-            (low - previous_close).abs()
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
         ],
         axis=1
     ).max(axis=1)
     atr = tr.rolling(14).mean()
 
+    mean20 = close.rolling(20).mean()
+    std20 = close.rolling(20).std()
+    zscore = (close - mean20) / std20.replace(0, float("nan"))
+
+    ret1 = close.pct_change(1)
+    ret3 = close.pct_change(3)
+    ret6 = close.pct_change(6)
+    rolling_vol = ret1.rolling(20).std()
+
     score = (
-        ((close > ema20).astype(float) * 2 - 1) * 0.20
-        + ((ema20 > ema50).astype(float) * 2 - 1) * 0.18
-        + ((rsi - 50) / 20).clip(-1, 1) * 0.14
-        + ((macd - macd_signal) / close * 250).clip(-1, 1) * 0.14
-        + ((stochastic_k - 50) / 40).clip(-1, 1) * 0.08
-        + (zscore / 2).clip(-1, 1) * 0.12
+        ((close > ema20).astype(float) * 2 - 1) * 0.16
+        + ((ema20 > ema50).astype(float) * 2 - 1) * 0.15
+        + ((sma20 > sma50).astype(float) * 2 - 1) * 0.08
+        + ((rsi - 50) / 20).clip(-1, 1) * 0.12
+        + ((macd - macd_signal) / close * 250).clip(-1, 1) * 0.12
+        + ((stochastic_k - stochastic_d) / 20).clip(-1, 1) * 0.07
+        + ((bb_percent_b - 0.5) / 0.5).clip(-1, 1) * 0.06
+        + (zscore / 2).clip(-1, 1) * 0.10
         + (ret3 / 0.006).clip(-1, 1) * 0.07
         + (ret6 / 0.010).clip(-1, 1) * 0.07
     ).clip(-1, 1)
 
     out = pd.DataFrame({
-        "open": df["Open"].astype(float),
+        "open": open_,
         "high": high,
         "low": low,
         "close": close,
+        "ema20": ema20,
+        "ema50": ema50,
+        "rsi": rsi,
+        "macd": macd,
+        "macd_signal": macd_signal,
+        "stoch_k": stochastic_k,
+        "stoch_d": stochastic_d,
+        "bb_percent_b": bb_percent_b,
         "atr": atr,
-        "score": score
-    })
+        "zscore": zscore,
+        "ret1": ret1,
+        "ret3": ret3,
+        "ret6": ret6,
+        "rolling_vol": rolling_vol,
+        "score": score,
+    }).dropna().copy()
 
-    return out.dropna().copy()
+    regimes = []
+    for i in range(len(out)):
+        regimes.append(
+            _bt_classify_regime(
+                out["close"],
+                out["ema20"],
+                out["ema50"],
+                out["atr"],
+                i
+            )
+        )
+    out["regime"] = regimes
+
+    # Time context
+    times = out.index
+    out["hour"] = [ts.hour for ts in times]
+    out["minute"] = [ts.minute for ts in times]
+    out["weekday"] = [ts.strftime("%A") for ts in times]
+
+    return out
 
 
-def _v12_run_proxy_backtest(
+def _bt_wait_reason(row, threshold):
+    reasons = []
+    score = float(row["score"])
+
+    if abs(score) < threshold:
+        reasons.append(
+            f"score {score:.2f} below threshold {threshold:.2f}"
+        )
+
+    if row["regime"] == "SIDEWAYS":
+        reasons.append("sideways regime")
+
+    if float(row["rolling_vol"]) > 0.005:
+        reasons.append("elevated short-term volatility")
+
+    if not reasons:
+        reasons.append("no directional confirmation")
+
+    return "; ".join(reasons)
+
+
+def _bt_trade_verdict(metrics):
+    pf = metrics.get("profit_factor")
+    dd = abs(float(metrics.get("max_drawdown_percent", 0) or 0))
+    expectancy = float(metrics.get("expectancy_per_trade", 0) or 0)
+
+    if pf is None:
+        return "INSUFFICIENT DATA"
+
+    if pf >= 1.30 and expectancy > 0 and dd <= 20:
+        return "PASS"
+
+    if pf >= 1.0 and expectancy >= 0 and dd <= 30:
+        return "CAUTION"
+
+    return "FAIL"
+
+
+def _v12_2_run_audited_backtest(
     starting_capital=100000.0,
     period="60d",
     threshold=0.30,
     risk_per_trade=0.02,
     reward_risk=1.5,
-    compounding=True
+    compounding=True,
+    fee_per_trade=40.0,
+    slippage_points=2.0
 ):
     """
-    Simulate a capital curve from the v12 price-direction proxy.
+    Auditable NIFTY proxy replay.
 
-    Entry:
-      - bullish score >= threshold => CE proxy / long NIFTY direction
-      - bearish score <= -threshold => PE proxy / short NIFTY direction
-
-    Exit:
-      - stop = 1 ATR
-      - target = reward_risk * ATR
-      - max holding = 6 candles
-      - only one position at a time
-
-    Capital impact:
-      Each trade risks risk_per_trade of current capital (or starting capital
-      when compounding is disabled). This avoids pretending we have historical
-      option premiums when we do not.
+    Improvements over v12:
+    - explicit CE / PE / WAIT counts
+    - every trade has signal reason, regime, score and confidence proxy
+    - fees/slippage
+    - consecutive losses
+    - expectancy
+    - CE/PE split
+    - regime split
+    - PASS/CAUTION/FAIL verdict
+    - one position at a time
     """
     capital = float(starting_capital)
     initial_capital = float(starting_capital)
 
-    df = _v12_backtest_signal_frame(period=period, interval="15m")
+    df = _bt_prepare_frame(period=period, interval="15m")
     if df.empty:
         return {
             "status": "error",
@@ -6881,22 +7017,46 @@ def _v12_run_proxy_backtest(
         "equity": round(capital, 2)
     }]
 
-    i = 0
+    signal_counts = {"CE": 0, "PE": 0, "WAIT": 0}
+    wait_reasons = {}
     max_hold = 6
+    i = 0
 
     while i < len(df) - 2:
         row = df.iloc[i]
         score = float(row["score"])
+        regime = str(row["regime"])
+
+        dynamic_threshold = float(threshold)
+        if regime == "HIGH VOLATILITY":
+            dynamic_threshold += 0.05
+        elif regime == "SIDEWAYS":
+            dynamic_threshold += 0.03
+
+        # Closing/opening periods are more selective.
+        hour = int(row["hour"])
+        minute = int(row["minute"])
+        if hour == 9 and minute <= 45:
+            dynamic_threshold += 0.03
+        if hour >= 14 and minute >= 45:
+            dynamic_threshold += 0.03
+
+        dynamic_threshold = min(0.60, dynamic_threshold)
 
         side = None
-        if score >= threshold:
+        if score >= dynamic_threshold:
             side = "CE"
-        elif score <= -threshold:
+        elif score <= -dynamic_threshold:
             side = "PE"
 
         if side is None:
+            signal_counts["WAIT"] += 1
+            reason = _bt_wait_reason(row, dynamic_threshold)
+            wait_reasons[reason] = wait_reasons.get(reason, 0) + 1
             i += 1
             continue
+
+        signal_counts[side] += 1
 
         entry = float(row["close"])
         atr = float(row["atr"])
@@ -6904,12 +7064,15 @@ def _v12_run_proxy_backtest(
             i += 1
             continue
 
+        # Slippage worsens entry in the direction of trade.
         if side == "CE":
-            stop = entry - atr
-            target = entry + atr * reward_risk
+            simulated_entry = entry + slippage_points
+            stop = simulated_entry - atr
+            target = simulated_entry + atr * reward_risk
         else:
-            stop = entry + atr
-            target = entry - atr * reward_risk
+            simulated_entry = entry - slippage_points
+            stop = simulated_entry + atr
+            target = simulated_entry - atr * reward_risk
 
         exit_price = None
         exit_reason = "TIME"
@@ -6919,7 +7082,6 @@ def _v12_run_proxy_backtest(
             future = df.iloc[j]
 
             if side == "CE":
-                # Conservative ordering if both SL and target are crossed inside one bar.
                 if float(future["low"]) <= stop:
                     exit_price = stop
                     exit_reason = "STOP"
@@ -6943,35 +7105,63 @@ def _v12_run_proxy_backtest(
                     break
 
         if exit_price is None:
-            exit_price = float(df.iloc[exit_idx]["close"])
+            raw_exit = float(df.iloc[exit_idx]["close"])
+            exit_price = (
+                raw_exit - slippage_points
+                if side == "CE"
+                else raw_exit + slippage_points
+            )
 
         direction_points = (
-            exit_price - entry
+            exit_price - simulated_entry
             if side == "CE"
-            else entry - exit_price
+            else simulated_entry - exit_price
         )
 
         risk_points = atr
-        r_multiple = direction_points / risk_points if risk_points else 0.0
+        r_multiple = (
+            direction_points / risk_points
+            if risk_points
+            else 0.0
+        )
 
         risk_base = capital if compounding else initial_capital
         risk_amount = max(0.0, risk_base * float(risk_per_trade))
-        pnl = risk_amount * r_multiple
-        capital += pnl
+        gross_pnl = risk_amount * r_multiple
+        net_pnl = gross_pnl - float(fee_per_trade)
+        capital += net_pnl
+
+        confidence_proxy = min(
+            99.0,
+            max(
+                0.0,
+                abs(score) / max(dynamic_threshold, 0.01) * 70.0
+            )
+        )
 
         trade = {
             "entry_time": df.index[i].isoformat(),
             "exit_time": df.index[exit_idx].isoformat(),
             "signal": side,
             "score": round(score, 3),
-            "entry": round(entry, 2),
+            "threshold": round(dynamic_threshold, 3),
+            "confidence_proxy": round(confidence_proxy, 1),
+            "regime": regime,
+            "weekday": str(row["weekday"]),
+            "entry": round(simulated_entry, 2),
             "stop": round(stop, 2),
             "target": round(target, 2),
             "exit": round(exit_price, 2),
             "exit_reason": exit_reason,
             "r_multiple": round(r_multiple, 3),
-            "pnl": round(pnl, 2),
-            "capital_after": round(capital, 2)
+            "gross_pnl": round(gross_pnl, 2),
+            "fees": round(float(fee_per_trade), 2),
+            "pnl": round(net_pnl, 2),
+            "capital_after": round(capital, 2),
+            "reason": (
+                f"{side} because score {score:.2f} cleared "
+                f"risk-adjusted threshold {dynamic_threshold:.2f}"
+            )
         }
         trades.append(trade)
 
@@ -6980,14 +7170,15 @@ def _v12_run_proxy_backtest(
             "equity": round(capital, 2)
         })
 
+        # one open position at a time
         i = exit_idx + 1
 
     wins = [t for t in trades if t["pnl"] > 0]
     losses = [t for t in trades if t["pnl"] < 0]
-
     gross_profit = sum(t["pnl"] for t in wins)
     gross_loss = abs(sum(t["pnl"] for t in losses))
 
+    # Drawdown
     peak = initial_capital
     max_drawdown = 0.0
     for point in equity_curve:
@@ -6997,15 +7188,66 @@ def _v12_run_proxy_backtest(
             drawdown = (equity - peak) / peak * 100
             max_drawdown = min(max_drawdown, drawdown)
 
+    # Consecutive losses
+    max_consecutive_losses = 0
+    current_losses = 0
+    for t in trades:
+        if t["pnl"] < 0:
+            current_losses += 1
+            max_consecutive_losses = max(
+                max_consecutive_losses,
+                current_losses
+            )
+        else:
+            current_losses = 0
+
+    # Splits
+    side_stats = {}
+    for side in ("CE", "PE"):
+        subset = [t for t in trades if t["signal"] == side]
+        side_wins = [t for t in subset if t["pnl"] > 0]
+        side_stats[side] = {
+            "trades": len(subset),
+            "wins": len(side_wins),
+            "win_rate": (
+                round(len(side_wins) / len(subset) * 100, 1)
+                if subset
+                else 0.0
+            ),
+            "net_pnl": round(sum(t["pnl"] for t in subset), 2)
+        }
+
+    regime_stats = {}
+    for regime in sorted(set(t["regime"] for t in trades)):
+        subset = [t for t in trades if t["regime"] == regime]
+        rwins = [t for t in subset if t["pnl"] > 0]
+        regime_stats[regime] = {
+            "trades": len(subset),
+            "win_rate": (
+                round(len(rwins) / len(subset) * 100, 1)
+                if subset
+                else 0.0
+            ),
+            "net_pnl": round(sum(t["pnl"] for t in subset), 2)
+        }
+
     total = len(trades)
+    total_signal_events = sum(signal_counts.values())
     return_pct = (
         (capital - initial_capital) / initial_capital * 100
-        if initial_capital else 0.0
+        if initial_capital
+        else 0.0
     )
 
-    return {
-        "status": "success",
-        "mode": "NIFTY_DIRECTION_PROXY",
+    avg_win = gross_profit / len(wins) if wins else 0.0
+    avg_loss = -gross_loss / len(losses) if losses else 0.0
+    expectancy = (
+        (sum(t["pnl"] for t in trades) / total)
+        if total
+        else 0.0
+    )
+
+    metrics = {
         "starting_capital": round(initial_capital, 2),
         "final_capital": round(capital, 2),
         "net_pnl": round(capital - initial_capital, 2),
@@ -7013,23 +7255,63 @@ def _v12_run_proxy_backtest(
         "total_trades": total,
         "wins": len(wins),
         "losses": len(losses),
-        "win_rate": round(len(wins) / total * 100, 1) if total else 0.0,
-        "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else None,
-        "average_win": round(gross_profit / len(wins), 2) if wins else 0.0,
-        "average_loss": round(-gross_loss / len(losses), 2) if losses else 0.0,
+        "win_rate": (
+            round(len(wins) / total * 100, 1)
+            if total
+            else 0.0
+        ),
+        "profit_factor": (
+            round(gross_profit / gross_loss, 2)
+            if gross_loss > 0
+            else None
+        ),
+        "average_win": round(avg_win, 2),
+        "average_loss": round(avg_loss, 2),
+        "expectancy_per_trade": round(expectancy, 2),
         "max_drawdown_percent": round(max_drawdown, 2),
+        "max_consecutive_losses": max_consecutive_losses,
+    }
+
+    metrics["verdict"] = _bt_trade_verdict(metrics)
+
+    top_wait_reasons = sorted(
+        [
+            {"reason": k, "count": v}
+            for k, v in wait_reasons.items()
+        ],
+        key=lambda x: x["count"],
+        reverse=True
+    )[:8]
+
+    return {
+        "status": "success",
+        "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
+        "model_version": "12.2",
+        **metrics,
+        "period": period,
         "threshold": round(float(threshold), 2),
         "risk_per_trade_percent": round(float(risk_per_trade) * 100, 2),
         "reward_risk": round(float(reward_risk), 2),
         "compounding": bool(compounding),
-        "period": period,
-        "trades": trades[-100:],
+        "fee_per_trade": round(float(fee_per_trade), 2),
+        "slippage_points": round(float(slippage_points), 2),
+        "signal_counts": signal_counts,
+        "wait_ratio_percent": (
+            round(signal_counts["WAIT"] / total_signal_events * 100, 1)
+            if total_signal_events
+            else 0.0
+        ),
+        "ce_stats": side_stats["CE"],
+        "pe_stats": side_stats["PE"],
+        "regime_stats": regime_stats,
+        "top_wait_reasons": top_wait_reasons,
+        "trades": trades[-200:],
         "equity_curve": equity_curve,
         "note": (
-            "This is a NIFTY directional proxy backtest using historical index candles. "
-            "It does not use historical option premiums/OI/IV because those snapshots are not available "
-            "inside this project. ₹1 lakh is therefore simulated through fixed risk-per-trade capital allocation, "
-            "not literal historical option contract purchases."
+            "Audited NIFTY directional proxy. It validates the price/statistical "
+            "signal behavior and capital/risk logic, but does not claim historical "
+            "option-contract P&L because historical option premiums/OI/IV snapshots "
+            "are not available in this project."
         )
     }
 
@@ -7041,23 +7323,37 @@ def run_backtest(
     threshold: float = 0.30,
     risk_per_trade: float = 0.02,
     reward_risk: float = 1.5,
-    compounding: bool = True
+    compounding: bool = True,
+    fee_per_trade: float = 40.0,
+    slippage_points: float = 2.0
 ):
     allowed_periods = {"30d", "60d"}
     if period not in allowed_periods:
         period = "60d"
 
-    starting_capital = max(10000.0, min(float(starting_capital), 10000000.0))
+    starting_capital = max(
+        10000.0,
+        min(float(starting_capital), 10000000.0)
+    )
     threshold = max(0.15, min(float(threshold), 0.60))
-    risk_per_trade = max(0.0025, min(float(risk_per_trade), 0.10))
-    reward_risk = max(0.8, min(float(reward_risk), 3.0))
+    risk_per_trade = max(
+        0.0025,
+        min(float(risk_per_trade), 0.10)
+    )
+    reward_risk = max(
+        0.8,
+        min(float(reward_risk), 3.0)
+    )
+    fee_per_trade = max(0.0, min(float(fee_per_trade), 5000.0))
+    slippage_points = max(0.0, min(float(slippage_points), 50.0))
 
-    return _v12_run_proxy_backtest(
+    return _v12_2_run_audited_backtest(
         starting_capital=starting_capital,
         period=period,
         threshold=threshold,
         risk_per_trade=risk_per_trade,
         reward_risk=reward_risk,
-        compounding=compounding
+        compounding=compounding,
+        fee_per_trade=fee_per_trade,
+        slippage_points=slippage_points
     )
-
