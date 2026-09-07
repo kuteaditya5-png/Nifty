@@ -33,7 +33,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "8.0",
+        "version": "11.0",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -387,63 +387,105 @@ def news_analysis():
 
 
 def calculate_technical_indicators(data):
-    close = data["Close"]
+    """
+    Price-only technical feature block.
+    All values are calculated from the supplied historical frame only.
+    """
+    clean = data.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+    close = clean["Close"].astype(float)
+    high = clean["High"].astype(float)
+    low = clean["Low"].astype(float)
 
-    # EMA
+    # EMA / SMA
     ema_20 = close.ewm(span=20, adjust=False).mean()
     ema_50 = close.ewm(span=50, adjust=False).mean()
+    sma_20 = close.rolling(20).mean()
+    sma_50 = close.rolling(50).mean()
 
     # RSI
     delta = close.diff()
-
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
-
-    rs = avg_gain / avg_loss
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
     rsi = 100 - (100 / (1 + rs))
 
     # MACD
     ema_12 = close.ewm(span=12, adjust=False).mean()
     ema_26 = close.ewm(span=26, adjust=False).mean()
-
     macd = ema_12 - ema_26
-    signal = macd.ewm(span=9, adjust=False).mean()
+    macd_signal = macd.ewm(span=9, adjust=False).mean()
 
-    latest_close = float(close.iloc[-1])
-    latest_ema20 = float(ema_20.iloc[-1])
-    latest_ema50 = float(ema_50.iloc[-1])
-    latest_rsi = float(rsi.iloc[-1])
-    latest_macd = float(macd.iloc[-1])
-    latest_signal = float(signal.iloc[-1])
+    # Stochastic
+    lowest_14 = low.rolling(14).min()
+    highest_14 = high.rolling(14).max()
+    stochastic_k = 100 * (close - lowest_14) / (highest_14 - lowest_14).replace(0, float("nan"))
+    stochastic_d = stochastic_k.rolling(3).mean()
 
-    technical_score = 0
+    # Bollinger Bands
+    bb_mid = close.rolling(20).mean()
+    bb_std = close.rolling(20).std()
+    bb_upper = bb_mid + 2 * bb_std
+    bb_lower = bb_mid - 2 * bb_std
+    bb_width = (bb_upper - bb_lower) / bb_mid.replace(0, float("nan")) * 100
+    bb_percent_b = (close - bb_lower) / (bb_upper - bb_lower).replace(0, float("nan"))
 
-    if latest_close > latest_ema20:
-        technical_score += 1
-    else:
-        technical_score -= 1
+    # ATR
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs()
+        ],
+        axis=1
+    ).max(axis=1)
+    atr_14 = true_range.rolling(14).mean()
 
-    if latest_ema20 > latest_ema50:
-        technical_score += 1
-    else:
-        technical_score -= 1
+    latest_close = _safe_float(close.iloc[-1], 0.0)
+    latest_ema20 = _safe_float(ema_20.iloc[-1], latest_close)
+    latest_ema50 = _safe_float(ema_50.iloc[-1], latest_close)
+    latest_sma20 = _safe_float(sma_20.iloc[-1], latest_close)
+    latest_sma50 = _safe_float(sma_50.iloc[-1], latest_close)
+    latest_rsi = _safe_float(rsi.iloc[-1], 50.0)
+    latest_macd = _safe_float(macd.iloc[-1], 0.0)
+    latest_signal = _safe_float(macd_signal.iloc[-1], 0.0)
+    latest_stoch_k = _safe_float(stochastic_k.iloc[-1], 50.0)
+    latest_stoch_d = _safe_float(stochastic_d.iloc[-1], 50.0)
+    latest_bb_width = _safe_float(bb_width.iloc[-1], None)
+    latest_percent_b = _safe_float(bb_percent_b.iloc[-1], 0.5)
+    latest_atr = _safe_float(atr_14.iloc[-1], None)
 
-    if latest_rsi > 55:
-        technical_score += 1
-    elif latest_rsi < 45:
-        technical_score -= 1
+    technical_score = 0.0
 
-    if latest_macd > latest_signal:
-        technical_score += 1
-    else:
-        technical_score -= 1
+    technical_score += 1.0 if latest_close > latest_ema20 else -1.0
+    technical_score += 1.0 if latest_ema20 > latest_ema50 else -1.0
+    technical_score += 0.5 if latest_sma20 > latest_sma50 else -0.5
 
-    if technical_score >= 2:
+    if latest_rsi > 58:
+        technical_score += 0.8
+    elif latest_rsi < 42:
+        technical_score -= 0.8
+
+    technical_score += 0.8 if latest_macd > latest_signal else -0.8
+
+    if latest_stoch_k > latest_stoch_d and latest_stoch_k < 85:
+        technical_score += 0.5
+    elif latest_stoch_k < latest_stoch_d and latest_stoch_k > 15:
+        technical_score -= 0.5
+
+    if latest_percent_b >= 0.80:
+        technical_score += 0.4
+    elif latest_percent_b <= 0.20:
+        technical_score -= 0.4
+
+    max_score = 5.0
+    normalized_score = max(-1.0, min(1.0, technical_score / max_score))
+
+    if normalized_score >= 0.28:
         technical_bias = "BULLISH"
-    elif technical_score <= -2:
+    elif normalized_score <= -0.28:
         technical_bias = "BEARISH"
     else:
         technical_bias = "NEUTRAL"
@@ -452,10 +494,18 @@ def calculate_technical_indicators(data):
         "close": round(latest_close, 2),
         "ema_20": round(latest_ema20, 2),
         "ema_50": round(latest_ema50, 2),
+        "sma_20": round(latest_sma20, 2),
+        "sma_50": round(latest_sma50, 2),
         "rsi_14": round(latest_rsi, 2),
-        "macd": round(latest_macd, 2),
-        "macd_signal": round(latest_signal, 2),
-        "technical_score": technical_score,
+        "macd": round(latest_macd, 3),
+        "macd_signal": round(latest_signal, 3),
+        "stochastic_k": round(latest_stoch_k, 2),
+        "stochastic_d": round(latest_stoch_d, 2),
+        "bb_width_percent": round(latest_bb_width, 3) if latest_bb_width is not None else None,
+        "bb_percent_b": round(latest_percent_b, 3),
+        "atr_14": round(latest_atr, 2) if latest_atr is not None else None,
+        "technical_score": round(technical_score, 3),
+        "technical_normalized_score": round(normalized_score, 3),
         "technical_bias": technical_bias
     }
 
@@ -2160,6 +2210,14 @@ def get_market_breadth():
                 "last_price": _safe_float(
                     row.get("lastPrice", row.get("last")),
                     None
+                ),
+                "year_high": _safe_float(
+                    row.get("yearHigh", row.get("yearHighPrice")),
+                    None
+                ),
+                "year_low": _safe_float(
+                    row.get("yearLow", row.get("yearLowPrice")),
+                    None
                 )
             })
 
@@ -2178,13 +2236,32 @@ def get_market_breadth():
             if members else 0.0
         )
 
+        new_highs = 0
+        new_lows = 0
+        for item in members:
+            last_price = item.get("last_price")
+            year_high = item.get("year_high")
+            year_low = item.get("year_low")
+            if last_price is None:
+                continue
+            if year_high and last_price >= year_high * 0.998:
+                new_highs += 1
+            if year_low and last_price <= year_low * 1.002:
+                new_lows += 1
+
+        high_low_score = (
+            (new_highs - new_lows) / len(members)
+            if members else 0.0
+        )
+
         avg_change = sum(item["change_percent"] for item in members) / len(members)
         average_momentum_score = max(-1.0, min(1.0, avg_change / 0.75))
 
         # Participation is more important than a few large movers.
         breadth_score = (
-            participation_score * 0.75
+            participation_score * 0.65
             + average_momentum_score * 0.25
+            + high_low_score * 0.10
         )
         breadth_score = max(-1.0, min(1.0, breadth_score))
 
@@ -2205,6 +2282,8 @@ def get_market_breadth():
             "advances": advances,
             "declines": declines,
             "unchanged": unchanged,
+            "new_52w_highs": new_highs,
+            "new_52w_lows": new_lows,
             "advance_decline_ratio": round(
                 advances / declines if declines else float(advances),
                 3
@@ -2505,6 +2584,370 @@ def get_premarket_analysis(market_data=None):
     }
 
 
+
+_CONTEXT_CACHE = {}
+
+
+def _cached_market_snapshot(symbol, name, ttl_seconds=300):
+    now = datetime.now().timestamp()
+    cached = _CONTEXT_CACHE.get(symbol)
+    if cached and (now - cached["ts"]) < ttl_seconds:
+        return cached["value"]
+
+    value = get_ticker_snapshot(symbol, name)
+    _CONTEXT_CACHE[symbol] = {"ts": now, "value": value}
+    return value
+
+
+def calculate_statistical_features(data):
+    """
+    Normalized return / volatility features from completed candles only.
+    This reduces dependence on the absolute NIFTY level.
+    """
+    neutral = {
+        "status": "unavailable",
+        "score": 0.0,
+        "bias": "NEUTRAL"
+    }
+    clean = _completed_intraday_frame(data, interval_minutes=5)
+    if clean.empty or len(clean) < 35:
+        return neutral
+
+    try:
+        close = clean["Close"].astype(float)
+        returns = close.pct_change()
+        log_returns = (close / close.shift(1)).apply(
+            lambda x: math.log(x) if x is not None and x > 0 else float("nan")
+        )
+
+        ret_1 = _safe_float(returns.iloc[-1], 0.0)
+        ret_3 = _safe_float(close.pct_change(3).iloc[-1], 0.0)
+        ret_6 = _safe_float(close.pct_change(6).iloc[-1], 0.0)
+
+        rolling_mean = close.rolling(20).mean()
+        rolling_std = close.rolling(20).std()
+        zscore = _safe_float(
+            ((close - rolling_mean) / rolling_std.replace(0, float("nan"))).iloc[-1],
+            0.0
+        )
+
+        vol_20 = _safe_float(returns.rolling(20).std().iloc[-1], 0.0)
+        # Annualized 5m realized volatility: about 75 five-minute bars/session.
+        realized_vol = vol_20 * math.sqrt(75 * 252) * 100
+
+        score = (
+            max(-1.0, min(1.0, ret_3 / 0.004)) * 0.35
+            + max(-1.0, min(1.0, ret_6 / 0.006)) * 0.30
+            + max(-1.0, min(1.0, zscore / 2.0)) * 0.25
+            + max(-1.0, min(1.0, ret_1 / 0.0015)) * 0.10
+        )
+        score = max(-1.0, min(1.0, score))
+
+        return {
+            "status": "success",
+            "score": round(score, 3),
+            "bias": _score_to_bias(score),
+            "return_1": round(ret_1 * 100, 4),
+            "return_3": round(ret_3 * 100, 4),
+            "return_6": round(ret_6 * 100, 4),
+            "log_return_1": round(_safe_float(log_returns.iloc[-1], 0.0), 6),
+            "rolling_volatility_20": round(vol_20 * 100, 4),
+            "realized_vol_annualized": round(realized_vol, 2),
+            "price_zscore_20": round(zscore, 3)
+        }
+    except Exception as e:
+        return {**neutral, "message": str(e)}
+
+
+def calculate_volume_features(data):
+    """
+    Relative volume, OBV trend and VWAP deviation.
+    If index volume is missing/zero, the layer is excluded rather than fabricated.
+    """
+    neutral = {
+        "status": "unavailable",
+        "score": 0.0,
+        "bias": "NEUTRAL"
+    }
+    clean = _completed_intraday_frame(data, interval_minutes=5)
+    if clean.empty or "Volume" not in clean.columns or len(clean) < 25:
+        return neutral
+
+    try:
+        volume = pd.to_numeric(clean["Volume"], errors="coerce").fillna(0.0)
+        if volume.tail(20).sum() <= 0:
+            return {**neutral, "message": "NIFTY index volume is unavailable/zero."}
+
+        close = clean["Close"].astype(float)
+        high = clean["High"].astype(float)
+        low = clean["Low"].astype(float)
+
+        avg_volume = volume.rolling(20).mean()
+        relative_volume = _safe_float(
+            volume.iloc[-1] / avg_volume.iloc[-1]
+            if _safe_float(avg_volume.iloc[-1], 0) > 0
+            else None,
+            None
+        )
+
+        direction = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+        obv = (direction * volume).fillna(0).cumsum()
+        obv_change = _safe_float(obv.diff(5).iloc[-1], 0.0)
+        obv_scale = max(1.0, float(volume.tail(20).mean()) * 5.0)
+        obv_score = max(-1.0, min(1.0, obv_change / obv_scale))
+
+        latest_date = clean.index[-1].date()
+        session = clean[pd.Index(clean.index.date) == latest_date].copy()
+        session_vol = pd.to_numeric(session["Volume"], errors="coerce").fillna(0.0)
+        typical = (
+            session["High"].astype(float)
+            + session["Low"].astype(float)
+            + session["Close"].astype(float)
+        ) / 3.0
+        cum_vol = session_vol.cumsum()
+        vwap_series = (typical * session_vol).cumsum() / cum_vol.replace(0, float("nan"))
+        vwap = _safe_float(vwap_series.iloc[-1], None)
+        last_close = float(close.iloc[-1])
+        vwap_dev = (
+            (last_close - vwap) / vwap * 100
+            if vwap not in (None, 0)
+            else None
+        )
+        vwap_score = (
+            max(-1.0, min(1.0, vwap_dev / 0.30))
+            if vwap_dev is not None
+            else 0.0
+        )
+
+        rv_modifier = 1.0
+        if relative_volume is not None:
+            rv_modifier = max(0.55, min(1.35, relative_volume))
+
+        score = (obv_score * 0.55 + vwap_score * 0.45) * rv_modifier
+        score = max(-1.0, min(1.0, score))
+
+        return {
+            "status": "success",
+            "score": round(score, 3),
+            "bias": _score_to_bias(score),
+            "relative_volume_20": round(relative_volume, 3) if relative_volume is not None else None,
+            "obv_5bar_change": round(obv_change, 2),
+            "vwap": round(vwap, 2) if vwap is not None else None,
+            "vwap_deviation_percent": round(vwap_dev, 3) if vwap_dev is not None else None
+        }
+    except Exception as e:
+        return {**neutral, "message": str(e)}
+
+
+def get_cross_asset_context():
+    """
+    Additional context not present in the earlier global block:
+    Bank Nifty, DXY, US 10Y yield and an EM proxy (EEM).
+    """
+    try:
+        bank = _cached_market_snapshot("^NSEBANK", "Bank Nifty")
+        dxy = _cached_market_snapshot("DX-Y.NYB", "US Dollar Index")
+        us10y = _cached_market_snapshot("^TNX", "US 10Y Yield")
+        eem = _cached_market_snapshot("EEM", "Emerging Markets ETF")
+
+        bank_score = float(bank.get("score", 0) or 0)
+        dxy_score = -float(dxy.get("score", 0) or 0)
+        yield_score = -float(us10y.get("score", 0) or 0)
+        em_score = float(eem.get("score", 0) or 0)
+
+        score = (
+            bank_score * 0.45
+            + dxy_score * 0.20
+            + yield_score * 0.15
+            + em_score * 0.20
+        )
+        score = max(-1.0, min(1.0, score))
+
+        available = sum(
+            1 for item in (bank, dxy, us10y, eem)
+            if item.get("status") == "success"
+        )
+        if available < 2:
+            return {
+                "status": "unavailable",
+                "score": 0.0,
+                "bias": "NEUTRAL",
+                "markets": {
+                    "bank_nifty": bank,
+                    "dxy": dxy,
+                    "us_10y": us10y,
+                    "em_proxy": eem
+                }
+            }
+
+        return {
+            "status": "success",
+            "score": round(score, 3),
+            "bias": _score_to_bias(score),
+            "markets": {
+                "bank_nifty": bank,
+                "dxy": dxy,
+                "us_10y": us10y,
+                "em_proxy": eem
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "unavailable",
+            "score": 0.0,
+            "bias": "NEUTRAL",
+            "message": str(e)
+        }
+
+
+def calculate_vix_dynamics():
+    neutral = {
+        "status": "unavailable",
+        "value": None,
+        "change_percent": None,
+        "risk": "UNKNOWN"
+    }
+    try:
+        data = yf.Ticker("^INDIAVIX").history(period="5d", interval="15m")
+        if data.empty or len(data) < 2:
+            return neutral
+
+        close = data["Close"].dropna().astype(float)
+        latest = float(close.iloc[-1])
+
+        dates = pd.Index(close.index.date)
+        latest_date = dates[-1]
+        current = close[dates == latest_date]
+        previous = close[dates < latest_date]
+        reference = (
+            float(previous.iloc[-1])
+            if not previous.empty
+            else float(close.iloc[-2])
+        )
+        change_percent = (latest - reference) / reference * 100 if reference else 0.0
+
+        if latest < 12:
+            risk = "LOW"
+        elif latest < 18:
+            risk = "MEDIUM"
+        elif latest < 25:
+            risk = "HIGH"
+        else:
+            risk = "VERY HIGH"
+
+        return {
+            "status": "success",
+            "value": round(latest, 2),
+            "change_percent": round(change_percent, 3),
+            "risk": risk,
+            "rising_fast": change_percent >= 5.0
+        }
+    except Exception as e:
+        return {**neutral, "message": str(e)}
+
+
+def _parse_env_date_list(name):
+    raw = os.getenv(name, "")
+    result = set()
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            result.add(datetime.strptime(item, "%Y-%m-%d").date())
+        except Exception:
+            continue
+    return result
+
+
+def calculate_time_event_context(option_expiry=None):
+    """
+    Time / expiry / event risk layer.
+    Optional environment variables:
+      NIFTY_EVENT_DATES=2026-09-30,2026-10-07
+      NIFTY_HOLIDAY_DATES=2026-10-02,2026-11-09
+    """
+    now = datetime.now()
+    today = now.date()
+    minute = now.hour * 60 + now.minute
+
+    if minute < 9 * 60 + 45:
+        session_phase = "OPENING VOLATILITY"
+        risk_penalty = 0.10
+    elif minute >= 14 * 60 + 45:
+        session_phase = "CLOSING VOLATILITY"
+        risk_penalty = 0.08
+    elif 11 * 60 + 30 <= minute <= 13 * 60 + 30:
+        session_phase = "MIDDAY / LOWER ACTIVITY"
+        risk_penalty = 0.03
+    else:
+        session_phase = "NORMAL SESSION"
+        risk_penalty = 0.0
+
+    expiry_day = False
+    if option_expiry:
+        try:
+            expiry_day = datetime.strptime(
+                str(option_expiry), "%d-%b-%Y"
+            ).date() == today
+        except Exception:
+            pass
+
+    event_dates = _parse_env_date_list("NIFTY_EVENT_DATES")
+    holiday_dates = _parse_env_date_list("NIFTY_HOLIDAY_DATES")
+    event_day = today in event_dates
+    holiday_adjacent = (
+        (today + timedelta(days=1)) in holiday_dates
+        or (today - timedelta(days=1)) in holiday_dates
+    )
+
+    if expiry_day:
+        risk_penalty += 0.08
+    if event_day:
+        risk_penalty += 0.12
+    if holiday_adjacent:
+        risk_penalty += 0.04
+
+    return {
+        "status": "success",
+        "session_phase": session_phase,
+        "day_of_week": now.strftime("%A"),
+        "expiry_day": expiry_day,
+        "event_day": event_day,
+        "holiday_adjacent": holiday_adjacent,
+        "risk_penalty": round(min(0.25, risk_penalty), 3)
+    }
+
+
+def calculate_realized_implied_vol_spread(statistics_data, option_data):
+    realized = _safe_float(
+        statistics_data.get("realized_vol_annualized"), None
+    )
+    implied = _safe_float(option_data.get("atm_iv"), None)
+
+    if realized is None or implied is None or implied <= 0:
+        return {
+            "status": "unavailable",
+            "realized_vol": realized,
+            "implied_vol": implied,
+            "spread": None
+        }
+
+    spread = realized - implied
+    # This is a risk/valuation context, not a direct direction predictor.
+    return {
+        "status": "success",
+        "realized_vol": round(realized, 2),
+        "implied_vol": round(implied, 2),
+        "spread": round(spread, 2),
+        "state": (
+            "REALIZED > IMPLIED"
+            if spread > 2
+            else ("IMPLIED > REALIZED" if spread < -2 else "BALANCED")
+        )
+    }
+
+
 def detect_market_regime(
     vix_value,
     technical_score,
@@ -2555,7 +2998,10 @@ def detect_market_regime(
         "breadth": 1.0,
         "futures": 1.0,
         "premarket": 1.0,
-        "price_action": 1.0
+        "price_action": 1.0,
+        "statistics": 1.0,
+        "volume": 1.0,
+        "cross_asset": 1.0
     }
 
     if regime == "TRENDING":
@@ -2567,7 +3013,10 @@ def detect_market_regime(
             "futures": 1.15,
             "option_chain": 0.90,
             "news": 0.85,
-            "price_action": 1.30
+            "price_action": 1.30,
+            "statistics": 1.20,
+            "volume": 1.15,
+            "cross_asset": 1.10
         })
     elif regime == "RANGE / MEAN-REVERTING":
         multipliers.update({
@@ -2577,7 +3026,10 @@ def detect_market_regime(
             "candlestick": 0.90,
             "premarket": 0.80,
             "futures": 0.90,
-            "price_action": 0.75
+            "price_action": 0.75,
+            "statistics": 0.90,
+            "volume": 0.90,
+            "cross_asset": 0.90
         })
     elif regime == "EVENT / HIGH VOLATILITY":
         multipliers.update({
@@ -2588,7 +3040,10 @@ def detect_market_regime(
             "technical": 0.85,
             "candlestick": 0.80,
             "momentum": 0.80,
-            "price_action": 0.80
+            "price_action": 0.80,
+            "statistics": 0.85,
+            "volume": 1.10,
+            "cross_asset": 1.15
         })
 
     return {
@@ -3957,6 +4412,10 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
         <div class="insight-row"><span>FII / DII</span><span id="insFlow">--</span></div>
         <div class="insight-row"><span>Option Chain</span><span id="insOption">--</span></div>
         <div class="insight-row"><span>News</span><span id="insNews">--</span></div>
+        <div class="insight-row"><span>Statistics</span><span id="insStats">--</span></div>
+        <div class="insight-row"><span>Volume</span><span id="insVolume">--</span></div>
+        <div class="insight-row"><span>Cross Asset</span><span id="insCross">--</span></div>
+        <div class="insight-row"><span>Time / Event</span><span id="insTime">--</span></div>
       </div>
 
       <div class="card sidecard summary-card">
@@ -4065,6 +4524,11 @@ function renderPrediction(data){
   setText("insRsi",tech.rsi_14!=null?`${fmt(tech.rsi_14,1)} (${tech.bias||"--"})`:"--");
   setText("insMacd",tech.macd!=null&&tech.macd_signal!=null?(Number(tech.macd)>Number(tech.macd_signal)?"Bullish crossover":"Bearish crossover"):"--");
   setText("insFlow",flow.bias||"--");setText("insOption",oc.bias||"--");setText("insNews",news.bias||"--");
+  const stats=s.statistics||{},vol=s.volume||{},cross=s.cross_asset||{},tc=s.time_event_context||{};
+  setText("insStats",stats.status==="success"?`${stats.bias||"--"} · Z ${stats.price_zscore_20??"--"}`:"--");
+  setText("insVolume",vol.status==="success"?`${vol.bias||"--"} · RV ${vol.relative_volume_20??"--"}`:"Unavailable");
+  setText("insCross",cross.bias||"--");
+  setText("insTime",`${tc.session_phase||"--"}${tc.expiry_day?" · EXPIRY":""}${tc.event_day?" · EVENT":""}`);
   notifySignal(setup,reason);
 }
 
@@ -4825,7 +5289,9 @@ def prediction(include_alerts: bool = False):
         # -----------------------------
         technical_data = calculate_technical_indicators(market_data)
         technical_raw_score = technical_data["technical_score"]
-        technical_score = max(-1.0, min(1.0, technical_raw_score / 4.0))
+        technical_score = float(
+            technical_data.get("technical_normalized_score", 0) or 0
+        )
 
         # -----------------------------
         # 3. NEWS ANALYSIS
@@ -4854,24 +5320,12 @@ def prediction(include_alerts: bool = False):
         news_bias = _score_to_bias(news_score)
 
         # -----------------------------
-        # 4. INDIA VIX
+        # 4. INDIA VIX + CHANGE
         # -----------------------------
-        try:
-            vix_data = yf.Ticker("^INDIAVIX").history(period="5d", interval="5m")
-            vix_value = float(vix_data["Close"].iloc[-1]) if not vix_data.empty else None
-        except Exception:
-            vix_value = None
-
-        if vix_value is None:
-            vix_risk = "UNKNOWN"
-        elif vix_value < 12:
-            vix_risk = "LOW"
-        elif vix_value < 18:
-            vix_risk = "MEDIUM"
-        elif vix_value < 25:
-            vix_risk = "HIGH"
-        else:
-            vix_risk = "VERY HIGH"
+        vix_data_live = calculate_vix_dynamics()
+        vix_value = vix_data_live.get("value")
+        vix_risk = vix_data_live.get("risk", "UNKNOWN")
+        vix_change_percent = vix_data_live.get("change_percent")
 
         # -----------------------------
 # 5. GLOBAL MARKET ANALYSIS
@@ -4939,7 +5393,46 @@ def prediction(include_alerts: bool = False):
         premarket_score = float(premarket_data.get("premarket_score", 0) or 0)
 
         # -----------------------------
-        # 13. MARKET-REGIME DETECTION
+        # 13. NORMALIZED STATISTICAL FEATURES
+        # -----------------------------
+        statistics_data = calculate_statistical_features(market_data)
+        statistics_available = statistics_data.get("status") == "success"
+        statistics_score = float(statistics_data.get("score", 0) or 0)
+
+        # -----------------------------
+        # 14. VOLUME / OBV / VWAP FEATURES
+        # -----------------------------
+        volume_data = calculate_volume_features(market_data)
+        volume_available = volume_data.get("status") == "success"
+        volume_score = float(volume_data.get("score", 0) or 0)
+
+        # -----------------------------
+        # 15. CROSS-ASSET / SECTOR CONTEXT
+        # -----------------------------
+        cross_asset_data = get_cross_asset_context()
+        cross_asset_available = cross_asset_data.get("status") == "success"
+        cross_asset_score = float(cross_asset_data.get("score", 0) or 0)
+
+        # -----------------------------
+        # 16. TIME / EXPIRY / EVENT CONTEXT
+        # -----------------------------
+        time_context_data = calculate_time_event_context(
+            option_expiry=option_data.get("expiry")
+        )
+        event_risk_penalty = float(
+            time_context_data.get("risk_penalty", 0) or 0
+        )
+
+        # -----------------------------
+        # 17. REALIZED vs IMPLIED VOLATILITY
+        # -----------------------------
+        vol_spread_data = calculate_realized_implied_vol_spread(
+            statistics_data,
+            option_data
+        )
+
+        # -----------------------------
+        # 18. MARKET-REGIME DETECTION
         # -----------------------------
         regime_data = detect_market_regime(
             vix_value=vix_value,
@@ -4950,22 +5443,25 @@ def prediction(include_alerts: bool = False):
         )
 
         # -----------------------------
-        # 14. DYNAMIC WEIGHTED MODEL
+        # 19. DYNAMIC WEIGHTED MODEL
         # -----------------------------
         # Base Version 6 live weights. Missing live sources are removed and
         # the remaining weights are automatically renormalized.
         base_weights = {
-            "technical": 0.17,
-            "price_action": 0.12,
-            "news": 0.09,
-            "global": 0.09,
-            "institutional": 0.07,
-            "option_chain": 0.18,
-            "candlestick": 0.09,
-            "momentum": 0.05,
-            "breadth": 0.07,
+            "technical": 0.13,
+            "price_action": 0.10,
+            "news": 0.07,
+            "global": 0.07,
+            "institutional": 0.06,
+            "option_chain": 0.16,
+            "candlestick": 0.07,
+            "momentum": 0.04,
+            "breadth": 0.06,
             "futures": 0.04,
-            "premarket": 0.03
+            "premarket": 0.02,
+            "statistics": 0.08,
+            "volume": 0.04,
+            "cross_asset": 0.03
         }
 
         signal_scores = {
@@ -4979,7 +5475,10 @@ def prediction(include_alerts: bool = False):
             "momentum": momentum_score,
             "breadth": breadth_score,
             "futures": futures_score,
-            "premarket": premarket_score
+            "premarket": premarket_score,
+            "statistics": statistics_score,
+            "volume": volume_score,
+            "cross_asset": cross_asset_score
         }
 
         availability = {
@@ -4993,7 +5492,10 @@ def prediction(include_alerts: bool = False):
             "momentum": True,
             "breadth": breadth_available,
             "futures": futures_available,
-            "premarket": premarket_available
+            "premarket": premarket_available,
+            "statistics": statistics_available,
+            "volume": volume_available,
+            "cross_asset": cross_asset_available
         }
 
         combined_score, effective_weights, data_coverage = blend_available_signals(
@@ -5004,7 +5506,7 @@ def prediction(include_alerts: bool = False):
         )
 
         # -----------------------------
-        # 15. PROBABILITY MODEL
+        # 20. PROBABILITY MODEL
         # -----------------------------
         direction_strength = abs(combined_score)
         sideways_probability = 45 - (direction_strength * 25)
@@ -5054,7 +5556,7 @@ def prediction(include_alerts: bool = False):
         bearish_probability = 100 - bullish_probability - sideways_probability
 
         # -----------------------------
-        # 16. PREDICTION LABEL
+        # 21. PREDICTION LABEL
         # -----------------------------
         if combined_score >= 0.60:
             prediction_label = "STRONG BULLISH"
@@ -5068,7 +5570,7 @@ def prediction(include_alerts: bool = False):
             prediction_label = "SIDEWAYS / NEUTRAL"
 
         # -----------------------------
-        # 17. CONFIDENCE
+        # 22. CONFIDENCE
         # -----------------------------
         if direction_strength >= 0.60:
             confidence = "HIGH"
@@ -5088,8 +5590,20 @@ def prediction(include_alerts: bool = False):
         elif data_coverage < 0.85 and confidence == "HIGH":
             confidence = "MEDIUM"
 
+        if event_risk_penalty >= 0.12:
+            confidence = "LOW"
+        elif event_risk_penalty >= 0.07 and confidence == "HIGH":
+            confidence = "MEDIUM"
+
+        if (
+            vix_change_percent is not None
+            and abs(float(vix_change_percent)) >= 7
+            and confidence == "HIGH"
+        ):
+            confidence = "MEDIUM"
+
         # -----------------------------
-        # 18. CONSERVATIVE F&O WATCH
+        # 23. CONSERVATIVE F&O WATCH
         # -----------------------------
         directional_confirmation = (
             breadth_score * combined_score >= 0
@@ -5104,9 +5618,14 @@ def prediction(include_alerts: bool = False):
             or not price_action_available
         )
 
+        fno_direction_threshold = 0.25 + event_risk_penalty
+        if vix_change_percent is not None and abs(float(vix_change_percent)) >= 7:
+            fno_direction_threshold += 0.03
+        fno_direction_threshold = min(0.42, fno_direction_threshold)
+
         if (
             option_available
-            and combined_score >= 0.25
+            and combined_score >= fno_direction_threshold
             and option_score >= 0.12
             and candle_score > -0.35
             and price_action_score >= -0.15
@@ -5117,7 +5636,7 @@ def prediction(include_alerts: bool = False):
             fno_setup = "CE WATCH"
         elif (
             option_available
-            and combined_score <= -0.25
+            and combined_score <= -fno_direction_threshold
             and option_score <= -0.12
             and candle_score < 0.35
             and price_action_score <= 0.15
@@ -5140,8 +5659,11 @@ def prediction(include_alerts: bool = False):
             if candle_data.get("primary_pattern") not in (None, "NO CLEAR PATTERN"):
                 setup_reasons.append("Latest completed candle: " + str(candle_data.get("primary_pattern")) + ".")
         else:
-            if abs(combined_score) < 0.25:
-                setup_reasons.append("Directional score has not reached ±0.25.")
+            if abs(combined_score) < fno_direction_threshold:
+                setup_reasons.append(
+                    "Directional score has not reached the current risk-adjusted threshold "
+                    f"±{fno_direction_threshold:.2f}."
+                )
             if not option_available:
                 setup_reasons.append("Option-chain confirmation is unavailable.")
             elif -0.12 < option_score < 0.12:
@@ -5160,7 +5682,7 @@ def prediction(include_alerts: bool = False):
         fno_setup_reason = " ".join(setup_reasons[:3]) or "Signals are mixed, so the model is waiting for stronger confirmation."
 
         # -----------------------------
-        # 19. OPTIONAL F&O CE / PE ALERT ENGINE
+        # 24. OPTIONAL F&O CE / PE ALERT ENGINE
         # -----------------------------
         # The normal dashboard does not calculate the alert layer.
         # Alerts are generated lazily through /fno-alerts or by explicitly
@@ -5187,7 +5709,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "8.0",
+            "model_version": "11.0",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -5213,8 +5735,15 @@ def prediction(include_alerts: bool = False):
                     "rsi_14": technical_data["rsi_14"],
                     "ema_20": technical_data["ema_20"],
                     "ema_50": technical_data["ema_50"],
+                    "sma_20": technical_data.get("sma_20"),
+                    "sma_50": technical_data.get("sma_50"),
                     "macd": technical_data["macd"],
-                    "macd_signal": technical_data["macd_signal"]
+                    "macd_signal": technical_data["macd_signal"],
+                    "stochastic_k": technical_data.get("stochastic_k"),
+                    "stochastic_d": technical_data.get("stochastic_d"),
+                    "bb_width_percent": technical_data.get("bb_width_percent"),
+                    "bb_percent_b": technical_data.get("bb_percent_b"),
+                    "atr_14": technical_data.get("atr_14")
                 },
                 "news": {
                     "status": news_data.get("status"),
@@ -5228,8 +5757,11 @@ def prediction(include_alerts: bool = False):
                     "message": news_data.get("message")
                 },
                 "vix": {
+                    "status": vix_data_live.get("status"),
                     "value": round(vix_value, 2) if vix_value is not None else None,
-                    "risk": vix_risk
+                    "change_percent": vix_change_percent,
+                    "risk": vix_risk,
+                    "rising_fast": vix_data_live.get("rising_fast")
                 },
                 "global": {
                     "status": global_data.get("status"),
@@ -5314,6 +5846,9 @@ def prediction(include_alerts: bool = False):
                     "advances": breadth_data.get("advances"),
                     "declines": breadth_data.get("declines"),
                     "unchanged": breadth_data.get("unchanged"),
+                    "new_52w_highs": breadth_data.get("new_52w_highs"),
+                    "new_52w_lows": breadth_data.get("new_52w_lows"),
+                    "advance_decline_ratio": breadth_data.get("advance_decline_ratio"),
                     "average_change_percent": breadth_data.get("average_change_percent"),
                     "top_gainers": breadth_data.get("top_gainers", []),
                     "top_losers": breadth_data.get("top_losers", []),
@@ -5341,17 +5876,25 @@ def prediction(include_alerts: bool = False):
                     "source": premarket_data.get("source"),
                     "message": premarket_data.get("message")
                 },
+                "statistics": statistics_data,
+                "volume": volume_data,
+                "cross_asset": cross_asset_data,
+                "time_event_context": {
+                    **time_context_data,
+                    "fno_direction_threshold": round(fno_direction_threshold, 3)
+                },
+                "volatility_spread": vol_spread_data,
                 "market_regime": regime_data
             },
             "note": (
-                "Version 8 dynamically blends technicals, completed-candle price action, candlesticks, news, "
-                "global cues, FII/DII, options with IV skew, NIFTY breadth, "
-                "futures positioning, momentum and pre-market/opening-gap context. "
-                "It can also generate independent CE/PE watch, buy, stop-loss, target "
-                "and exit-invalidation signals through the separate F&O alert endpoint. "
-                "Unavailable sources are excluded and "
-                "weights are renormalized. This remains a heuristic decision-support "
-                "model, not a guaranteed forecast."
+                "Version 11 adds normalized returns/z-scores, rolling and realized volatility, "
+                "Stochastic, Bollinger Bands, ATR, SMA, relative-volume/OBV/VWAP features, "
+                "Bank Nifty/DXY/US-10Y/EM context, VIX change, time-of-day, expiry/event risk "
+                "and realized-vs-implied volatility context. The live model still blends "
+                "options, breadth, futures, FII/DII, news, global cues, candlesticks and "
+                "multi-timeframe price action. Risk-heavy sessions raise the CE/PE threshold. "
+                "Unavailable sources are excluded and weights are renormalized. "
+                "This remains a validation/paper-trading model, not a guaranteed forecast."
             )
         }
 
@@ -5825,3 +6368,207 @@ def backtest(period: str = "2y", sideways_threshold: float = 0.30):
             "message": "Backtest failed.",
             "detail": str(e)
         }
+
+
+def _classification_metrics(actual, predicted, positive_label):
+    tp = sum(1 for a, p in zip(actual, predicted) if a == positive_label and p == positive_label)
+    fp = sum(1 for a, p in zip(actual, predicted) if a != positive_label and p == positive_label)
+    fn = sum(1 for a, p in zip(actual, predicted) if a == positive_label and p != positive_label)
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    return {
+        "precision": round(precision * 100, 1),
+        "recall": round(recall * 100, 1),
+        "f1": round(f1 * 100, 1),
+        "true_positive": tp,
+        "false_positive": fp,
+        "false_negative": fn
+    }
+
+
+def _walkforward_frame():
+    """
+    Build a price-derived historical score using only current/past bars.
+    External sources (historical news/options/FII) are intentionally excluded.
+    """
+    data = yf.Ticker("^NSEI").history(period="60d", interval="15m")
+    if data.empty or len(data) < 300:
+        return pd.DataFrame()
+
+    df = data.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+    close = df["Close"].astype(float)
+    high = df["High"].astype(float)
+    low = df["Low"].astype(float)
+
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    ema50 = close.ewm(span=50, adjust=False).mean()
+    rsi_delta = close.diff()
+    gains = rsi_delta.clip(lower=0).rolling(14).mean()
+    losses = (-rsi_delta.clip(upper=0)).rolling(14).mean()
+    rsi = 100 - 100 / (1 + gains / losses.replace(0, float("nan")))
+
+    macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+    macd_sig = macd.ewm(span=9, adjust=False).mean()
+
+    low14 = low.rolling(14).min()
+    high14 = high.rolling(14).max()
+    stoch = 100 * (close - low14) / (high14 - low14).replace(0, float("nan"))
+
+    mean20 = close.rolling(20).mean()
+    std20 = close.rolling(20).std()
+    z = (close - mean20) / std20.replace(0, float("nan"))
+
+    ret3 = close.pct_change(3)
+    ret6 = close.pct_change(6)
+
+    score = (
+        ((close > ema20).astype(float) * 2 - 1) * 0.18
+        + ((ema20 > ema50).astype(float) * 2 - 1) * 0.18
+        + ((rsi - 50) / 20).clip(-1, 1) * 0.14
+        + ((macd - macd_sig) / close * 250).clip(-1, 1) * 0.14
+        + ((stoch - 50) / 40).clip(-1, 1) * 0.08
+        + (z / 2).clip(-1, 1) * 0.12
+        + (ret3 / 0.006).clip(-1, 1) * 0.08
+        + (ret6 / 0.010).clip(-1, 1) * 0.08
+    ).clip(-1, 1)
+
+    forward_return = close.shift(-3) / close - 1
+    actual = pd.Series("NEUTRAL", index=df.index)
+    actual[forward_return >= 0.0020] = "BULLISH"
+    actual[forward_return <= -0.0020] = "BEARISH"
+
+    result = pd.DataFrame({
+        "score": score,
+        "actual": actual,
+        "forward_return": forward_return
+    }).dropna()
+
+    return result
+
+
+def _predict_from_score(series, threshold):
+    pred = pd.Series("NEUTRAL", index=series.index)
+    pred[series >= threshold] = "BULLISH"
+    pred[series <= -threshold] = "BEARISH"
+    return pred
+
+
+@app.get("/validation/walk-forward")
+def walk_forward_validation():
+    """
+    Expanding-window threshold calibration.
+    This is a PRICE-FEATURE validation proxy, not full historical validation
+    of news/options/FII data that we do not have historically.
+    """
+    try:
+        df = _walkforward_frame()
+        if df.empty or len(df) < 250:
+            return {
+                "status": "error",
+                "message": "Not enough historical data for walk-forward validation."
+            }
+
+        thresholds = [0.20, 0.25, 0.30, 0.35, 0.40]
+        n = len(df)
+        initial_train = max(180, int(n * 0.45))
+        test_size = max(40, int(n * 0.12))
+
+        all_actual = []
+        all_pred = []
+        folds = []
+        train_end = initial_train
+
+        while train_end + test_size <= n:
+            train = df.iloc[:train_end]
+            test = df.iloc[train_end:train_end + test_size]
+
+            best_threshold = 0.30
+            best_score = -1.0
+
+            for threshold in thresholds:
+                train_pred = _predict_from_score(train["score"], threshold)
+                bull = _classification_metrics(
+                    train["actual"].tolist(),
+                    train_pred.tolist(),
+                    "BULLISH"
+                )
+                bear = _classification_metrics(
+                    train["actual"].tolist(),
+                    train_pred.tolist(),
+                    "BEARISH"
+                )
+                objective = (bull["f1"] + bear["f1"]) / 2
+                if objective > best_score:
+                    best_score = objective
+                    best_threshold = threshold
+
+            test_pred = _predict_from_score(test["score"], best_threshold)
+            all_actual.extend(test["actual"].tolist())
+            all_pred.extend(test_pred.tolist())
+
+            folds.append({
+                "train_rows": len(train),
+                "test_rows": len(test),
+                "threshold": best_threshold
+            })
+            train_end += test_size
+
+        if not all_actual:
+            return {
+                "status": "error",
+                "message": "Walk-forward folds could not be created."
+            }
+
+        directional_idx = [
+            i for i, a in enumerate(all_actual)
+            if a in ("BULLISH", "BEARISH")
+        ]
+        directional_correct = sum(
+            1 for i in directional_idx
+            if all_pred[i] == all_actual[i]
+        )
+        directional_accuracy = (
+            directional_correct / len(directional_idx) * 100
+            if directional_idx else 0.0
+        )
+
+        bull = _classification_metrics(all_actual, all_pred, "BULLISH")
+        bear = _classification_metrics(all_actual, all_pred, "BEARISH")
+
+        predicted_directional = sum(
+            1 for p in all_pred if p != "NEUTRAL"
+        )
+        correct_predicted_directional = sum(
+            1 for a, p in zip(all_actual, all_pred)
+            if p != "NEUTRAL" and p == a
+        )
+        signal_precision = (
+            correct_predicted_directional / predicted_directional * 100
+            if predicted_directional else 0.0
+        )
+
+        return {
+            "status": "success",
+            "validation_type": "expanding-window price-feature proxy",
+            "no_lookahead": True,
+            "model_version": "11.0",
+            "evaluated_rows": len(all_actual),
+            "directional_accuracy_percent": round(directional_accuracy, 1),
+            "signal_precision_percent": round(signal_precision, 1),
+            "bullish": bull,
+            "bearish": bear,
+            "folds": folds,
+            "note": (
+                "Features use only information available at each historical bar. "
+                "Threshold is calibrated on the expanding past and tested on the next unseen block. "
+                "This does NOT include historical option-chain, FII/DII, news or event data, so it "
+                "must not be presented as full live-model accuracy."
+            )
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
