@@ -33,7 +33,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "12.2",
+        "version": "12.3",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4425,7 +4425,11 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   </div>
 
   <button class="primary" style="width:100%;margin-top:12px" onclick="runBacktest()">Run Backtest</button>
+  <button class="primary" style="width:100%;margin-top:8px" onclick="runOptimizer()">Optimize + Walk-Forward</button>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
+  <div class="bt-note" id="btOptimizer" style="margin-top:8px">
+    v12.3 optimizer tests thresholds 0.30–0.50 and CE/PE/regime filters, then validates the winner on unseen candles.
+  </div>
 
   <div class="backtest-results">
     <div class="btmetric"><span>Final Capital</span><b id="btFinal">₹--</b></div>
@@ -4454,7 +4458,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   </div>
 
   <div class="bt-note">
-    Proxy mode: uses historical NIFTY candles and v12.2 audited price/statistical logic. It does not pretend historical option premiums are available. This is for strategy validation before full F&O historical data is added.
+    Proxy mode: uses historical NIFTY candles and v12.3 signal-quality optimizer logic. It does not pretend historical option premiums are available. This is for strategy validation before full F&O historical data is added.
   </div>
 </div>
 <div class="shell">
@@ -4846,6 +4850,35 @@ async function runBacktest(){
   }catch(e){
     setText("btStatus","Error: "+e.message);
   }
+}
+
+
+async function runOptimizer(){
+  const capital=Number(el("btCapital").value||100000);
+  const period=el("btPeriod").value||"60d";
+  const risk=Number(el("btRisk").value||2)/100;
+  const rr=Number(el("btRR").value||1.5);
+  const fee=Number(el("btFee").value||40);
+  const slip=Number(el("btSlip").value||2);
+  setText("btStatus","Optimizing on training data, then validating on unseen candles...");
+  try{
+    const qs=new URLSearchParams({
+      starting_capital:String(capital),period,
+      risk_per_trade:String(risk),reward_risk:String(rr),
+      fee_per_trade:String(fee),slippage_points:String(slip)
+    });
+    const r=await fetch("/backtest/optimize?"+qs.toString(),{cache:"no-store"});
+    const d=await r.json();
+    if(!r.ok||d.status!=="success") throw new Error(d.message||"Optimizer failed");
+    const b=d.best_config||{}, v=d.validation||{}, tr=d.training||{};
+    setText("btOptimizer",
+      `BEST CONFIG → threshold ${Number(b.threshold).toFixed(2)}, side ${b.side}, regimes ${b.regimes.join(", ")}. `
+      + `TRAIN: PF ${tr.profit_factor??"--"}, return ${Number(tr.return_percent||0).toFixed(2)}%, DD ${Number(tr.max_drawdown_percent||0).toFixed(2)}%. `
+      + `UNSEEN VALIDATION: ${v.verdict}, PF ${v.profit_factor??"--"}, expectancy ₹${Number(v.expectancy_per_trade||0).toFixed(2)}, `
+      + `return ${Number(v.return_percent||0).toFixed(2)}%, DD ${Number(v.max_drawdown_percent||0).toFixed(2)}%, trades ${v.total_trades||0}.`
+    );
+    setText("btStatus",`Walk-forward complete · unseen-data verdict ${v.verdict}`);
+  }catch(e){setText("btStatus","Optimizer error: "+e.message);}
 }
 
 async function loadAll(){
@@ -5931,7 +5964,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "12.2",
+            "model_version": "12.3",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -6774,7 +6807,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "12.2",
+            "model_version": "12.3",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -6977,7 +7010,7 @@ def _bt_trade_verdict(metrics):
     return "FAIL"
 
 
-def _v12_2_run_audited_backtest(
+def _v12_3_run_audited_backtest(
     starting_capital=100000.0,
     period="60d",
     threshold=0.30,
@@ -7286,7 +7319,7 @@ def _v12_2_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "12.2",
+        "model_version": "12.3",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -7315,6 +7348,118 @@ def _v12_2_run_audited_backtest(
         )
     }
 
+
+
+def _v123_metrics_from_trades(trades, starting_capital):
+    capital=float(starting_capital)
+    peak=capital
+    max_dd=0.0
+    wins=[]; losses=[]
+    max_consec=0; consec=0
+    for t in trades:
+        pnl=float(t.get("pnl",0))
+        capital += pnl
+        if pnl > 0:
+            wins.append(pnl); consec=0
+        elif pnl < 0:
+            losses.append(pnl); consec+=1; max_consec=max(max_consec,consec)
+        peak=max(peak,capital)
+        if peak>0: max_dd=min(max_dd,(capital-peak)/peak*100)
+    gp=sum(wins); gl=abs(sum(losses)); n=len(trades)
+    pf=round(gp/gl,2) if gl>0 else (99.0 if gp>0 else None)
+    exp=round(sum(float(t.get("pnl",0)) for t in trades)/n,2) if n else 0.0
+    ret=round((capital-starting_capital)/starting_capital*100,2) if starting_capital else 0.0
+    m={"final_capital":round(capital,2),"return_percent":ret,"total_trades":n,
+       "win_rate":round(len(wins)/n*100,1) if n else 0.0,"profit_factor":pf,
+       "expectancy_per_trade":exp,"max_drawdown_percent":round(max_dd,2),
+       "max_consecutive_losses":max_consec}
+    m["verdict"]=_bt_trade_verdict(m)
+    return m
+
+def _v123_filter_trades(trades, threshold, side, regimes):
+    out=[]
+    for t in trades:
+        if abs(float(t.get("score",0))) < threshold: continue
+        if side!="BOTH" and t.get("signal")!=side: continue
+        if t.get("regime") not in regimes: continue
+        out.append(t)
+    return out
+
+def _v123_objective(m):
+    pf=float(m.get("profit_factor") or 0)
+    exp=float(m.get("expectancy_per_trade") or 0)
+    dd=abs(float(m.get("max_drawdown_percent") or 0))
+    n=int(m.get("total_trades") or 0)
+    # Reject tiny samples; reward PF/expectancy, penalize drawdown.
+    if n < 8: return -999999
+    return pf*100 + exp*0.03 - dd*2 + min(n,50)*0.25
+
+@app.get("/backtest/optimize")
+def optimize_backtest(
+    starting_capital: float = 100000,
+    period: str = "60d",
+    risk_per_trade: float = 0.02,
+    reward_risk: float = 1.5,
+    fee_per_trade: float = 40.0,
+    slippage_points: float = 2.0
+):
+    # Generate one chronological baseline with the lowest optimizer threshold.
+    base=_v12_3_run_audited_backtest(
+        starting_capital=starting_capital, period=period, threshold=0.30,
+        risk_per_trade=risk_per_trade, reward_risk=reward_risk,
+        compounding=False, fee_per_trade=fee_per_trade,
+        slippage_points=slippage_points
+    )
+    if base.get("status")!="success":
+        return base
+    trades=list(base.get("trades") or [])
+    if len(trades)<16:
+        return {"status":"error","message":"Not enough qualifying historical trades for walk-forward optimization."}
+
+    # Strict chronological split: first 70% train, last 30% unseen validation.
+    cut=max(8,int(len(trades)*0.70))
+    train_raw=trades[:cut]
+    valid_raw=trades[cut:]
+
+    thresholds=[0.30,0.35,0.40,0.45,0.50]
+    sides=["BOTH","CE","PE"]
+    regime_sets=[
+        ["TRENDING"],["SIDEWAYS"],["HIGH VOLATILITY"],
+        ["TRENDING","SIDEWAYS"],
+        ["TRENDING","HIGH VOLATILITY"],
+        ["TRENDING","SIDEWAYS","HIGH VOLATILITY"]
+    ]
+    candidates=[]
+    for th in thresholds:
+        for side in sides:
+            for regs in regime_sets:
+                tt=_v123_filter_trades(train_raw,th,side,regs)
+                m=_v123_metrics_from_trades(tt,float(starting_capital))
+                candidates.append({
+                    "threshold":th,"side":side,"regimes":regs,
+                    "metrics":m,"objective":_v123_objective(m)
+                })
+    candidates.sort(key=lambda x:x["objective"], reverse=True)
+    best=candidates[0]
+    vt=_v123_filter_trades(valid_raw,best["threshold"],best["side"],best["regimes"])
+    vm=_v123_metrics_from_trades(vt,float(starting_capital))
+    return {
+        "status":"success","model_version":"12.3",
+        "method":"chronological 70/30 walk-forward holdout",
+        "best_config":{"threshold":best["threshold"],"side":best["side"],"regimes":best["regimes"]},
+        "training":best["metrics"],"validation":vm,
+        "tested_configurations":len(candidates),
+        "top_candidates":[
+            {"threshold":x["threshold"],"side":x["side"],"regimes":x["regimes"],
+             "profit_factor":x["metrics"]["profit_factor"],
+             "expectancy_per_trade":x["metrics"]["expectancy_per_trade"],
+             "max_drawdown_percent":x["metrics"]["max_drawdown_percent"],
+             "total_trades":x["metrics"]["total_trades"]}
+            for x in candidates[:10]
+        ],
+        "promotion_rule":"Do not promote to live logic unless unseen validation is PASS with an adequate trade sample.",
+        "note":"Optimizer uses the existing NIFTY directional proxy trades; historical option-premium/OI/IV snapshots are still not available."
+    }
 
 @app.get("/backtest/run")
 def run_backtest(
@@ -7347,7 +7492,7 @@ def run_backtest(
     fee_per_trade = max(0.0, min(float(fee_per_trade), 5000.0))
     slippage_points = max(0.0, min(float(slippage_points), 50.0))
 
-    return _v12_2_run_audited_backtest(
+    return _v12_3_run_audited_backtest(
         starting_capital=starting_capital,
         period=period,
         threshold=threshold,
