@@ -33,7 +33,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "11.0",
+        "version": "12.0",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4336,9 +4336,111 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
 .error{display:none;background:#35131a;border:1px solid #7b2938;color:#ffd5db;padding:10px 12px;border-radius:10px;margin-bottom:12px}
 @media(max-width:1100px){.topgrid{grid-template-columns:1fr 1fr}.market-card{grid-column:1/-1}.main-layout{grid-template-columns:1fr}.side{display:grid;grid-template-columns:repeat(3,1fr)}.metrics{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:720px){.topbar{align-items:flex-start;flex-direction:column}.topgrid{grid-template-columns:1fr}.tradeboxes{grid-template-columns:repeat(2,1fr)}.market-card{grid-column:auto}.side{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.chart-wrap{height:430px}.prediction-zone-bg{width:42%}.zone-label{right:9%}.brand{font-size:29px}}
+
+.sidebar-nav{
+ position:fixed;left:12px;top:92px;width:76px;z-index:30;
+ display:flex;flex-direction:column;gap:8px
+}
+.sidebar-nav button{
+ width:76px;min-height:54px;padding:7px 5px;border-radius:12px;
+ font-size:10px;line-height:1.15;background:#0b1a2d;border:1px solid #203650;color:#b8c9df
+}
+.sidebar-nav button.active{background:#175bc0;color:#fff;border-color:#2e7cf0}
+.sidebar-nav .nav-icon{display:block;font-size:18px;margin-bottom:4px}
+.backtest-panel{
+ position:fixed;left:98px;top:92px;width:min(420px,calc(100vw - 116px));
+ max-height:calc(100vh - 108px);overflow:auto;z-index:29;
+ background:linear-gradient(180deg,#0d1d31,#071423);border:1px solid #27405f;
+ border-radius:16px;padding:16px;box-shadow:0 24px 70px rgba(0,0,0,.45);
+ display:none
+}
+.backtest-panel.open{display:block}
+.backtest-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.backtest-field label{display:block;font-size:10px;color:#849bb9;margin-bottom:5px;text-transform:uppercase}
+.backtest-field input,.backtest-field select{
+ width:100%;padding:10px;border-radius:9px;border:1px solid #29415f;background:#081728;color:#eef5ff
+}
+.backtest-results{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.btmetric{padding:10px;border:1px solid #203650;border-radius:10px;background:#081728}
+.btmetric span{display:block;color:#849bb9;font-size:10px;text-transform:uppercase}
+.btmetric b{display:block;margin-top:4px;font-size:17px}
+#btEquityChart{height:210px;margin-top:12px}
+.bt-note{font-size:10px;color:#8397b1;line-height:1.5;margin-top:10px}
+.bt-table-wrap{overflow:auto;margin-top:12px;max-height:250px}
+@media(max-width:720px){
+ .sidebar-nav{left:5px;top:auto;bottom:8px;width:calc(100vw - 10px);flex-direction:row;background:#071423;padding:6px;border:1px solid #203650;border-radius:14px}
+ .sidebar-nav button{width:auto;flex:1;min-height:46px}
+ .backtest-panel{left:6px;top:72px;width:calc(100vw - 12px);max-height:calc(100vh - 140px)}
+}
 </style>
 </head>
 <body>
+<div class="sidebar-nav">
+  <button class="active" onclick="showMainDashboard(this)"><span class="nav-icon">⌂</span>Dashboard</button>
+  <button onclick="toggleBacktestPanel(this)"><span class="nav-icon">↺</span>Backtest</button>
+</div>
+
+<div class="backtest-panel" id="backtestPanel">
+  <div class="section-head">
+    <div>
+      <div class="section-title">Strategy Backtest</div>
+      <div class="section-sub">Replay our historical price logic from ₹1 lakh.</div>
+    </div>
+    <button onclick="closeBacktestPanel()">✕</button>
+  </div>
+
+  <div class="backtest-grid">
+    <div class="backtest-field">
+      <label>Starting Capital</label>
+      <input id="btCapital" type="number" value="100000" min="10000" step="10000">
+    </div>
+    <div class="backtest-field">
+      <label>Period</label>
+      <select id="btPeriod"><option value="30d">30 Days</option><option value="60d" selected>60 Days</option></select>
+    </div>
+    <div class="backtest-field">
+      <label>Signal Threshold</label>
+      <input id="btThreshold" type="number" value="0.30" min="0.15" max="0.60" step="0.05">
+    </div>
+    <div class="backtest-field">
+      <label>Risk Per Trade %</label>
+      <input id="btRisk" type="number" value="2" min="0.25" max="10" step="0.25">
+    </div>
+    <div class="backtest-field">
+      <label>Reward : Risk</label>
+      <input id="btRR" type="number" value="1.5" min="0.8" max="3" step="0.1">
+    </div>
+    <div class="backtest-field">
+      <label>Compounding</label>
+      <select id="btCompound"><option value="true" selected>ON</option><option value="false">OFF</option></select>
+    </div>
+  </div>
+
+  <button class="primary" style="width:100%;margin-top:12px" onclick="runBacktest()">Run Backtest</button>
+  <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
+
+  <div class="backtest-results">
+    <div class="btmetric"><span>Final Capital</span><b id="btFinal">₹--</b></div>
+    <div class="btmetric"><span>Return</span><b id="btReturn">--%</b></div>
+    <div class="btmetric"><span>Total Trades</span><b id="btTrades">--</b></div>
+    <div class="btmetric"><span>Win Rate</span><b id="btWinRate">--%</b></div>
+    <div class="btmetric"><span>Profit Factor</span><b id="btPF">--</b></div>
+    <div class="btmetric"><span>Max Drawdown</span><b id="btDD">--%</b></div>
+  </div>
+
+  <div id="btEquityChart"></div>
+
+  <div class="bt-table-wrap">
+    <table>
+      <thead><tr><th>Entry</th><th>Signal</th><th>P&L</th><th>Exit</th><th>Capital</th></tr></thead>
+      <tbody id="btHistory"><tr><td colspan="5">Run the backtest to see simulated trades.</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="bt-note">
+    Proxy mode: uses historical NIFTY candles and v12 price/statistical logic. It does not pretend historical option premiums are available. This is for strategy validation before full F&O historical data is added.
+  </div>
+</div>
 <div class="shell">
   <div class="topbar">
     <div>
@@ -4626,6 +4728,89 @@ async function loadAccuracy(){
     const n=Number(x.completed||0);setText("accuracyNote",n<30?`Sample is still small (${n}). Keep this in paper mode.`:n<100?"Accuracy is becoming informative; 100+ completed signals is preferred.":"100+ signals collected. Review accuracy, drawdown and profit factor together.");
   }catch(e){console.warn("Accuracy:",e)}
 }
+
+let btChart=null,btSeries=null;
+
+function showMainDashboard(btn){
+  document.querySelectorAll(".sidebar-nav button").forEach(b=>b.classList.remove("active"));
+  if(btn)btn.classList.add("active");
+  closeBacktestPanel();
+}
+function toggleBacktestPanel(btn){
+  const panel=el("backtestPanel");
+  const open=!panel.classList.contains("open");
+  document.querySelectorAll(".sidebar-nav button").forEach(b=>b.classList.remove("active"));
+  if(open){
+    panel.classList.add("open");
+    if(btn)btn.classList.add("active");
+  }else{
+    panel.classList.remove("open");
+    document.querySelector(".sidebar-nav button")?.classList.add("active");
+  }
+}
+function closeBacktestPanel(){
+  el("backtestPanel")?.classList.remove("open");
+  document.querySelectorAll(".sidebar-nav button").forEach(b=>b.classList.remove("active"));
+  document.querySelector(".sidebar-nav button")?.classList.add("active");
+}
+function renderBacktestEquity(points){
+  const host=el("btEquityChart");
+  if(!host)return;
+  if(!btChart){
+    btChart=LightweightCharts.createChart(host,{
+      width:host.clientWidth,height:host.clientHeight,
+      layout:{background:{color:"#081728"},textColor:"#8399b7"},
+      grid:{vertLines:{color:"#14263b"},horzLines:{color:"#14263b"}},
+      timeScale:{timeVisible:true}
+    });
+    btSeries=btChart.addLineSeries({lineWidth:2});
+    window.addEventListener("resize",()=>btChart.applyOptions({width:host.clientWidth}));
+  }
+  const rows=(points||[]).map(p=>({time:Math.floor(new Date(p.time).getTime()/1000),value:Number(p.equity)}));
+  btSeries.setData(rows);
+  btChart.timeScale().fitContent();
+}
+async function runBacktest(){
+  const capital=Number(el("btCapital").value||100000);
+  const period=el("btPeriod").value||"60d";
+  const threshold=Number(el("btThreshold").value||0.30);
+  const risk=Number(el("btRisk").value||2)/100;
+  const rr=Number(el("btRR").value||1.5);
+  const comp=el("btCompound").value==="true";
+  setText("btStatus","Running chronological backtest...");
+  const qs=new URLSearchParams({
+    starting_capital:String(capital),
+    period,
+    threshold:String(threshold),
+    risk_per_trade:String(risk),
+    reward_risk:String(rr),
+    compounding:String(comp)
+  });
+  try{
+    const r=await fetch("/backtest/run?"+qs.toString(),{cache:"no-store"});
+    const d=await r.json();
+    if(!r.ok||d.status!=="success")throw new Error(d.message||"Backtest failed");
+    setText("btFinal","₹"+Number(d.final_capital).toLocaleString("en-IN",{maximumFractionDigits:2}));
+    setText("btReturn",(Number(d.return_percent)>=0?"+":"")+Number(d.return_percent).toFixed(2)+"%");
+    setText("btTrades",d.total_trades);
+    setText("btWinRate",Number(d.win_rate).toFixed(1)+"%");
+    setText("btPF",d.profit_factor==null?"--":Number(d.profit_factor).toFixed(2));
+    setText("btDD",Number(d.max_drawdown_percent).toFixed(2)+"%");
+    setText("btStatus",`Completed · ${d.total_trades} trades · ${d.period}`);
+    renderBacktestEquity(d.equity_curve||[]);
+    el("btHistory").innerHTML=(d.trades||[]).slice().reverse().map(t=>`
+      <tr>
+        <td>${new Date(t.entry_time).toLocaleString()}</td>
+        <td>${t.signal}</td>
+        <td>${Number(t.pnl)>=0?"+":""}₹${Number(t.pnl).toFixed(2)}</td>
+        <td>${t.exit_reason}</td>
+        <td>₹${Number(t.capital_after).toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
+      </tr>`).join("")||'<tr><td colspan="5">No qualifying signals in this period.</td></tr>';
+  }catch(e){
+    setText("btStatus","Error: "+e.message);
+  }
+}
+
 async function loadAll(){
   const box=el("errorBox");box.style.display="none";
   try{const p=await loadPrediction();await Promise.all([loadChart(p),loadPaper(),loadAccuracy()]);setText("lastUpdated",new Date().toLocaleString());setText("marketState","Market data live")}
@@ -5709,7 +5894,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "11.0",
+            "model_version": "12.0",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -6571,4 +6756,308 @@ def walk_forward_validation():
             "status": "error",
             "message": str(e)
         }
+
+
+
+# ============================================================
+# V12 NIFTY PROXY BACKTEST ENGINE
+# ============================================================
+
+def _v12_backtest_signal_frame(period="60d", interval="15m"):
+    """
+    Chronological price-feature backtest frame.
+
+    IMPORTANT:
+    - Uses only data available up to each candle.
+    - This is a NIFTY directional proxy backtest.
+    - It is NOT a historical options-premium backtest.
+    """
+    data = yf.Ticker("^NSEI").history(period=period, interval=interval)
+
+    if data is None or data.empty or len(data) < 120:
+        return pd.DataFrame()
+
+    df = data.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+
+    close = df["Close"].astype(float)
+    high = df["High"].astype(float)
+    low = df["Low"].astype(float)
+
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    ema50 = close.ewm(span=50, adjust=False).mean()
+
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rsi = 100 - (100 / (1 + gain / loss.replace(0, float("nan"))))
+
+    macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+    macd_signal = macd.ewm(span=9, adjust=False).mean()
+
+    low14 = low.rolling(14).min()
+    high14 = high.rolling(14).max()
+    stochastic_k = 100 * (close - low14) / (high14 - low14).replace(0, float("nan"))
+
+    mean20 = close.rolling(20).mean()
+    std20 = close.rolling(20).std()
+    zscore = (close - mean20) / std20.replace(0, float("nan"))
+
+    ret3 = close.pct_change(3)
+    ret6 = close.pct_change(6)
+
+    previous_close = close.shift(1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs()
+        ],
+        axis=1
+    ).max(axis=1)
+    atr = tr.rolling(14).mean()
+
+    score = (
+        ((close > ema20).astype(float) * 2 - 1) * 0.20
+        + ((ema20 > ema50).astype(float) * 2 - 1) * 0.18
+        + ((rsi - 50) / 20).clip(-1, 1) * 0.14
+        + ((macd - macd_signal) / close * 250).clip(-1, 1) * 0.14
+        + ((stochastic_k - 50) / 40).clip(-1, 1) * 0.08
+        + (zscore / 2).clip(-1, 1) * 0.12
+        + (ret3 / 0.006).clip(-1, 1) * 0.07
+        + (ret6 / 0.010).clip(-1, 1) * 0.07
+    ).clip(-1, 1)
+
+    out = pd.DataFrame({
+        "open": df["Open"].astype(float),
+        "high": high,
+        "low": low,
+        "close": close,
+        "atr": atr,
+        "score": score
+    })
+
+    return out.dropna().copy()
+
+
+def _v12_run_proxy_backtest(
+    starting_capital=100000.0,
+    period="60d",
+    threshold=0.30,
+    risk_per_trade=0.02,
+    reward_risk=1.5,
+    compounding=True
+):
+    """
+    Simulate a capital curve from the v12 price-direction proxy.
+
+    Entry:
+      - bullish score >= threshold => CE proxy / long NIFTY direction
+      - bearish score <= -threshold => PE proxy / short NIFTY direction
+
+    Exit:
+      - stop = 1 ATR
+      - target = reward_risk * ATR
+      - max holding = 6 candles
+      - only one position at a time
+
+    Capital impact:
+      Each trade risks risk_per_trade of current capital (or starting capital
+      when compounding is disabled). This avoids pretending we have historical
+      option premiums when we do not.
+    """
+    capital = float(starting_capital)
+    initial_capital = float(starting_capital)
+
+    df = _v12_backtest_signal_frame(period=period, interval="15m")
+    if df.empty:
+        return {
+            "status": "error",
+            "message": "Historical NIFTY data is unavailable for the selected period."
+        }
+
+    trades = []
+    equity_curve = [{
+        "time": df.index[0].isoformat(),
+        "equity": round(capital, 2)
+    }]
+
+    i = 0
+    max_hold = 6
+
+    while i < len(df) - 2:
+        row = df.iloc[i]
+        score = float(row["score"])
+
+        side = None
+        if score >= threshold:
+            side = "CE"
+        elif score <= -threshold:
+            side = "PE"
+
+        if side is None:
+            i += 1
+            continue
+
+        entry = float(row["close"])
+        atr = float(row["atr"])
+        if not math.isfinite(atr) or atr <= 0:
+            i += 1
+            continue
+
+        if side == "CE":
+            stop = entry - atr
+            target = entry + atr * reward_risk
+        else:
+            stop = entry + atr
+            target = entry - atr * reward_risk
+
+        exit_price = None
+        exit_reason = "TIME"
+        exit_idx = min(i + max_hold, len(df) - 1)
+
+        for j in range(i + 1, min(i + max_hold + 1, len(df))):
+            future = df.iloc[j]
+
+            if side == "CE":
+                # Conservative ordering if both SL and target are crossed inside one bar.
+                if float(future["low"]) <= stop:
+                    exit_price = stop
+                    exit_reason = "STOP"
+                    exit_idx = j
+                    break
+                if float(future["high"]) >= target:
+                    exit_price = target
+                    exit_reason = "TARGET"
+                    exit_idx = j
+                    break
+            else:
+                if float(future["high"]) >= stop:
+                    exit_price = stop
+                    exit_reason = "STOP"
+                    exit_idx = j
+                    break
+                if float(future["low"]) <= target:
+                    exit_price = target
+                    exit_reason = "TARGET"
+                    exit_idx = j
+                    break
+
+        if exit_price is None:
+            exit_price = float(df.iloc[exit_idx]["close"])
+
+        direction_points = (
+            exit_price - entry
+            if side == "CE"
+            else entry - exit_price
+        )
+
+        risk_points = atr
+        r_multiple = direction_points / risk_points if risk_points else 0.0
+
+        risk_base = capital if compounding else initial_capital
+        risk_amount = max(0.0, risk_base * float(risk_per_trade))
+        pnl = risk_amount * r_multiple
+        capital += pnl
+
+        trade = {
+            "entry_time": df.index[i].isoformat(),
+            "exit_time": df.index[exit_idx].isoformat(),
+            "signal": side,
+            "score": round(score, 3),
+            "entry": round(entry, 2),
+            "stop": round(stop, 2),
+            "target": round(target, 2),
+            "exit": round(exit_price, 2),
+            "exit_reason": exit_reason,
+            "r_multiple": round(r_multiple, 3),
+            "pnl": round(pnl, 2),
+            "capital_after": round(capital, 2)
+        }
+        trades.append(trade)
+
+        equity_curve.append({
+            "time": df.index[exit_idx].isoformat(),
+            "equity": round(capital, 2)
+        })
+
+        i = exit_idx + 1
+
+    wins = [t for t in trades if t["pnl"] > 0]
+    losses = [t for t in trades if t["pnl"] < 0]
+
+    gross_profit = sum(t["pnl"] for t in wins)
+    gross_loss = abs(sum(t["pnl"] for t in losses))
+
+    peak = initial_capital
+    max_drawdown = 0.0
+    for point in equity_curve:
+        equity = float(point["equity"])
+        peak = max(peak, equity)
+        if peak > 0:
+            drawdown = (equity - peak) / peak * 100
+            max_drawdown = min(max_drawdown, drawdown)
+
+    total = len(trades)
+    return_pct = (
+        (capital - initial_capital) / initial_capital * 100
+        if initial_capital else 0.0
+    )
+
+    return {
+        "status": "success",
+        "mode": "NIFTY_DIRECTION_PROXY",
+        "starting_capital": round(initial_capital, 2),
+        "final_capital": round(capital, 2),
+        "net_pnl": round(capital - initial_capital, 2),
+        "return_percent": round(return_pct, 2),
+        "total_trades": total,
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(len(wins) / total * 100, 1) if total else 0.0,
+        "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else None,
+        "average_win": round(gross_profit / len(wins), 2) if wins else 0.0,
+        "average_loss": round(-gross_loss / len(losses), 2) if losses else 0.0,
+        "max_drawdown_percent": round(max_drawdown, 2),
+        "threshold": round(float(threshold), 2),
+        "risk_per_trade_percent": round(float(risk_per_trade) * 100, 2),
+        "reward_risk": round(float(reward_risk), 2),
+        "compounding": bool(compounding),
+        "period": period,
+        "trades": trades[-100:],
+        "equity_curve": equity_curve,
+        "note": (
+            "This is a NIFTY directional proxy backtest using historical index candles. "
+            "It does not use historical option premiums/OI/IV because those snapshots are not available "
+            "inside this project. ₹1 lakh is therefore simulated through fixed risk-per-trade capital allocation, "
+            "not literal historical option contract purchases."
+        )
+    }
+
+
+@app.get("/backtest/run")
+def run_backtest(
+    starting_capital: float = 100000,
+    period: str = "60d",
+    threshold: float = 0.30,
+    risk_per_trade: float = 0.02,
+    reward_risk: float = 1.5,
+    compounding: bool = True
+):
+    allowed_periods = {"30d", "60d"}
+    if period not in allowed_periods:
+        period = "60d"
+
+    starting_capital = max(10000.0, min(float(starting_capital), 10000000.0))
+    threshold = max(0.15, min(float(threshold), 0.60))
+    risk_per_trade = max(0.0025, min(float(risk_per_trade), 0.10))
+    reward_risk = max(0.8, min(float(reward_risk), 3.0))
+
+    return _v12_run_proxy_backtest(
+        starting_capital=starting_capital,
+        period=period,
+        threshold=threshold,
+        risk_per_trade=risk_per_trade,
+        reward_risk=reward_risk,
+        compounding=compounding
+    )
 

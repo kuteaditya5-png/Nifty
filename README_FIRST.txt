@@ -1,76 +1,43 @@
-NIFTY AI v11 - Feature + Validation Upgrade
+NIFTY AI v12 - Backtest Sidebar
 
-This package keeps:
-- Mobile number + password login
-- Exact-contract paper P&L
-- Per-user paper portfolios
-- Accuracy tracker
-- Always-visible AI Prediction Zone
-- WhatsApp support when configured
+NEW
+- Left-side navigation panel.
+- Dashboard button.
+- Backtest button.
+- Backtest opens as a left-side panel without replacing the main dashboard.
+- Starting capital defaults to Rs 1,00,000.
+- 30-day / 60-day historical replay.
+- Configurable signal threshold.
+- Configurable risk per trade.
+- Configurable reward:risk.
+- Compounding ON/OFF.
+- Final capital, return %, trades, win rate, profit factor and max drawdown.
+- Equity curve.
+- Trade-by-trade backtest history.
 
-NEW PREDICTION FEATURES
-1. Technical:
-   - SMA 20/50
-   - Stochastic K/D
-   - Bollinger Band width and %B
-   - ATR 14
-   - Existing EMA/RSI/MACD retained
+BACKTEST MODE
+This first v12 backtest is a NIFTY DIRECTION PROXY.
+It replays historical NIFTY candles chronologically and uses only information
+available at each candle.
 
-2. Statistical / normalized:
-   - 1/3/6-bar returns
-   - log return
-   - rolling volatility
-   - annualized realized volatility
-   - 20-bar price z-score
+It DOES NOT invent historical option premiums/OI/IV.
+Therefore the Rs 1,00,000 simulation uses risk-per-trade capital sizing rather
+than pretending we bought historical CE/PE contracts at unavailable prices.
 
-3. Volume:
-   - relative volume vs 20-bar average
-   - OBV 5-bar change
-   - VWAP deviation
-   - automatically excluded when NIFTY index volume is unavailable/zero
+Existing features retained:
+- mobile + password login
+- no WhatsApp/Twilio
+- v11 feature engine
+- paper trading
+- exact-contract live paper P&L
+- prediction accuracy tracker
+- walk-forward validation
+- AI Prediction Zone
 
-4. Breadth:
-   - advance/decline
-   - 52-week high / low proximity count when NSE supplies those fields
+DEPLOY
+Replace the GitHub root files with the files from this ZIP and redeploy Vercel.
 
-5. Cross-asset / context:
-   - Bank Nifty
-   - DXY
-   - US 10-year yield
-   - EEM as an emerging-market proxy
-
-6. Volatility:
-   - India VIX level
-   - India VIX daily/session change
-   - realized vs ATM implied volatility spread
-
-7. Time / event risk:
-   - opening / midday / closing session phase
-   - day of week
-   - F&O expiry-day flag
-   - optional event-day and holiday-adjacent flags
-   - risky sessions automatically raise the CE/PE threshold
-
-OPTIONAL VERCEL ENVIRONMENT VARIABLES
-NIFTY_EVENT_DATES=2026-09-30,2026-10-07
-NIFTY_HOLIDAY_DATES=2026-10-02,2026-11-09
-
-VALIDATION
-New endpoint:
-  /validation/walk-forward
-
-It uses expanding-window threshold calibration with chronological unseen test blocks.
-It reports:
-- directional accuracy
-- signal precision
-- bullish precision / recall / F1
-- bearish precision / recall / F1
-
-IMPORTANT:
-The walk-forward endpoint is explicitly a PRICE-FEATURE proxy because we do not have
-historical option-chain, FII/DII and news snapshots for the full live model.
-It must not be treated as full-model historical accuracy.
-
-DEPLOY:
-Replace all files in your GitHub repo root with the files in this ZIP and redeploy Vercel.
-No database migration is required.
+Core environment variables:
+DATABASE_URL
+JWT_SECRET
+NEWS_API_KEY
