@@ -3852,275 +3852,323 @@ def dashboard():
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *{box-sizing:border-box}
-:root{--bg:#07111f;--panel:#0d1a2b;--panel2:#0a1626;--line:#21344e;--text:#eef5ff;--muted:#8fa2ba;--green:#22c55e;--red:#ef4444;--amber:#f59e0b}
-body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
-.shell{width:min(1180px,94%);margin:0 auto;padding:22px 0 42px}
-.top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}
-.brand h1{margin:0;font-size:28px}.brand p{margin:5px 0 0;color:var(--muted);font-size:13px}
-.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.pill,button{border-radius:12px;border:1px solid var(--line);background:#102037;color:var(--text);padding:10px 13px;font-size:13px}
-button{cursor:pointer;font-weight:700}button.primary{background:#eef5ff;color:#08111e;border:0}
-.hero{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;margin-bottom:16px}
-.card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:20px;padding:22px}
-.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
-.signal{font-size:46px;font-weight:850;margin:8px 0 2px}.price{font-size:24px;font-weight:800;margin-top:6px}
-.reason{margin-top:10px;color:#b9c7d8;line-height:1.5}.ts{margin-top:12px;color:#6f89a7;font-size:12px}
-.tradegrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:16px}
-.metric{background:#0b1727;border:1px solid #1d314a;border-radius:14px;padding:13px}.metric b{display:block;font-size:18px;margin-top:5px}
-.chart-card{padding:18px}.chart-head{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:10px}
-.chart-title{font-size:18px;font-weight:800}.chart-sub{color:var(--muted);font-size:12px;margin-top:3px}
-.controls{display:flex;gap:7px}.controls button{padding:8px 10px}.controls button.active{background:#1d4ed8;border-color:#1d4ed8}
-#niftyChart{height:500px}.legend{display:flex;gap:15px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin:7px 0 12px}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
-.error{display:none;background:#3a1518;border:1px solid #6e252b;color:#ffd6d9;padding:12px 14px;border-radius:12px;margin-bottom:14px}
-.footer-note{color:#647b95;font-size:11px;margin-top:10px}th,td{padding:9px;border-bottom:1px solid #1d314a;text-align:left;font-size:12px}th{color:#8fa2ba}
-@media(max-width:850px){.hero{grid-template-columns:1fr}#niftyChart{height:430px}}
-@media(max-width:560px){.top{align-items:flex-start;flex-direction:column}.signal{font-size:40px}}
+:root{
+  --bg:#06101e;--panel:#0b1829;--panel2:#081524;--line:#203650;
+  --text:#eef5ff;--muted:#8298b7;--green:#22d3a6;--red:#fb5b6b;
+  --amber:#f7b84b;--blue:#4187ff;--purple:#b46cff;
+}
+body{margin:0;background:radial-gradient(circle at 50% -15%,#11233b 0,#06101e 42%);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
+.shell{width:min(1480px,97%);margin:0 auto;padding:18px 0 34px}
+.card{background:linear-gradient(180deg,rgba(12,28,47,.97),rgba(7,20,35,.98));border:1px solid var(--line);border-radius:14px}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:14px}
+.brandline{display:flex;align-items:end;gap:10px}.brand{font-size:34px;font-weight:900;letter-spacing:.3px}.brand span{color:#55d9cf}.tag{font-size:13px;color:#8399bb;font-style:italic;margin-bottom:4px}
+.market-open{display:flex;align-items:center;gap:8px;color:#39dfa9;font-size:13px}.statusdot{width:9px;height:9px;border-radius:50%;background:#39dfa9}
+.actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.pill,button{border:1px solid var(--line);border-radius:10px;background:#0d1d31;color:var(--text);padding:10px 13px;font-size:12px}
+button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}.iconbtn{min-width:42px}
+.topgrid{display:grid;grid-template-columns:.95fr 1.35fr .78fr;gap:12px;margin-bottom:12px}
+.prediction-card,.trade-card,.market-card{padding:18px 20px;min-height:142px}.eyebrow{font-size:12px;color:#89a4cc;text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+.signalrow{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px}.signalwrap{display:flex;gap:12px;align-items:center}.arrow{font-size:52px;line-height:1;font-weight:900}.signal{font-size:34px;font-weight:900}.signal-sub{font-size:18px;font-weight:800;margin-top:3px}.conf{text-align:right}.conf b{display:block;font-size:31px}.conf span{font-size:12px;color:var(--muted)}
+.tradeboxes{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:13px}.tradebox{border:1px solid #264368;border-radius:10px;padding:12px;background:#09182a}.tradebox .v{font-size:18px;font-weight:850;margin-top:8px}.tradebox.stop{border-color:#6c2838;background:#1b111d}.tradebox.stop .v{color:#ff6d7c}.tradebox.target{border-color:#17634f;background:#09231f}.tradebox.target .v{color:#47e8bd}.tradebox.entry{border-color:#285eaa;background:#0a1930}.tradebox.entry .v{color:#83b4ff}
+.market-price{font-size:28px;font-weight:900;margin-top:8px}.market-change{font-size:15px;color:#3fdda9;margin-top:4px}.spark{height:30px;margin-top:9px;background:linear-gradient(180deg,rgba(34,211,166,.18),transparent);clip-path:polygon(0 78%,8% 55%,14% 67%,23% 34%,31% 46%,38% 25%,45% 39%,54% 18%,63% 30%,72% 10%,79% 23%,88% 7%,94% 15%,100% 0,100% 100%,0 100%)}
+.main-layout{display:grid;grid-template-columns:minmax(0,1fr) 292px;gap:12px}.chart-card{overflow:hidden}.toolbar{height:52px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 14px;gap:12px}.intervals,.toggles{display:flex;align-items:center;gap:7px}.toolbar button{padding:8px 11px}.toolbar button.active{background:#2469dc;border-color:#3882ff}.toggle{display:flex;align-items:center;gap:7px;color:#becde1;font-size:12px}.toggle input{accent-color:#4187ff}
+.chart-meta{padding:11px 14px 3px}.chart-title{font-weight:850;font-size:15px}.ohlc{font-size:11px;color:#73d7c4;margin-top:4px}
+.chart-wrap{position:relative;height:520px}.prediction-zone-bg{position:absolute;z-index:1;pointer-events:none;top:0;right:0;width:34%;height:100%;border-left:1px dashed rgba(225,238,255,.75);transition:background .3s}.prediction-zone-bg.ce{background:linear-gradient(90deg,rgba(21,126,102,.08),rgba(27,195,143,.18))}.prediction-zone-bg.pe{background:linear-gradient(90deg,rgba(139,34,51,.08),rgba(239,68,68,.17))}.prediction-zone-bg.wait{background:linear-gradient(90deg,rgba(130,90,20,.06),rgba(247,184,75,.13))}
+.zone-label{position:absolute;z-index:4;right:18%;top:18px;pointer-events:none;border:1px solid rgba(72,224,179,.4);background:rgba(6,36,34,.84);color:#55e7bf;border-radius:7px;padding:8px 10px;font-size:11px;font-weight:800;text-align:center}.prediction-zone-bg.pe~.zone-label{color:#ff8c99;border-color:rgba(255,92,110,.4);background:rgba(52,13,22,.86)}.prediction-zone-bg.wait~.zone-label{color:#ffd074;border-color:rgba(247,184,75,.4);background:rgba(54,39,10,.86)}
+#niftyChart{position:relative;z-index:2;width:100%;height:100%}.chart-note{padding:7px 14px 10px;color:#7188a5;font-size:10px;border-top:1px solid rgba(32,54,80,.6)}
+.side{display:flex;flex-direction:column;gap:12px}.sidecard{padding:15px}.side-title{color:#cc83ff;font-size:12px;font-weight:850;text-transform:uppercase;letter-spacing:.04em;margin-bottom:12px}.insight-row{display:grid;grid-template-columns:86px 1fr;gap:7px;font-size:11px;margin:9px 0}.insight-row span:first-child{color:#a6b6cf}.insight-row span:last-child{color:#dde8f6}.summary-card{border-color:#50306a;background:linear-gradient(180deg,#15142c,#101225)}.summary-card .side-title{color:#d68cff}.sumrow{display:flex;justify-content:space-between;gap:9px;font-size:11px;margin:8px 0}.sumrow span:first-child{color:#c6a7e0}.sumrow b{font-weight:800}.risk{border-color:#654117;background:linear-gradient(180deg,#22170e,#17120d)}.risk .side-title{color:#ffc75d}.risk p{font-size:11px;color:#d9c9ac;line-height:1.5;margin:0}
+.section-card{padding:17px;margin-top:12px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-title{font-size:17px;font-weight:850}.section-sub{font-size:11px;color:var(--muted);margin-top:3px}.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:9px}.metric{background:#081728;border:1px solid #1d324d;border-radius:10px;padding:11px}.metric .label{font-size:10px;color:#8399b7;text-transform:uppercase}.metric b{display:block;font-size:17px;margin-top:5px}
+.table-wrap{overflow:auto;margin-top:13px}table{width:100%;border-collapse:collapse;min-width:900px}th,td{font-size:11px;padding:9px;border-bottom:1px solid #192d46;text-align:left}th{color:#849ab8}.footer{margin-top:12px;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;color:#8ea3c1;font-size:11px}
+.error{display:none;background:#35131a;border:1px solid #7b2938;color:#ffd5db;padding:10px 12px;border-radius:10px;margin-bottom:12px}
+@media(max-width:1100px){.topgrid{grid-template-columns:1fr 1fr}.market-card{grid-column:1/-1}.main-layout{grid-template-columns:1fr}.side{display:grid;grid-template-columns:repeat(3,1fr)}.metrics{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:720px){.topbar{align-items:flex-start;flex-direction:column}.topgrid{grid-template-columns:1fr}.tradeboxes{grid-template-columns:repeat(2,1fr)}.market-card{grid-column:auto}.side{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.chart-wrap{height:430px}.prediction-zone-bg{width:42%}.zone-label{right:9%}.brand{font-size:29px}}
 </style>
 </head>
 <body>
 <div class="shell">
-  <div class="top">
-    <div class="brand"><h1>NIFTY AI</h1><p>Minimal F&O prediction dashboard</p></div>
+  <div class="topbar">
+    <div>
+      <div class="brandline"><div class="brand">NIFTY <span>AI</span></div><div class="tag">Smarter signals. Better validation.</div></div>
+    </div>
     <div class="actions">
+      <span class="market-open"><span class="statusdot"></span><span id="marketState">Market data</span></span>
       <span class="pill" id="lastUpdated">Loading...</span>
-      <button onclick="enableNotifications()">Enable Alerts</button>
-      <button class="primary" onclick="loadAll()">Refresh</button>
+      <button class="iconbtn" onclick="loadAll()">↻ Refresh</button>
+      <button onclick="enableNotifications()">🔔 Alerts</button>
+      <button onclick="logout()">👤 Logout</button>
     </div>
   </div>
 
   <div class="error" id="errorBox"></div>
 
-  <div class="hero">
-    <div class="card">
-      <div class="label">Current F&O Call</div>
-      <div class="signal" id="signal">--</div>
-      <div class="price">NIFTY <span id="price">--</span></div>
-      <div class="reason" id="reason">Waiting for prediction...</div>
-      <div class="ts" id="signalTime">Signal time: --</div>
+  <div class="topgrid">
+    <div class="card prediction-card">
+      <div class="eyebrow">Current Prediction</div>
+      <div class="signalrow">
+        <div class="signalwrap"><div class="arrow" id="signalArrow">→</div><div><div class="signal" id="signal">--</div><div class="signal-sub" id="signalStrike">NIFTY --</div></div></div>
+        <div class="conf"><span>Confidence</span><b id="confidence">--%</b><span id="signalTime">Signal time: --</span></div>
+      </div>
     </div>
 
-    <div class="card">
-      <div class="label">Trade Plan</div>
-      <div class="tradegrid">
-        <div class="metric"><span class="label">Confidence</span><b id="confidence">--</b></div>
-        <div class="metric"><span class="label">Strike</span><b id="strike">--</b></div>
-        <div class="metric"><span class="label">Entry</span><b id="entry">--</b></div>
-        <div class="metric"><span class="label">Stop Loss</span><b id="stop">--</b></div>
-        <div class="metric"><span class="label">Target 1</span><b id="target1">--</b></div>
-        <div class="metric"><span class="label">Target 2</span><b id="target2">--</b></div>
+    <div class="card trade-card">
+      <div class="eyebrow" id="tradePlanTitle">Trade Plan</div>
+      <div class="tradeboxes">
+        <div class="tradebox entry"><div class="eyebrow">Entry</div><div class="v" id="entry">--</div></div>
+        <div class="tradebox stop"><div class="eyebrow">Stop Loss</div><div class="v" id="stop">--</div></div>
+        <div class="tradebox target"><div class="eyebrow">Target 1</div><div class="v" id="target1">--</div></div>
+        <div class="tradebox target"><div class="eyebrow">Target 2</div><div class="v" id="target2">--</div></div>
+      </div>
+    </div>
+
+    <div class="card market-card">
+      <div class="eyebrow">Market Status</div><div style="font-weight:800;margin-top:8px">NIFTY</div>
+      <div class="market-price" id="price">--</div><div class="market-change" id="marketBias">--</div><div class="spark"></div>
+    </div>
+  </div>
+
+  <div class="main-layout">
+    <div class="card chart-card">
+      <div class="toolbar">
+        <div class="intervals">
+          <button data-i="1m" onclick="changeInterval('1m')">1m</button>
+          <button data-i="5m" class="active" onclick="changeInterval('5m')">5m</button>
+          <button data-i="15m" onclick="changeInterval('15m')">15m</button>
+        </div>
+        <div class="toggles">
+          <label class="toggle"><input type="checkbox" id="zoneToggle" checked onchange="toggleZone()"> Prediction Zone</label>
+          <label class="toggle"><input type="checkbox" id="emaToggle" checked onchange="toggleEma()"> EMA</label>
+        </div>
+      </div>
+      <div class="chart-meta"><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
+      <div class="chart-wrap" id="chartWrap">
+        <div class="prediction-zone-bg wait" id="predictionZoneBg"></div>
+        <div class="zone-label" id="predictionZoneLabel">AI PREDICTION ZONE<br><span style="font-weight:500">(estimated future candles)</span></div>
+        <div id="niftyChart"></div>
+      </div>
+      <div class="chart-note">Shaded candles are model-estimated, not real market candles. They are shown every prediction cycle, including WAIT, so predicted path can be compared with future actual candles.</div>
+    </div>
+
+    <div class="side">
+      <div class="card sidecard">
+        <div class="side-title">✧ AI Insights</div>
+        <div class="insight-row"><span>Trend</span><span id="insTrend">--</span></div>
+        <div class="insight-row"><span>EMA</span><span id="insEma">--</span></div>
+        <div class="insight-row"><span>RSI</span><span id="insRsi">--</span></div>
+        <div class="insight-row"><span>MACD</span><span id="insMacd">--</span></div>
+        <div class="insight-row"><span>FII / DII</span><span id="insFlow">--</span></div>
+        <div class="insight-row"><span>Option Chain</span><span id="insOption">--</span></div>
+        <div class="insight-row"><span>News</span><span id="insNews">--</span></div>
+      </div>
+
+      <div class="card sidecard summary-card">
+        <div class="side-title">▣ Prediction Summary</div>
+        <div class="sumrow"><span>Signal</span><b id="sumSignal">--</b></div>
+        <div class="sumrow"><span>Strike</span><b id="sumStrike">--</b></div>
+        <div class="sumrow"><span>Confidence</span><b id="sumConfidence">--</b></div>
+        <div class="sumrow"><span>Entry</span><b id="sumEntry">--</b></div>
+        <div class="sumrow"><span>Stop Loss</span><b id="sumStop">--</b></div>
+        <div class="sumrow"><span>Target 1</span><b id="sumT1">--</b></div>
+        <div class="sumrow"><span>Target 2</span><b id="sumT2">--</b></div>
+        <div class="sumrow"><span>Reason</span><b id="sumReason" style="text-align:right;max-width:150px">--</b></div>
+      </div>
+
+      <div class="card sidecard risk">
+        <div class="side-title">● Note</div>
+        <p>The prediction zone is an estimated path generated from the current model direction, confidence and recent volatility. It is for validation/paper trading, not guaranteed future price movement.</p>
       </div>
     </div>
   </div>
 
-
-  <div class="card" style="margin-bottom:16px">
-    <div class="label">Paper Trading</div><div style="font-size:20px;font-weight:800;margin:6px 0">Virtual Portfolio</div>
-    <div class="tradegrid"><div class="metric"><span class="label">Equity</span><b id="paperEquity">₹--</b></div><div class="metric"><span class="label">Cash</span><b id="paperCash">₹--</b></div><div class="metric"><span class="label">Open P&L</span><b id="paperOpenPnl">₹--</b></div><div class="metric"><span class="label">Realized P&L</span><b id="paperRealized">₹--</b></div><div class="metric"><span class="label">Win Rate</span><b id="paperWinRate">--%</b></div><div class="metric"><span class="label">Open Trades</span><b id="paperOpenCount">--</b></div></div>
-    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button id="paperBuyBtn" onclick="paperBuy()">Paper Buy Current Signal</button><button onclick="paperReset()">Reset Paper Account</button></div>
-    <div style="overflow:auto;margin-top:14px"><table style="width:100%;min-width:760px;border-collapse:collapse"><thead><tr><th>Time</th><th>Signal</th><th>Strike</th><th>Entry</th><th>Exit/Current</th><th>P&L</th><th>Status</th><th>Action</th></tr></thead><tbody id="paperHistory"></tbody></table></div>
-  </div>
-  <div class="card" style="margin-top:16px">
-    <div class="chart-head">
-      <div>
-        <div class="chart-title">Prediction Accuracy Tracker</div>
-        <div class="chart-sub">Measured from completed BUY CE/PE signals, not model confidence.</div>
-      </div>
-      <span class="pill" id="accuracySample">0 completed</span>
+  <div class="card section-card">
+    <div class="section-head"><div><div class="section-title">Paper Trading</div><div class="section-sub">Each user has an independent virtual portfolio.</div></div><div class="actions"><button id="paperBuyBtn" onclick="paperBuy()">Paper Buy Current Signal</button><button onclick="paperReset()">Reset</button></div></div>
+    <div class="metrics">
+      <div class="metric"><span class="label">Equity</span><b id="paperEquity">₹--</b></div>
+      <div class="metric"><span class="label">Cash</span><b id="paperCash">₹--</b></div>
+      <div class="metric"><span class="label">Open P&L</span><b id="paperOpenPnl">₹--</b></div>
+      <div class="metric"><span class="label">Realized P&L</span><b id="paperRealized">₹--</b></div>
+      <div class="metric"><span class="label">Win Rate</span><b id="paperWinRate">--%</b></div>
+      <div class="metric"><span class="label">Open Trades</span><b id="paperOpenCount">--</b></div>
     </div>
-    <div class="paper-grid">
+    <div class="table-wrap"><table><thead><tr><th>Time</th><th>Signal</th><th>Contract</th><th>Entry</th><th>Current/Exit</th><th>P&L</th><th>Status</th><th>Action</th></tr></thead><tbody id="paperHistory"></tbody></table></div>
+  </div>
+
+  <div class="card section-card">
+    <div class="section-head"><div><div class="section-title">Prediction Accuracy Tracker</div><div class="section-sub">Target 1 observed before stop = WIN. This is separate from displayed confidence.</div></div><span class="pill" id="accuracySample">0 completed</span></div>
+    <div class="metrics">
       <div class="metric"><span class="label">Overall Accuracy</span><b id="accuracyOverall">--%</b></div>
       <div class="metric"><span class="label">CE Accuracy</span><b id="accuracyCE">--%</b></div>
       <div class="metric"><span class="label">PE Accuracy</span><b id="accuracyPE">--%</b></div>
       <div class="metric"><span class="label">Wins / Losses</span><b id="accuracyWL">--</b></div>
       <div class="metric"><span class="label">Open Signals</span><b id="accuracyOpen">--</b></div>
-      <div class="metric"><span class="label">Profit Factor*</span><b id="accuracyPF">--</b></div>
+      <div class="metric"><span class="label">Profit Factor</span><b id="accuracyPF">--</b></div>
     </div>
-    <div class="footer-note" id="accuracyNote">Collecting signals. We should not judge real-money readiness from a small sample.</div>
+    <div class="chart-note" id="accuracyNote">Collecting signals. Keep this in paper mode while sample size is small.</div>
   </div>
 
-  <div class="card chart-card">
-    <div class="chart-head">
-      <div>
-        <div class="chart-title">Prediction Chart</div>
-        <div class="chart-sub" id="chartStatus">Loading 5-minute candles...</div>
-      </div>
-      <div class="controls">
-        <button data-i="1m" onclick="changeInterval('1m')">1m</button>
-        <button data-i="5m" class="active" onclick="changeInterval('5m')">5m</button>
-        <button data-i="15m" onclick="changeInterval('15m')">15m</button>
-      </div>
-    </div>
-    <div class="legend">
-      <span><span class="dot" style="background:#3b82f6"></span>EMA 20</span>
-      <span><span class="dot" style="background:#8b5cf6"></span>EMA 50</span>
-      <span>CE / PE / WAIT shown on latest candle</span>
-    </div>
-    <div id="niftyChart"></div>
-    <div class="footer-note">Technical, news, FII/DII, global and option-chain analysis continues in the background.</div>
-  </div>
+  <div class="card footer"><b>▥ AI PREDICTS. YOU DECIDE.</b><span>Validation mode · Not financial advice</span></div>
 </div>
 
 <script>
 let currentInterval="5m";
-let chart,candleSeries,ema20Series,ema50Series;
+let chart,candleSeries,ema20Series,ema50Series,predictionSeries;
 let lastSignal=localStorage.getItem("nifty_last_signal")||"";
+let latestPrediction=null;
+let latestChartData=null;
 
-function setText(id,v){document.getElementById(id).textContent=(v===null||v===undefined||v==="")?"--":v;}
-function fmt(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):"--";}
-function signalColor(s){
-  s=String(s||"").toUpperCase();
-  if(s.includes("CE")||s.includes("CALL"))return "#22c55e";
-  if(s.includes("PE")||s.includes("PUT"))return "#ef4444";
-  return "#f59e0b";
-}
-function enableNotifications(){if("Notification" in window)Notification.requestPermission();}
-function notifySignal(sig,reason){
-  if(!sig||sig===lastSignal)return;
-  if(lastSignal&&"Notification" in window&&Notification.permission==="granted"){
-    new Notification("NIFTY AI signal changed",{body:`${lastSignal} → ${sig}${reason?" • "+reason:""}`});
-  }
-  lastSignal=sig;localStorage.setItem("nifty_last_signal",sig);
-}
+function el(id){return document.getElementById(id)}
+function setText(id,v){const x=el(id);if(x)x.textContent=(v===null||v===undefined||v==="")?"--":v}
+function fmt(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):"--"}
+function signalColor(s){s=String(s||"").toUpperCase();if(s.includes("CE")||s.includes("BULL"))return "#22d3a6";if(s.includes("PE")||s.includes("BEAR"))return "#fb5b6b";return "#f7b84b"}
+function enableNotifications(){if("Notification" in window)Notification.requestPermission()}
+async function logout(){await fetch("/auth/logout",{method:"POST"});location.href="/login"}
+function notifySignal(sig,reason){if(!sig||sig===lastSignal)return;if(lastSignal&&"Notification" in window&&Notification.permission==="granted")new Notification("NIFTY AI signal changed",{body:`${lastSignal} → ${sig} • ${reason||""}`});lastSignal=sig;localStorage.setItem("nifty_last_signal",sig)}
+
 function pickTrade(data){
-  const setup=String(data.fno_setup||data.signal||"WAIT").toUpperCase();
-  const alerts=data.fno_alerts||data.alerts||{};
-  if(setup.includes("CE"))return alerts.call||alerts.ce||{};
-  if(setup.includes("PE"))return alerts.put||alerts.pe||{};
-  return {};
+  const setup=String(data.fno_setup||"WAIT").toUpperCase(),a=data.fno_alerts||{};
+  if(setup.includes("CE"))return {type:"CE",trade:a.call||{}};
+  if(setup.includes("PE"))return {type:"PE",trade:a.put||{}};
+  const c=a.call||{},p=a.put||{},cs=Number(c.signal_strength_percent||0),ps=Number(p.signal_strength_percent||0);
+  if(cs||ps)return cs>=ps?{type:"CE",trade:c}:{type:"PE",trade:p};
+  return {type:null,trade:{}};
 }
-async function loadPrediction(){
-  const r=await fetch("/prediction?include_alerts=true",{cache:"no-store"});
-  const d=await r.json();
-  if(!r.ok||d.status==="error")throw new Error(d.message||"Prediction unavailable");
-
-  const setup=String(d.fno_setup||d.signal||"WAIT").toUpperCase();
-  const trade=pickTrade(d);
-
-  setText("signal",setup);
-  document.getElementById("signal").style.color=signalColor(setup);
-  setText("price",fmt(d.price,2));
-
-  let c=Number(trade.signal_strength??trade.confidence??d.confidence??d.signal_strength);
+function entryText(trade){
+  const z=trade.entry_zone||{};
+  if(z.low!=null&&z.high!=null)return `₹ ${z.low} – ${z.high}`;
+  const v=trade.ltp??trade.option_ltp??trade.premium??trade.entry_price;
+  return v!=null?`₹ ${v}`:"--";
+}
+function confidenceValue(data,trade){
+  let c=Number(trade.signal_strength_percent??trade.signal_strength??trade.confidence??data.confidence??0);
   if(Number.isFinite(c)&&c<=1)c*=100;
-  setText("confidence",Number.isFinite(c)?c.toFixed(1)+"%":"--");
+  return Number.isFinite(c)?c:0;
+}
+function renderPrediction(data){
+  latestPrediction=data;
+  const setup=String(data.fno_setup||"WAIT").toUpperCase();
+  const picked=pickTrade(data),trade=picked.trade||{},typ=picked.type;
+  const conf=confidenceValue(data,trade);
+  const color=signalColor(setup);
+  const arrow=setup.includes("CE")?"↗":setup.includes("PE")?"↘":"→";
+  setText("signal",setup);el("signal").style.color=color;setText("signalArrow",arrow);el("signalArrow").style.color=color;
+  setText("price",fmt(data.price,2));setText("confidence",conf.toFixed(0)+"%");
+  setText("signalStrike",typ&&trade.strike?`NIFTY ${trade.strike} ${typ}`:"NIFTY WAIT");
+  setText("tradePlanTitle",typ&&trade.strike?`Trade Plan (NIFTY ${trade.strike} ${typ})`:"Trade Plan / Watch Setup");
+  const entry=entryText(trade),stop=trade.stop_loss!=null?`₹ ${trade.stop_loss}`:"--",t1=trade.target_1!=null?`₹ ${trade.target_1}`:"--",t2=trade.target_2!=null?`₹ ${trade.target_2}`:"--";
+  setText("entry",entry);setText("stop",stop);setText("target1",t1);setText("target2",t2);
+  const reason=data.fno_setup_reason||trade.reason||"Waiting for stronger confirmation.";
+  const ts=data.signal_generated_at||new Date().toISOString();setText("signalTime","Signal time: "+new Date(ts).toLocaleTimeString());
+  setText("marketBias",`${data.prediction||"--"} · Score ${data.combined_score??"--"}`);
+  setText("sumSignal",setup);el("sumSignal").style.color=color;setText("sumStrike",typ&&trade.strike?`${trade.strike} ${typ}`:"--");setText("sumConfidence",conf.toFixed(0)+"%");setText("sumEntry",entry);setText("sumStop",stop);setText("sumT1",t1);setText("sumT2",t2);setText("sumReason",reason);
 
-  setText("strike",trade.strike??trade.strike_price);
-  setText("entry",trade.entry??trade.entry_price??trade.entry_zone??trade.entry_low);
-  setText("stop",trade.stop_loss??trade.stop);
-  setText("target1",trade.target1??trade.target_1);
-  setText("target2",trade.target2??trade.target_2);
-
-  const reason=d.fno_setup_reason||d.fno_reason||d.reason||trade.reason||"Waiting for stronger confirmation.";
-  setText("reason",reason);
-
-  const ts=d.fno_signal_time||d.signal_time||d.timestamp||new Date().toISOString();
-  setText("signalTime","Signal time: "+new Date(ts).toLocaleString());
-
+  const s=data.signals||{},tech=s.technical||{},pa=s.price_action||{},flow=s.institutional_flow||{},oc=s.option_chain||{},news=s.news||{};
+  setText("insTrend",pa.fifteen_minute_trend||pa.bias||tech.bias||"--");
+  setText("insEma",tech.ema_20&&tech.ema_50?`EMA20 ${fmt(tech.ema_20,0)} / EMA50 ${fmt(tech.ema_50,0)}`:"--");
+  setText("insRsi",tech.rsi_14!=null?`${fmt(tech.rsi_14,1)} (${tech.bias||"--"})`:"--");
+  setText("insMacd",tech.macd!=null&&tech.macd_signal!=null?(Number(tech.macd)>Number(tech.macd_signal)?"Bullish crossover":"Bearish crossover"):"--");
+  setText("insFlow",flow.bias||"--");setText("insOption",oc.bias||"--");setText("insNews",news.bias||"--");
   notifySignal(setup,reason);
-  return d;
 }
+
 function initChart(){
-  const el=document.getElementById("niftyChart");
-  chart=LightweightCharts.createChart(el,{
-    width:el.clientWidth,height:el.clientHeight,
-    layout:{background:{color:"#0a1626"},textColor:"#8fa2ba"},
-    grid:{vertLines:{color:"#13243a"},horzLines:{color:"#13243a"}},
-    rightPriceScale:{borderColor:"#24364d"},
-    timeScale:{borderColor:"#24364d",timeVisible:true,secondsVisible:false}
+  const c=el("niftyChart");
+  chart=LightweightCharts.createChart(c,{
+    width:c.clientWidth,height:c.clientHeight,
+    layout:{background:{color:"rgba(8,21,36,.25)"},textColor:"#8298b7"},
+    grid:{vertLines:{color:"#12263c"},horzLines:{color:"#12263c"}},
+    rightPriceScale:{borderColor:"#213850"},timeScale:{borderColor:"#213850",timeVisible:true,secondsVisible:false,rightOffset:8,barSpacing:8}
   });
-  candleSeries=chart.addCandlestickSeries({
-    upColor:"#22c55e",downColor:"#ef4444",borderUpColor:"#22c55e",borderDownColor:"#ef4444",
-    wickUpColor:"#22c55e",wickDownColor:"#ef4444"
+  candleSeries=chart.addCandlestickSeries({upColor:"#23c9aa",downColor:"#ef5965",borderUpColor:"#23c9aa",borderDownColor:"#ef5965",wickUpColor:"#23c9aa",wickDownColor:"#ef5965"});
+  ema20Series=chart.addLineSeries({color:"#4187ff",lineWidth:1});
+  ema50Series=chart.addLineSeries({color:"#976bf4",lineWidth:1});
+  predictionSeries=chart.addCandlestickSeries({
+    upColor:"rgba(61,222,174,.72)",downColor:"rgba(255,101,117,.72)",
+    borderUpColor:"rgba(84,245,196,.9)",borderDownColor:"rgba(255,130,142,.9)",
+    wickUpColor:"rgba(84,245,196,.82)",wickDownColor:"rgba(255,130,142,.82)"
   });
-  ema20Series=chart.addLineSeries({color:"#3b82f6",lineWidth:2});
-  ema50Series=chart.addLineSeries({color:"#8b5cf6",lineWidth:2});
-  window.addEventListener("resize",()=>chart.applyOptions({width:el.clientWidth}));
+  window.addEventListener("resize",()=>chart.applyOptions({width:c.clientWidth}));
 }
+function intervalSeconds(){return currentInterval==="1m"?60:currentInterval==="15m"?900:300}
+function buildForecast(data,prediction){
+  const rows=data.candles||[];if(rows.length<3)return [];
+  const last=rows[rows.length-1],recent=rows.slice(-16);
+  const avgRange=recent.reduce((a,r)=>a+Math.max(.01,Number(r.high)-Number(r.low)),0)/recent.length;
+  const setup=String(prediction?.fno_setup||"WAIT").toUpperCase();
+  const model=String(prediction?.prediction||"").toUpperCase();
+  const score=Number(prediction?.combined_score||0);
+  const picked=pickTrade(prediction||{}),conf=confidenceValue(prediction||{},picked.trade||{});
+  let direction=0;
+  if(setup.includes("CE"))direction=1;else if(setup.includes("PE"))direction=-1;else if(model.includes("BULL"))direction=.28;else if(model.includes("BEAR"))direction=-.28;
+  const strength=Math.max(.22,Math.min(1,Math.abs(score)*1.15+conf/180));
+  const step=avgRange*(setup==="WAIT"?.16:.28+.18*strength);
+  const secs=intervalSeconds();let prev=Number(last.close),out=[];
+  const pattern=[.72,.35,.92,.48,.84,.58,.95,.62];
+  for(let i=1;i<=8;i++){
+    const wave=(i%2===0?-1:1)*step*.18;
+    const drift=direction*step*pattern[i-1];
+    const open=prev,close=open+drift+wave*(setup==="WAIT"?1:.35);
+    const wick=Math.max(avgRange*.12,step*.28);
+    out.push({time:Number(last.time)+secs*i,open,high:Math.max(open,close)+wick,low:Math.min(open,close)-wick,close});
+    prev=close;
+  }
+  return out;
+}
+function updateZone(prediction){
+  const setup=String(prediction?.fno_setup||"WAIT").toUpperCase(),bg=el("predictionZoneBg"),label=el("predictionZoneLabel");
+  bg.className="prediction-zone-bg "+(setup.includes("CE")?"ce":setup.includes("PE")?"pe":"wait");
+  label.innerHTML=`AI PREDICTION ZONE<br><span style="font-weight:500">${setup} · next estimated candles</span>`;
+}
+function toggleZone(){const on=el("zoneToggle").checked;el("predictionZoneBg").style.display=on?"block":"none";el("predictionZoneLabel").style.display=on?"block":"none";predictionSeries.applyOptions({visible:on})}
+function toggleEma(){const on=el("emaToggle").checked;ema20Series.applyOptions({visible:on});ema50Series.applyOptions({visible:on})}
+
 async function loadChart(prediction){
   if(!chart)initChart();
-  const r=await fetch("/chart-data?interval="+encodeURIComponent(currentInterval),{cache:"no-store"});
-  const d=await r.json();
+  const r=await fetch("/chart-data?interval="+encodeURIComponent(currentInterval),{cache:"no-store"}),d=await r.json();
   if(!r.ok||d.status!=="success")throw new Error(d.message||"Chart unavailable");
-
-  candleSeries.setData(d.candles||[]);
-  ema20Series.setData(d.ema20||[]);
-  ema50Series.setData(d.ema50||[]);
-
-  const setup=String(prediction?.fno_setup||"WAIT").toUpperCase();
-  const candles=d.candles||[];
-  if(candles.length){
-    const marker={
-      time:candles[candles.length-1].time,
-      position:setup.includes("PE")?"aboveBar":"belowBar",
-      color:signalColor(setup),
-      shape:setup==="WAIT"?"circle":(setup.includes("PE")?"arrowDown":"arrowUp"),
-      text:setup
-    };
-    if(typeof LightweightCharts.createSeriesMarkers==="function"){
-      LightweightCharts.createSeriesMarkers(candleSeries,[marker]);
-    }else if(typeof candleSeries.setMarkers==="function"){
-      candleSeries.setMarkers([marker]);
-    }
+  latestChartData=d;candleSeries.setData(d.candles||[]);ema20Series.setData(d.ema20||[]);ema50Series.setData(d.ema50||[]);
+  const forecast=buildForecast(d,prediction);predictionSeries.setData(forecast);updateZone(prediction);
+  const setup=String(prediction?.fno_setup||"WAIT").toUpperCase(),bars=d.candles||[];
+  if(bars.length){
+    const marker={time:bars[bars.length-1].time,position:setup.includes("PE")?"aboveBar":"belowBar",color:signalColor(setup),shape:setup.includes("CE")?"arrowUp":setup.includes("PE")?"arrowDown":"circle",text:`Prediction Start · ${setup}`};
+    if(typeof candleSeries.setMarkers==="function")candleSeries.setMarkers([marker]);
   }
-
-  setText("chartStatus",`${currentInterval} candles • Last candle: ${d.last_candle_time?new Date(d.last_candle_time).toLocaleString():"--"} • ${d.bars||0} bars`);
-  chart.timeScale().fitContent();
+  const last=bars[bars.length-1]||{};setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
+  setText("chartIntervalLabel",currentInterval);chart.timeScale().fitContent();
 }
 
+async function loadPrediction(){
+  const r=await fetch("/prediction?include_alerts=true",{cache:"no-store"}),d=await r.json();
+  if(!r.ok||d.status==="error")throw new Error(d.message||"Prediction unavailable");renderPrediction(d);return d;
+}
 async function loadPaper(){
-  try{await fetch("/api/paper/sync",{method:"POST"});const [a,b]=await Promise.all([fetch("/api/paper/summary"),fetch("/api/paper/history")]);const s=await a.json(),h=await b.json();if(s.status==="success"){const x=s.summary;setText("paperEquity","₹"+Number(x.equity).toFixed(2));setText("paperCash","₹"+Number(x.cash_balance).toFixed(2));setText("paperOpenPnl","₹"+Number(x.open_pnl).toFixed(2));setText("paperRealized","₹"+Number(x.realized_pnl).toFixed(2));setText("paperWinRate",Number(x.win_rate).toFixed(1)+"%");setText("paperOpenCount",x.open_positions)}document.getElementById("paperHistory").innerHTML=(h.trades||[]).map(t=>`<tr><td>${new Date(t.opened_at).toLocaleString()}</td><td>${t.signal}</td><td>${t.strike_price} ${t.option_type}${t.expiry?`<div style="font-size:10px;color:#7188a3">${t.expiry}</div>`:""}</td><td>${t.entry_price}</td><td>${t.status==="OPEN"?(t.current_price??t.entry_price):(t.exit_price??"--")}${t.last_price_at?`<div style="font-size:10px;color:#7188a3">${new Date(t.last_price_at).toLocaleTimeString()}</div>`:""}</td><td>₹${Number(t.pnl).toFixed(2)}</td><td>${t.status}</td><td>${t.status==="OPEN"?`<button onclick="paperExit(${t.trade_id},${t.current_price||t.entry_price})">Exit</button>`:""}</td></tr>`).join("")||'<tr><td colspan="8">No paper trades yet.</td></tr>';}catch(e){console.warn(e)}}
-async function paperBuy(){const d=await (await fetch("/prediction?include_alerts=true",{cache:"no-store"})).json();const setup=String(d.fno_setup||"WAIT").toUpperCase(),alerts=d.fno_alerts||{};let typ,trade;if(setup.includes("CE")){typ="CE";trade=alerts.call||{}}else if(setup.includes("PE")){typ="PE";trade=alerts.put||{}}else{return alert("Current final signal is WAIT. Paper trade not opened.")}if(!String(trade.signal||"").toUpperCase().includes("BUY"))return alert("No BUY confirmation yet.");const z=trade.entry_zone||{};const entry=trade.ltp??trade.option_ltp??trade.premium??((z.low!=null&&z.high!=null)?(Number(z.low)+Number(z.high))/2:null);if(!entry)return alert("Option premium unavailable.");const body={signal:trade.signal,option_type:typ,strike_price:trade.strike,nifty_price:d.price,entry_price:entry,stop_loss:trade.stop_loss,target1:trade.target_1,target2:trade.target_2,confidence:trade.signal_strength_percent,quantity:75,expiry:((d.signals||{}).option_chain||{}).expiry};const r=await fetch("/api/paper/open",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const x=await r.json();if(!r.ok)alert(x.message||"Unable to open paper trade");loadPaper()}
-async function paperExit(id,px){const v=prompt("Exit price",px);if(!v)return;const r=await fetch("/api/paper/close",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trade_id:id,exit_price:Number(v)})});const x=await r.json();if(!r.ok)alert(x.message||"Unable to exit");loadPaper()}
+  try{
+    await fetch("/api/paper/sync",{method:"POST"});
+    const [a,b]=await Promise.all([fetch("/api/paper/summary"),fetch("/api/paper/history")]),s=await a.json(),h=await b.json();
+    if(s.status==="success"){const x=s.summary;setText("paperEquity","₹"+Number(x.equity).toFixed(2));setText("paperCash","₹"+Number(x.cash_balance).toFixed(2));setText("paperOpenPnl","₹"+Number(x.open_pnl).toFixed(2));setText("paperRealized","₹"+Number(x.realized_pnl).toFixed(2));setText("paperWinRate",Number(x.win_rate).toFixed(1)+"%");setText("paperOpenCount",x.open_positions)}
+    el("paperHistory").innerHTML=(h.trades||[]).map(t=>`<tr><td>${new Date(t.opened_at).toLocaleString()}</td><td>${t.signal}</td><td>${t.strike_price} ${t.option_type}${t.expiry?`<div style="font-size:9px;color:#7188a3">${t.expiry}</div>`:""}</td><td>${t.entry_price}</td><td>${t.status==="OPEN"?(t.current_price??t.entry_price):(t.exit_price??"--")}</td><td>₹${Number(t.pnl).toFixed(2)}</td><td>${t.status}${t.exit_reason?` / ${t.exit_reason}`:""}</td><td>${t.status==="OPEN"?`<button onclick="paperExit(${t.trade_id},${t.current_price||t.entry_price})">Exit</button>`:""}</td></tr>`).join("")||'<tr><td colspan="8">No paper trades yet.</td></tr>';
+  }catch(e){console.warn("Paper:",e)}
+}
+async function paperBuy(){
+  const d=latestPrediction||await (await fetch("/prediction?include_alerts=true",{cache:"no-store"})).json(),setup=String(d.fno_setup||"WAIT").toUpperCase(),a=d.fno_alerts||{};let typ,trade;
+  if(setup.includes("CE")){typ="CE";trade=a.call||{}}else if(setup.includes("PE")){typ="PE";trade=a.put||{}}else return alert("Current final signal is WAIT. Prediction Zone will still stay visible, but no paper BUY is opened.");
+  if(!String(trade.signal||"").toUpperCase().includes("BUY"))return alert("No BUY confirmation yet.");
+  const z=trade.entry_zone||{},entry=trade.ltp??trade.option_ltp??trade.premium??((z.low!=null&&z.high!=null)?(Number(z.low)+Number(z.high))/2:null);if(!entry)return alert("Option premium unavailable.");
+  const body={signal:trade.signal,option_type:typ,strike_price:trade.strike,nifty_price:d.price,entry_price:entry,stop_loss:trade.stop_loss,target1:trade.target_1,target2:trade.target_2,confidence:trade.signal_strength_percent,quantity:75,expiry:((d.signals||{}).option_chain||{}).expiry};
+  const r=await fetch("/api/paper/open",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),x=await r.json();if(!r.ok)alert(x.message||"Unable to open paper trade");loadPaper();
+}
+async function paperExit(id,px){const v=prompt("Exit price",px);if(!v)return;const r=await fetch("/api/paper/close",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trade_id:id,exit_price:Number(v)})}),x=await r.json();if(!r.ok)alert(x.message||"Unable to exit");loadPaper()}
 async function paperReset(){if(!confirm("Reset paper balance and delete paper trade history?"))return;await fetch("/api/paper/reset",{method:"POST"});loadPaper()}
-
-
 async function loadAccuracy(){
-  try{
-    const r=await fetch("/api/accuracy/summary",{cache:"no-store"});
-    const d=await r.json();
-    if(!r.ok||d.status!=="success")return;
-    const x=d.summary||{};
-    setText("accuracyOverall",Number(x.accuracy||0).toFixed(1)+"%");
-    setText("accuracyCE",Number(x.ce_accuracy||0).toFixed(1)+"%");
-    setText("accuracyPE",Number(x.pe_accuracy||0).toFixed(1)+"%");
-    setText("accuracyWL",(x.wins||0)+" / "+(x.losses||0));
-    setText("accuracyOpen",x.open_signals||0);
-    setText("accuracyPF",x.profit_factor_points==null?"--":Number(x.profit_factor_points).toFixed(2));
-    setText("accuracySample",(x.completed||0)+" completed");
-    const sample=Number(x.completed||0);
-    setText("accuracyNote",
-      sample<30
-      ?"Sample is still small ("+sample+"). Keep this in paper mode."
-      : sample<100
-        ?"Accuracy is becoming informative, but 100+ completed signals is preferred before considering real money."
-        :"100+ completed signals collected. Review accuracy, drawdown and profit factor together before any real-money decision."
-    );
-  }catch(e){console.warn("Accuracy tracker:",e)}
+  try{const r=await fetch("/api/accuracy/summary",{cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")return;const x=d.summary||{};
+    setText("accuracyOverall",Number(x.accuracy||0).toFixed(1)+"%");setText("accuracyCE",Number(x.ce_accuracy||0).toFixed(1)+"%");setText("accuracyPE",Number(x.pe_accuracy||0).toFixed(1)+"%");setText("accuracyWL",(x.wins||0)+" / "+(x.losses||0));setText("accuracyOpen",x.open_signals||0);setText("accuracyPF",x.profit_factor_points==null?"--":Number(x.profit_factor_points).toFixed(2));setText("accuracySample",(x.completed||0)+" completed");
+    const n=Number(x.completed||0);setText("accuracyNote",n<30?`Sample is still small (${n}). Keep this in paper mode.`:n<100?"Accuracy is becoming informative; 100+ completed signals is preferred.":"100+ signals collected. Review accuracy, drawdown and profit factor together.");
+  }catch(e){console.warn("Accuracy:",e)}
 }
-
 async function loadAll(){
-  const box=document.getElementById("errorBox");
-  box.style.display="none";
-  try{
-    const p=await loadPrediction();
-    await Promise.all([
-      loadChart(p),
-      loadPaper(),
-      loadAccuracy()
-    ]);
-    setText("lastUpdated","Updated: "+new Date().toLocaleTimeString());
-  }catch(e){
-    box.textContent=e.message;box.style.display="block";setText("lastUpdated","Update failed");
-  }
+  const box=el("errorBox");box.style.display="none";
+  try{const p=await loadPrediction();await Promise.all([loadChart(p),loadPaper(),loadAccuracy()]);setText("lastUpdated",new Date().toLocaleString());setText("marketState","Market data live")}
+  catch(e){box.textContent=e.message;box.style.display="block";setText("lastUpdated","Update failed")}
 }
-function changeInterval(v){
-  currentInterval=v;
-  document.querySelectorAll("[data-i]").forEach(b=>b.classList.toggle("active",b.dataset.i===v));
-  loadAll();
-}
-loadAll();
-setInterval(loadAll,60000);
+function changeInterval(v){currentInterval=v;document.querySelectorAll("[data-i]").forEach(b=>b.classList.toggle("active",b.dataset.i===v));loadAll()}
+loadAll();setInterval(loadAll,60000);
 </script>
 </body>
 </html>

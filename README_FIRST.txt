@@ -1,35 +1,28 @@
-NIFTY AI v10 - Exact Paper P&L + Accuracy Tracker
+NIFTY AI v10.1 - Prediction Zone UI
 
-WHAT IS FIXED
-1. Paper P&L now tracks the exact saved option contract:
-   expiry + strike + CE/PE.
-2. It no longer depends on whatever ATM strike the next prediction chooses.
-3. Open positions update current premium and P&L on dashboard refresh.
-4. Paper trades automatically close when observed premium reaches Stop Loss,
-   Target 1, or Target 2.
-5. New Prediction Accuracy Tracker records qualifying BUY CE/PE signals globally.
-6. Accuracy = Target 1 observed before Stop Loss.
-7. CE accuracy, PE accuracy, wins/losses, open signals and profit factor are shown.
-8. Login remains mobile number + password. No OTP login.
+This build keeps all v10 functionality:
+- mobile number + password login
+- exact-contract paper P&L
+- per-user paper portfolio
+- prediction accuracy tracker
+- WhatsApp support when configured
+
+NEW
+- Dashboard redesigned to match the approved NIFTY AI reference style.
+- AI Prediction Zone is ALWAYS shown after every prediction cycle.
+- It does NOT depend on buying a paper trade.
+- BUY CE = green prediction zone and upward estimated candles.
+- BUY PE = red prediction zone and downward estimated candles.
+- WAIT = amber prediction zone with a narrow/sideways estimated path.
+- Prediction start is marked on the latest actual candle.
+- AI Insights and Prediction Summary panels are shown beside the chart.
+- The estimated candles are clearly labelled as model projections, not actual market candles.
 
 IMPORTANT
-- This remains paper trading / validation only.
-- Accuracy collection happens when the app is refreshed/synced. A Vercel background
-  scheduler can be added later for continuous tracking while nobody has the page open.
-- Sparse refreshes cannot know the exact intrabar order if both SL and target were touched
-  between checks. The evaluator uses a conservative rule.
+The future candles are a visualization derived from current model direction,
+confidence, combined score and recent candle volatility. They are not guaranteed
+future prices and should be used for validation/paper trading only.
 
-UPLOAD/REPLACE IN GITHUB ROOT
-- main.py
-- auth_whatsapp.py
-- vercel_entry.py
-- requirements.txt
-- vercel.json
-
-KEEP VERCEL ENVIRONMENT VARIABLES
-- DATABASE_URL
-- JWT_SECRET
-- NEWS_API_KEY
-- Twilio WhatsApp variables only if WhatsApp alerts are used.
-
-No manual SQL migration is needed; missing columns/tables are created automatically.
+DEPLOY
+Replace files in GitHub root with all files from this ZIP, then redeploy Vercel.
+No environment-variable changes are required from v10.
