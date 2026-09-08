@@ -4348,29 +4348,33 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
 .sidebar-nav button.active{background:#175bc0;color:#fff;border-color:#2e7cf0}
 .sidebar-nav .nav-icon{display:block;font-size:18px;margin-bottom:4px}
 .backtest-panel{
- position:fixed;left:98px;top:92px;width:min(420px,calc(100vw - 116px));
- max-height:calc(100vh - 108px);overflow:auto;z-index:29;
+ position:fixed;left:98px;top:80px;width:min(940px,calc(100vw - 116px));
+ max-height:calc(100vh - 96px);overflow:auto;z-index:29;
  background:linear-gradient(180deg,#0d1d31,#071423);border:1px solid #27405f;
  border-radius:16px;padding:16px;box-shadow:0 24px 70px rgba(0,0,0,.45);
  display:none
 }
 .backtest-panel.open{display:block}
-.backtest-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.backtest-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:11px}
 .backtest-field label{display:block;font-size:10px;color:#849bb9;margin-bottom:5px;text-transform:uppercase}
 .backtest-field input,.backtest-field select{
  width:100%;padding:10px;border-radius:9px;border:1px solid #29415f;background:#081728;color:#eef5ff
 }
-.backtest-results{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.backtest-results{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}
+.bt-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:14px}
 .btmetric{padding:10px;border:1px solid #203650;border-radius:10px;background:#081728}
 .btmetric span{display:block;color:#849bb9;font-size:10px;text-transform:uppercase}
-.btmetric b{display:block;margin-top:4px;font-size:17px}
-#btEquityChart{height:210px;margin-top:12px}
-.bt-note{font-size:10px;color:#8397b1;line-height:1.5;margin-top:10px}
-.bt-table-wrap{overflow:auto;margin-top:12px;max-height:250px}
+.btmetric b{display:block;margin-top:4px;font-size:19px}
+#btEquityChart{height:260px;margin-top:14px}
+.bt-note{font-size:11px;color:#8397b1;line-height:1.6;margin-top:10px}
+.bt-table-wrap{overflow:auto;margin-top:14px;max-height:320px}
 @media(max-width:720px){
  .sidebar-nav{left:5px;top:auto;bottom:8px;width:calc(100vw - 10px);flex-direction:row;background:#071423;padding:6px;border:1px solid #203650;border-radius:14px}
  .sidebar-nav button{width:auto;flex:1;min-height:46px}
  .backtest-panel{left:6px;top:72px;width:calc(100vw - 12px);max-height:calc(100vh - 140px)}
+ .backtest-grid{grid-template-columns:1fr 1fr}
+ .backtest-results{grid-template-columns:1fr 1fr}
+ .bt-actions{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -4440,11 +4444,14 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     </div>
   </div>
 
-  <button class="primary" style="width:100%;margin-top:12px" onclick="runBacktest()">Run Backtest</button>
-  <button class="primary" style="width:100%;margin-top:8px" onclick="runOptimizer()">Optimize + Walk-Forward</button>
+  <div class="bt-actions">
+    <button class="primary" onclick="runBacktest()">Run Backtest</button>
+    <button class="primary" onclick="runOptimizer()">Optimize + Walk-Forward</button>
+    <button class="primary" onclick="runRollingWF()">Rolling Walk-Forward (5 folds)</button>
+  </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
-  <button class="primary" style="width:100%;margin-top:8px" onclick="runRollingWF()">Rolling Walk-Forward (5 folds)</button>
   <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
+  <div class="bt-note" id="btExits" style="margin-top:8px">Exit mix appears after a run.</div>
   <div class="bt-note" id="btRolling" style="margin-top:8px">
     Rolling walk-forward optimises on one segment and validates on the next, five times. This is the test for repeatability across regimes.
   </div>
@@ -4846,10 +4853,16 @@ async function runBacktest(){
     setText("btTrades",d.total_trades);
     setText("btWinRate",Number(d.win_rate).toFixed(1)+"%");
     setText("btPF",d.profit_factor==null?"--":Number(d.profit_factor).toFixed(2));
-    const edge=Number(d.edge_vs_random_percentage_points||0);
-    setText("btEdge",(edge>=0?"+":"")+edge.toFixed(1)+" pts");
+    const rawEdge=d.edge_vs_random_percentage_points;
     const edgeEl=el("btEdge");
-    if(edgeEl){edgeEl.style.color=edge>2?"#22d3a6":edge>0?"#f7b84b":"#fb5b6b";}
+    if(rawEdge==null){
+      setText("btEdge","n/a");
+      if(edgeEl){edgeEl.style.color="#849bb9";}
+    }else{
+      const edge=Number(rawEdge);
+      setText("btEdge",(edge>=0?"+":"")+edge.toFixed(1)+" pts");
+      if(edgeEl){edgeEl.style.color=edge>2?"#22d3a6":edge>0?"#f7b84b":"#fb5b6b";}
+    }
     setText("btDD",Number(d.max_drawdown_percent).toFixed(2)+"%");
     setText("btExpectancy","₹"+Number(d.expectancy_per_trade||0).toFixed(2));
     setText("btConsec",d.max_consecutive_losses||0);
@@ -4867,6 +4880,15 @@ async function runBacktest(){
       `Signals → CE ${d.signal_counts?.CE||0}, PE ${d.signal_counts?.PE||0}, WAIT ${d.signal_counts?.WAIT||0}. `
       + `Win rate ${wr.toFixed(1)}% vs coin-flip baseline ${bl.toFixed(1)}% for this stop/target geometry. `
       + `Expectancy ${Number(d.expectancy_r||0).toFixed(3)} R. Direction: ${cfg.mode||"--"}.`
+    );
+    const em=d.exit_mix||{};
+    setText("btExits",
+      `Exits → target ${em.target||0}, stop ${em.stop||0}, time ${em.time||0} `
+      + `(${Number(em.time_exit_percent||0).toFixed(0)}% time). `
+      + `Edge basis: ${d.edge_basis||"--"}. `
+      + (Number(em.time_exit_percent||0)>60
+          ? "Most trades never reach a barrier, so R:R and Max Hold are fighting each other — lower R:R or raise Max Hold."
+          : "Barrier resolution is healthy.")
     );
     const ca=d.cost_attribution||{};
     if(ca.net_r_per_trade!==undefined){

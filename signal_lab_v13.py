@@ -495,7 +495,38 @@ def _summarize(trades, equity, counts, wait_reasons, initial, capital, config):
 
     win_rate = round(len(wins) / total * 100, 1) if total else 0.0
     base = barrier_baseline(config["reward_risk"], config["stop_atr_mult"])
-    edge_vs_random = round(win_rate - base["random_walk_win_rate_percent"], 1)
+
+    # ------------------------------------------------------------------
+    # The barrier baseline stop/(stop+target) only applies to trades that
+    # actually TOUCHED a barrier. When max_hold truncates most trades, the
+    # raw win rate counts small time-exit gains and comparing it to the
+    # barrier baseline overstates the edge badly. So the comparison is made
+    # only over barrier-resolved trades, and time exits are reported
+    # separately with their own coin-flip baseline of 50%.
+    # ------------------------------------------------------------------
+    n_target = sum(1 for t in trades if t["exit_reason"] == "TARGET")
+    n_stop = sum(1 for t in trades if t["exit_reason"] == "STOP")
+    n_time = sum(1 for t in trades if t["exit_reason"] == "TIME")
+    n_barrier = n_target + n_stop
+
+    barrier_win_rate = round(n_target / n_barrier * 100, 1) if n_barrier else None
+    if barrier_win_rate is not None and n_barrier >= 20:
+        edge_vs_random = round(
+            barrier_win_rate - base["random_walk_win_rate_percent"], 1)
+        edge_basis = f"barrier-resolved trades only (n={n_barrier})"
+    else:
+        edge_vs_random = None
+        edge_basis = (
+            f"unavailable — only {n_barrier} of {total} trades reached a "
+            "barrier. Shorten Max Hold or narrow R:R so trades resolve.")
+
+    exit_mix = {
+        "target": n_target, "stop": n_stop, "time": n_time,
+        "time_exit_percent": round(n_time / total * 100, 1) if total else 0.0,
+        "read": ("A high time-exit share means the target is unreachable in "
+                 "the holding window, so R:R and Max Hold are inconsistent "
+                 "with each other. Win rate then measures drift, not skill."),
+    }
 
     m = {
         "starting_capital": round(initial, 2),
@@ -510,7 +541,8 @@ def _summarize(trades, equity, counts, wait_reasons, initial, capital, config):
         "max_drawdown_percent": round(max_dd, 2),
         "max_consecutive_losses": max_consec,
     }
-    m["verdict"] = _verdict_v13(m, edge_vs_random)
+    m["barrier_win_rate"] = barrier_win_rate
+    m["verdict"] = _verdict_v13(m, edge_vs_random, cost_attribution, exit_mix)
 
     return {
         "status": "success", "model_version": "13.0",
@@ -518,6 +550,8 @@ def _summarize(trades, equity, counts, wait_reasons, initial, capital, config):
         **m,
         "random_walk_baseline_win_rate": base["random_walk_win_rate_percent"],
         "edge_vs_random_percentage_points": edge_vs_random,
+        "edge_basis": edge_basis,
+        "exit_mix": exit_mix,
         "cost_attribution": cost_attribution,
         "signal_counts": counts,
         "top_wait_reasons": sorted(
@@ -534,16 +568,29 @@ def _summarize(trades, equity, counts, wait_reasons, initial, capital, config):
     }
 
 
-def _verdict_v13(m, edge_vs_random):
+def _verdict_v13(m, edge_vs_random, cost_attribution=None, exit_mix=None):
     pf = m.get("profit_factor")
     dd = abs(float(m.get("max_drawdown_percent") or 0))
     exp_r = float(m.get("expectancy_r") or 0)
     n = int(m.get("total_trades") or 0)
+    ca = cost_attribution or {}
+    gross = float(ca.get("gross_r_per_trade") or 0)
 
     if pf is None or n < 30:
         return "INSUFFICIENT DATA"
-    if edge_vs_random <= 0:
+
+    # Gross R is the frictionless signal value. If it is not positive, no
+    # cost reduction can rescue the strategy, and a flattering win rate is
+    # an artifact of the exit rules rather than evidence of skill.
+    if gross <= 0.005:
+        return "FAIL - NO SIGNAL VALUE"
+
+    if exit_mix and exit_mix.get("time_exit_percent", 0) > 70:
+        return "FAIL - EXITS DOMINATED BY TIME STOP"
+
+    if edge_vs_random is not None and edge_vs_random <= 0:
         return "FAIL - NO EDGE VS RANDOM"
+
     if pf >= 1.30 and exp_r > 0.05 and dd <= 20:
         return "PASS"
     if pf >= 1.05 and exp_r > 0 and dd <= 30:
@@ -654,10 +701,14 @@ def _objective_v13(r):
     exp_r = float(r.get("expectancy_r") or 0)
     dd = abs(float(r.get("max_drawdown_percent") or 0))
     n = int(r.get("total_trades") or 0)
-    edge = float(r.get("edge_vs_random_percentage_points") or 0)
-    if n < 25 or edge <= 0:
+    ca = r.get("cost_attribution") or {}
+    gross = float(ca.get("gross_r_per_trade") or 0)
+    # Rank on frictionless signal value, not on the raw win rate. This
+    # stops the optimizer preferring configs whose win rate is inflated
+    # by time exits.
+    if n < 25 or gross <= 0:
         return -1e9
-    return exp_r * 100 + pf * 10 - dd * 0.5 + min(n, 120) * 0.05
+    return gross * 200 + exp_r * 100 + pf * 10 - dd * 0.5 + min(n, 120) * 0.05
 
 
 # --------------------------------------------------------------------------
