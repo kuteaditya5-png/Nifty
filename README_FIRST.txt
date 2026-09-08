@@ -26,12 +26,22 @@ NEW ROUTES
   /v13/baseline      Coin-flip win rate for a given stop/target geometry
   /v13/backtest      Next-bar entry, session-bounded, symmetric slippage
   /v13/optimize      Re-runs the engine per config, validates on unseen bars
-                     Add ?fast=true if it times out on Vercel
+                     ALWAYS add ?fast=true on Vercel (300 runs will time out).
+                     Run the full grid locally instead:
+                       uvicorn main:app --reload
+                       localhost:8000/v13/optimize
 
 DEPLOY
 ------
 Replace your repo root files with this package and push. Vercel redeploys
-automatically. Confirm with:
+automatically.
+
+vercel.json is UNCHANGED from v12.3. Do not add a "functions" block to it,
+because Vercel rejects "functions" and "builds" in the same file. If you want
+a longer serverless timeout you must first migrate off "builds" entirely,
+which is a separate change and not needed here. Use ?fast=true instead.
+
+Confirm the deploy with:
 
   your-app.vercel.app/v13/baseline?reward_risk=1.5   -> should return 40.0
 
