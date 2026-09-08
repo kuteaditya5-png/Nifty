@@ -36,7 +36,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "14.7.1",
+        "version": "14.8",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4557,6 +4557,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <button class="primary" style="width:100%;margin-top:8px" onclick="runExtendedValidation()">Extended Historical Validation v14.5</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="syncHistoryStore()">Sync Historical Store v14.6</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="historyStoreStatus()">History Store Status</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="historyQualityCheck()">Data Quality & Gap Check v14.8</button>
           <input id="historyBackfillFile" type="file" accept=".csv" style="width:100%;margin-top:8px;padding:10px;border:1px solid #2b3f59;border-radius:10px;background:#0b1828;color:#dce8f8">
           <button class="primary" style="width:100%;margin-top:8px" onclick="uploadHistoryBackfill()">Import 15m CSV Backfill v14.7</button>
   </div>
@@ -4571,6 +4572,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btRegimeWF" style="margin-top:8px">v14.4 unseen validation has not been run yet.</div>
   <div class="bt-note" id="btExtendedValidation" style="margin-top:8px">v14.5 extended historical validation has not been run yet.</div>
   <div class="bt-note" id="btHistoryStore" style="margin-top:8px">Historical store has not been checked yet.</div>
+  <div class="bt-note" id="btHistoryQuality" style="margin-top:8px">Historical data quality has not been checked yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
@@ -5130,6 +5132,43 @@ async function syncHistoryStore(){
   }
 }
 
+
+
+async function historyQualityCheck(){
+  const box=document.getElementById("btHistoryQuality");
+  if(box) box.textContent="Checking coverage, gaps, duplicates, OHLC validity and interval consistency…";
+
+  try{
+    const r=await fetch("/v14/history/quality?interval=15m",{cache:"no-store"});
+    const d=await r.json();
+
+    if(!r.ok||d.status!=="success"){
+      throw new Error(d.message||"Historical quality check failed");
+    }
+
+    const worst=(d.worst_days||[]).slice(0,5)
+      .map(x=>`${x.date} ${x.coverage_percent}%`)
+      .join(", ");
+
+    const gaps=(d.large_session_gaps||[]).slice(0,3)
+      .map(x=>`${x.from}→${x.to} (${x.calendar_gap_days}d)`)
+      .join(", ");
+
+    if(box) box.textContent=
+      `${d.verdict} · BACKTEST READY ${d.backtest_ready?"YES":"NO"} · `
+      + `${d.stored_rows} candles · ${d.actual_trading_sessions} sessions · `
+      + `coverage ${d.overall_coverage_percent}% · `
+      + `full ${d.full_days}, partial ${d.partial_days}, severe-gap ${d.severe_gap_days} · `
+      + `duplicates ${d.duplicate_timestamp_rows} · invalid OHLC ${d.invalid_ohlc_rows} · `
+      + `abnormal ranges ${d.abnormal_range_rows} · median interval ${d.median_intraday_interval_minutes??"--"}m. `
+      + (worst?`Worst days: ${worst}. `:"")
+      + (gaps?`Large gaps: ${gaps}. `:"")
+      + d.recommendation;
+
+  }catch(e){
+    if(box) box.textContent="Data Quality error: "+e.message;
+  }
+}
 
 async function historyStoreStatus(){
   const box=document.getElementById("btHistoryStore");
@@ -6483,7 +6522,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "14.7.1",
+            "model_version": "14.8",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7336,7 +7375,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "14.7.1",
+            "model_version": "14.8",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7848,7 +7887,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "14.7.1",
+        "model_version": "14.8",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -7927,6 +7966,215 @@ def _v123_objective(m):
 
 
 
+
+
+
+# ============================================================
+# V14.8 HISTORICAL DATA QUALITY & GAP DETECTOR
+# ============================================================
+
+def _v148_expected_session_times():
+    """
+    NSE cash-market 15m timestamps from 09:15 through 15:15 inclusive.
+    We use these only for coverage diagnostics.
+    """
+    times = []
+    hour = 9
+    minute = 15
+    while True:
+        times.append((hour, minute))
+        if hour == 15 and minute == 15:
+            break
+        minute += 15
+        if minute >= 60:
+            minute = 0
+            hour += 1
+    return times
+
+
+def _v148_quality_report(raw, timeframe="15m"):
+    if raw is None or raw.empty:
+        return {
+            "status": "EMPTY",
+            "stored_rows": 0,
+            "message": "Historical store is empty."
+        }
+
+    df = raw.copy()
+    df = df.sort_index()
+
+    # Duplicate timestamps in the loaded frame.
+    duplicate_count = int(df.index.duplicated(keep=False).sum())
+
+    # Basic OHLC validity.
+    invalid_ohlc = int((
+        (df["High"] < df["Low"])
+        | (df["Open"] <= 0)
+        | (df["High"] <= 0)
+        | (df["Low"] <= 0)
+        | (df["Close"] <= 0)
+    ).sum())
+
+    # Same-session spacing diagnostics.
+    diffs = (
+        df.index.to_series()
+        .diff()
+        .dropna()
+        .dt.total_seconds()
+        .div(60.0)
+    )
+    positive = diffs[diffs > 0]
+    intraday = positive[positive <= 180]
+    median_interval = (
+        float(intraday.median())
+        if not intraday.empty
+        else (float(positive.median()) if not positive.empty else None)
+    )
+
+    # Per-day candle coverage.
+    expected_slots = _v148_expected_session_times()
+    expected_per_day = len(expected_slots)
+
+    by_date = {}
+    for ts in df.index:
+        d = ts.date().isoformat()
+        by_date.setdefault(d, set()).add((ts.hour, ts.minute))
+
+    daily = []
+    total_expected = 0
+    total_present = 0
+    severe_gap_days = 0
+    partial_days = 0
+    full_days = 0
+
+    for d in sorted(by_date):
+        observed = by_date[d]
+        present = sum(1 for slot in expected_slots if slot in observed)
+        missing = expected_per_day - present
+        coverage = present / expected_per_day * 100.0 if expected_per_day else 0.0
+
+        if coverage >= 96:
+            label = "FULL"
+            full_days += 1
+        elif coverage >= 70:
+            label = "PARTIAL"
+            partial_days += 1
+        else:
+            label = "SEVERE_GAP"
+            severe_gap_days += 1
+
+        total_expected += expected_per_day
+        total_present += present
+
+        daily.append({
+            "date": d,
+            "present": present,
+            "expected": expected_per_day,
+            "missing": missing,
+            "coverage_percent": round(coverage, 1),
+            "status": label,
+        })
+
+    overall_coverage = (
+        total_present / total_expected * 100.0
+        if total_expected else 0.0
+    )
+
+    # Calendar-span vs actual sessions.
+    span_days = (
+        df.index[-1].date() - df.index[0].date()
+    ).days
+
+    actual_sessions = len(by_date)
+
+    # Detect large chronological holes between stored trading sessions.
+    dates = sorted(by_date.keys())
+    session_gaps = []
+    import datetime as _dt
+    for i in range(1, len(dates)):
+        prev = _dt.date.fromisoformat(dates[i-1])
+        curr = _dt.date.fromisoformat(dates[i])
+        gap = (curr - prev).days
+        if gap >= 4:
+            session_gaps.append({
+                "from": dates[i-1],
+                "to": dates[i],
+                "calendar_gap_days": gap,
+            })
+
+    # Outlier candles: very large body/range vs ATR-like rolling range.
+    ranges = (df["High"] - df["Low"]).astype(float)
+    rolling_med = ranges.rolling(50, min_periods=10).median()
+    abnormal_range = int(((ranges > rolling_med * 8) & rolling_med.notna()).sum())
+
+    # Quality verdict
+    if duplicate_count > 0 or invalid_ohlc > 0:
+        verdict = "FAIL"
+    elif overall_coverage >= 95 and severe_gap_days == 0 and abnormal_range == 0:
+        verdict = "PASS"
+    elif overall_coverage >= 80 and severe_gap_days <= max(2, int(actual_sessions * 0.05)):
+        verdict = "CAUTION"
+    else:
+        verdict = "FAIL"
+
+    return {
+        "status": "success",
+        "verdict": verdict,
+        "timeframe": timeframe,
+        "stored_rows": len(df),
+        "stored_start": df.index[0].isoformat(),
+        "stored_end": df.index[-1].isoformat(),
+        "calendar_span_days": span_days,
+        "actual_trading_sessions": actual_sessions,
+        "expected_candles_per_session": expected_per_day,
+        "overall_coverage_percent": round(overall_coverage, 1),
+        "full_days": full_days,
+        "partial_days": partial_days,
+        "severe_gap_days": severe_gap_days,
+        "duplicate_timestamp_rows": duplicate_count,
+        "invalid_ohlc_rows": invalid_ohlc,
+        "abnormal_range_rows": abnormal_range,
+        "median_intraday_interval_minutes": (
+            round(median_interval, 2)
+            if median_interval is not None else None
+        ),
+        "large_session_gaps": session_gaps[:25],
+        "worst_days": sorted(
+            daily,
+            key=lambda x: x["coverage_percent"]
+        )[:15],
+        "recent_days": daily[-15:],
+        "backtest_ready": (
+            verdict == "PASS"
+            and overall_coverage >= 95
+            and actual_sessions >= 100
+        ),
+        "recommendation": (
+            "PASS: suitable for serious validation."
+            if verdict == "PASS"
+            else (
+                "CAUTION: usable for exploratory analysis, but import more history / fill gaps before promotion testing."
+                if verdict == "CAUTION"
+                else
+                "FAIL: do not trust long-horizon backtest conclusions until historical gaps/data issues are fixed."
+            )
+        )
+    }
+
+
+@app.get("/v14/history/quality")
+def v148_history_quality(interval: str = "15m"):
+    try:
+        raw = _v146_load_raw_history(interval)
+        return _v148_quality_report(
+            raw,
+            timeframe=interval
+        )
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 # ============================================================
@@ -8805,7 +9053,7 @@ def v145_extended_validation(
 
         return {
             "status": "success",
-            "model_version": "14.7.1",
+            "model_version": "14.8",
             "requested_months": months,
             "actual_yfinance_period": actual_period,
             "historical_candles": len(df),
@@ -9095,7 +9343,7 @@ def v144_regime_aware_walk_forward(
 
         return {
             "status": "success",
-            "model_version": "14.7.1",
+            "model_version": "14.8",
             "rule_under_test": {
                 "TRENDING": "REVERSION",
                 "RANGE": "WAIT",
@@ -9327,7 +9575,7 @@ def v143_regime_engine_matrix(
 
         return {
             "status": "success",
-            "model_version": "14.7.1",
+            "model_version": "14.8",
             "period": period,
             "threshold": threshold,
             "matrix": matrix,
@@ -9565,7 +9813,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "14.7.1",
+            "model_version": "14.8",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
