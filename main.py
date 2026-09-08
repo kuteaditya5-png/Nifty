@@ -34,7 +34,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "14.4",
+        "version": "14.5",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4552,6 +4552,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalEdge()">Signal Edge Diagnostic v14.1</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="runRegimeMatrix()">Regime × Engine Matrix v14.3</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="runRegimeWalkForward()">Regime-Aware Walk-Forward v14.4</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="runExtendedValidation()">Extended Historical Validation v14.5</button>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
   <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
@@ -4562,6 +4563,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btSignalEdge" style="margin-top:8px">v14.1 raw signal edge has not been tested yet.</div>
   <div class="bt-note" id="btRegimeMatrix" style="margin-top:8px">Regime × Engine Matrix has not been run yet.</div>
   <div class="bt-note" id="btRegimeWF" style="margin-top:8px">v14.4 unseen validation has not been run yet.</div>
+  <div class="bt-note" id="btExtendedValidation" style="margin-top:8px">v14.5 extended historical validation has not been run yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
   </div>
@@ -5050,6 +5052,52 @@ async function runBacktest(){
 
 
 
+
+
+async function runExtendedValidation(){
+  const box=document.getElementById("btExtendedValidation");
+  if(box) box.textContent="Loading the longest available 15-minute NIFTY history and running extended validation…";
+
+  try{
+    const qs=new URLSearchParams({
+      months:"6",
+      threshold:"0.20",
+      folds:"6"
+    });
+
+    const r=await fetch("/v14/extended-validation?"+qs.toString(),{cache:"no-store"});
+    const d=await r.json();
+
+    if(!r.ok||d.status!=="success"){
+      throw new Error(d.message||"Extended validation failed");
+    }
+
+    const wf=d.walk_forward||{};
+    const best=d.matrix_best_combination||{};
+    const regimes=d.regime_counts||{};
+
+    const foldText=(wf.folds||[]).map(f=>
+      `F${f.fold} ${f.verdict}, T${Number(f.selected_threshold).toFixed(2)}, `
+      + `H6 ${f.validation.h6.accuracy_percent}%/${f.validation.h6.average_directional_move_bps}bps, `
+      + `${f.validation.signals} signals`
+    ).join(" · ");
+
+    if(box) box.textContent=
+      `HISTORY ${d.historical_candles} candles (${d.actual_yfinance_period}) · `
+      + `${d.history_start} → ${d.history_end}. `
+      + `Regimes: Trending ${regimes.TRENDING||0}, Range ${regimes.RANGE||0}, HighVol ${regimes.HIGH_VOLATILITY||0}. `
+      + `Matrix best: ${best.regime||"--"} → ${best.engine||"--"} `
+      + `(H6 ${best.h6?.accuracy_percent??"--"}% / ${best.h6?.average_directional_move_bps??"--"}bps, ${best.verdict||"--"}). `
+      + `WF ${wf.overall_verdict||"--"} · promotable ${wf.promotable?"YES":"NO"} · `
+      + `Avg unseen H6 ${wf.average_h6_accuracy||0}% / ${wf.average_h6_bps||0}bps · `
+      + `Signals ${wf.total_signals||0} · degradation ${wf.average_degradation||0} pts · `
+      + `stable threshold ${wf.stable_threshold??"--"}. `
+      + foldText;
+
+  }catch(e){
+    if(box) box.textContent="Extended Validation error: "+e.message;
+  }
+}
 
 async function runRegimeWalkForward(){
   const period=(document.getElementById("btPeriod")||{}).value||"60d";
@@ -6336,7 +6384,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "14.4",
+            "model_version": "14.5",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7189,7 +7237,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "14.4",
+            "model_version": "14.5",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7701,7 +7749,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "14.4",
+        "model_version": "14.5",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -7777,6 +7825,306 @@ def _v123_objective(m):
     return pf*100 + exp*0.03 - dd*2 + min(n,50)*0.25
 
 
+
+
+
+# ============================================================
+# V14.5 EXTENDED HISTORICAL VALIDATION
+# ============================================================
+
+def _v145_download_history(months=6, interval="15m"):
+    months = max(2, min(int(months), 12))
+    requested_days = months * 31
+    attempts = [f"{requested_days}d", "180d", "120d", "90d", "60d"]
+
+    seen = set()
+    last_error = None
+
+    for period in attempts:
+        if period in seen:
+            continue
+        seen.add(period)
+
+        try:
+            raw = yf.Ticker("^NSEI").history(period=period, interval=interval)
+            if raw is None or raw.empty or len(raw) < 250:
+                continue
+
+            df = raw.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+            close = df["Close"].astype(float)
+            high = df["High"].astype(float)
+            low = df["Low"].astype(float)
+
+            ema20 = close.ewm(span=20, adjust=False).mean()
+            ema50 = close.ewm(span=50, adjust=False).mean()
+
+            delta = close.diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = (-delta.clip(upper=0)).rolling(14).mean()
+            rsi = 100 - (100 / (1 + gain / loss.replace(0, float("nan"))))
+
+            macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+            macd_signal = macd.ewm(span=9, adjust=False).mean()
+
+            low14 = low.rolling(14).min()
+            high14 = high.rolling(14).max()
+            stoch_k = 100 * (close - low14) / (high14 - low14).replace(0, float("nan"))
+            stoch_d = stoch_k.rolling(3).mean()
+
+            bb_mid = close.rolling(20).mean()
+            bb_std = close.rolling(20).std()
+            bb_upper = bb_mid + 2 * bb_std
+            bb_lower = bb_mid - 2 * bb_std
+            bb_percent_b = (close - bb_lower) / (bb_upper - bb_lower).replace(0, float("nan"))
+
+            prev_close = close.shift(1)
+            tr = pd.concat([
+                high - low,
+                (high - prev_close).abs(),
+                (low - prev_close).abs(),
+            ], axis=1).max(axis=1)
+            atr = tr.rolling(14).mean()
+
+            mean20 = close.rolling(20).mean()
+            std20 = close.rolling(20).std()
+            zscore = (close - mean20) / std20.replace(0, float("nan"))
+
+            ret1 = close.pct_change(1)
+            ret3 = close.pct_change(3)
+            ret6 = close.pct_change(6)
+            rolling_vol = ret1.rolling(20).std()
+
+            out = pd.DataFrame({
+                "open": df["Open"].astype(float),
+                "high": high,
+                "low": low,
+                "close": close,
+                "ema20": ema20,
+                "ema50": ema50,
+                "rsi": rsi,
+                "macd": macd,
+                "macd_signal": macd_signal,
+                "stoch_k": stoch_k,
+                "stoch_d": stoch_d,
+                "bb_percent_b": bb_percent_b,
+                "atr": atr,
+                "zscore": zscore,
+                "ret1": ret1,
+                "ret3": ret3,
+                "ret6": ret6,
+                "rolling_vol": rolling_vol,
+            }).dropna().copy()
+
+            if len(out) >= 250:
+                return out, period
+
+        except Exception as e:
+            last_error = str(e)
+
+    raise RuntimeError(
+        "Unable to retrieve extended 15-minute NIFTY history."
+        + (f" Last error: {last_error}" if last_error else "")
+    )
+
+
+def _v145_regime_counts(df):
+    counts = {"TRENDING": 0, "RANGE": 0, "HIGH_VOLATILITY": 0, "UNKNOWN": 0}
+    for i in range(len(df)):
+        regime = _v143_regime_name(df.iloc[i])
+        counts[regime] = counts.get(regime, 0) + 1
+    return counts
+
+
+def _v145_matrix_summary(df, threshold=0.20):
+    engines = ("TREND", "REVERSION", "BLENDED")
+    regimes = ("TRENDING", "RANGE", "HIGH_VOLATILITY")
+
+    matrix = []
+    for engine in engines:
+        for regime in regimes:
+            matrix.append(
+                _v143_matrix_cell(
+                    df,
+                    engine=engine,
+                    regime=regime,
+                    threshold=threshold
+                )
+            )
+
+    ranked = sorted(
+        matrix,
+        key=lambda x: (x["evidence_score"], x["signals"]),
+        reverse=True
+    )
+
+    return {
+        "matrix": matrix,
+        "ranking": ranked,
+        "best": ranked[0] if ranked else None,
+    }
+
+
+def _v145_extended_walk_forward(df, folds=6):
+    folds = max(4, min(int(folds), 8))
+    n = len(df)
+
+    initial_train = max(300, int(n * 0.45))
+    remaining = n - initial_train
+    test_size = max(45, remaining // folds)
+
+    fold_results = []
+
+    for fold_idx in range(folds):
+        train_end = initial_train + fold_idx * test_size
+        test_start = train_end
+        test_end = min(n, test_start + test_size)
+
+        if test_end - test_start < 30:
+            break
+
+        train_df = df.iloc[:train_end]
+        test_df = df.iloc[test_start:test_end]
+
+        best, all_candidates = _v144_select_training_threshold(train_df)
+        threshold = best["threshold"]
+
+        validation = _v144_fold_metrics(test_df, threshold)
+        verdict_data = _v144_fold_verdict(validation, best["metrics"])
+
+        fold_results.append({
+            "fold": fold_idx + 1,
+            "selected_threshold": threshold,
+            "training": best["metrics"],
+            "validation": validation,
+            **verdict_data,
+            "validation_start": test_df.index[0].isoformat(),
+            "validation_end": test_df.index[-1].isoformat(),
+            "training_candidates": all_candidates,
+        })
+
+    valid = [f for f in fold_results if f["verdict"] != "INSUFFICIENT"]
+
+    if not valid:
+        return {
+            "folds": fold_results,
+            "overall_verdict": "INSUFFICIENT",
+            "promotable": False,
+            "average_h6_accuracy": 0.0,
+            "average_h6_bps": 0.0,
+            "total_signals": 0,
+            "average_degradation": 0.0,
+            "stable_threshold": None,
+        }
+
+    accs = [f["validation"]["h6"]["accuracy_percent"] for f in valid]
+    bps = [f["validation"]["h6"]["average_directional_move_bps"] for f in valid]
+    signals = [f["validation"]["signals"] for f in valid]
+    deg = [f["accuracy_degradation_points"] for f in valid]
+
+    pass_count = sum(1 for f in valid if f["verdict"] == "PASS")
+    caution_count = sum(1 for f in valid if f["verdict"] == "CAUTION")
+    fail_count = sum(1 for f in valid if f["verdict"] == "FAIL")
+
+    threshold_counts = {}
+    for f in fold_results:
+        t = f["selected_threshold"]
+        threshold_counts[t] = threshold_counts.get(t, 0) + 1
+    stable_threshold = max(threshold_counts, key=threshold_counts.get)
+
+    avg_acc = round(statistics.mean(accs), 1)
+    avg_bps = round(statistics.mean(bps), 2)
+    total_signals = sum(signals)
+    avg_deg = round(statistics.mean(deg), 1)
+
+    if (
+        len(valid) >= 5
+        and pass_count >= 3
+        and fail_count <= 1
+        and avg_acc >= 53.0
+        and avg_bps > 1.5
+        and total_signals >= 120
+        and avg_deg <= 5.0
+    ):
+        overall = "PASS"
+        promotable = True
+    elif (
+        len(valid) >= 4
+        and (pass_count + caution_count) >= 3
+        and avg_acc >= 51.5
+        and avg_bps > 0
+        and total_signals >= 90
+    ):
+        overall = "CAUTION"
+        promotable = False
+    else:
+        overall = "FAIL"
+        promotable = False
+
+    return {
+        "folds": fold_results,
+        "overall_verdict": overall,
+        "promotable": promotable,
+        "pass_folds": pass_count,
+        "caution_folds": caution_count,
+        "fail_folds": fail_count,
+        "average_h6_accuracy": avg_acc,
+        "average_h6_bps": avg_bps,
+        "total_signals": total_signals,
+        "average_degradation": avg_deg,
+        "stable_threshold": stable_threshold,
+        "stable_threshold_count": threshold_counts[stable_threshold],
+    }
+
+
+@app.get("/v14/extended-validation")
+def v145_extended_validation(
+    months: int = 6,
+    threshold: float = 0.20,
+    folds: int = 6
+):
+    try:
+        df, actual_period = _v145_download_history(
+            months=months,
+            interval="15m"
+        )
+
+        matrix = _v145_matrix_summary(
+            df,
+            threshold=threshold
+        )
+
+        wf = _v145_extended_walk_forward(
+            df,
+            folds=folds
+        )
+
+        return {
+            "status": "success",
+            "model_version": "14.5",
+            "requested_months": months,
+            "actual_yfinance_period": actual_period,
+            "historical_candles": len(df),
+            "history_start": df.index[0].isoformat(),
+            "history_end": df.index[-1].isoformat(),
+            "regime_counts": _v145_regime_counts(df),
+            "matrix_best_combination": matrix["best"],
+            "matrix_top_5": matrix["ranking"][:5],
+            "walk_forward": wf,
+            "promotion_rule": (
+                "Do not change live routing unless extended walk-forward is PASS "
+                "with adequate unseen signals and stable threshold selection."
+            ),
+            "important_limitation": (
+                "Historical 15-minute retention depends on the upstream data provider. "
+                "The response reports the actual period/candle count obtained."
+            )
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 # ============================================================
@@ -8042,7 +8390,7 @@ def v144_regime_aware_walk_forward(
 
         return {
             "status": "success",
-            "model_version": "14.4",
+            "model_version": "14.5",
             "rule_under_test": {
                 "TRENDING": "REVERSION",
                 "RANGE": "WAIT",
@@ -8274,7 +8622,7 @@ def v143_regime_engine_matrix(
 
         return {
             "status": "success",
-            "model_version": "14.4",
+            "model_version": "14.5",
             "period": period,
             "threshold": threshold,
             "matrix": matrix,
@@ -8512,7 +8860,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "14.4",
+            "model_version": "14.5",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
