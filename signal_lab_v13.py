@@ -397,15 +397,26 @@ def run_backtest_v13(
                     break
 
         if exit_price is None:
-            raw_exit = float(df.iloc[exit_idx]["close"])
-            exit_price = raw_exit - slippage_points if side == "CE" else raw_exit + slippage_points
+            raw_exit_px = float(df.iloc[exit_idx]["close"])
+            exit_price = raw_exit_px - slippage_points if side == "CE" else raw_exit_px + slippage_points
+        else:
+            # undo the slippage to recover the frictionless fill
+            raw_exit_px = (exit_price + slippage_points if side == "CE"
+                           else exit_price - slippage_points)
 
         counts[side] += 1
         points = (exit_price - entry) if side == "CE" else (entry - exit_price)
         r_multiple = points / stop_dist if stop_dist else 0.0
 
+        # frictionless comparison: no slippage on either leg
+        gross_points = ((raw_exit_px - raw_entry) if side == "CE"
+                        else (raw_entry - raw_exit_px))
+        gross_r = gross_points / stop_dist if stop_dist else 0.0
+
         risk_base = capital if compounding else initial
         risk_amount = max(0.0, risk_base * float(risk_per_trade))
+        fee_r = (float(fee_per_trade) / risk_amount) if risk_amount else 0.0
+        slip_r = gross_r - r_multiple
         net = risk_amount * r_multiple - float(fee_per_trade)
         capital += net
 
@@ -419,6 +430,9 @@ def run_backtest_v13(
             "target": round(target, 2), "exit": round(exit_price, 2),
             "exit_reason": exit_reason,
             "r_multiple": round(r_multiple, 3),
+            "gross_r": round(gross_r, 3),
+            "slippage_r": round(slip_r, 4),
+            "fee_r": round(fee_r, 4),
             "pnl": round(net, 2),
             "capital_after": round(capital, 2),
         })
@@ -458,6 +472,27 @@ def _summarize(trades, equity, counts, wait_reasons, initial, capital, config):
         else:
             consec = 0
 
+    if total:
+        gross_r = sum(t.get("gross_r", 0) for t in trades) / total
+        slip_r = sum(t.get("slippage_r", 0) for t in trades) / total
+        fee_r = sum(t.get("fee_r", 0) for t in trades) / total
+        net_r = sum(t["r_multiple"] for t in trades) / total - fee_r
+        cost_attribution = {
+            "gross_r_per_trade": round(gross_r, 4),
+            "slippage_r_per_trade": round(-slip_r, 4),
+            "fee_r_per_trade": round(-fee_r, 4),
+            "net_r_per_trade": round(net_r, 4),
+            "slippage_share_of_total_cost": (
+                round(slip_r / (slip_r + fee_r) * 100, 1)
+                if (slip_r + fee_r) > 0 else None),
+            "read": (
+                "If slippage_r_per_trade dominates, the stop is too tight "
+                "relative to the spread. Widen stop_atr_mult or trade less "
+                "often; do not tune the signal."),
+        }
+    else:
+        cost_attribution = {}
+
     win_rate = round(len(wins) / total * 100, 1) if total else 0.0
     base = barrier_baseline(config["reward_risk"], config["stop_atr_mult"])
     edge_vs_random = round(win_rate - base["random_walk_win_rate_percent"], 1)
@@ -483,6 +518,7 @@ def _summarize(trades, equity, counts, wait_reasons, initial, capital, config):
         **m,
         "random_walk_baseline_win_rate": base["random_walk_win_rate_percent"],
         "edge_vs_random_percentage_points": edge_vs_random,
+        "cost_attribution": cost_attribution,
         "signal_counts": counts,
         "top_wait_reasons": sorted(
             [{"reason": k, "count": v} for k, v in wait_reasons.items()],
@@ -637,3 +673,129 @@ def load_frame_v13(period="60d", interval="15m", symbol="^NSEI"):
     # drop the in-progress final candle: it has no completed high/low
     data = data.iloc[:-1]
     return build_features_v13(data)
+
+
+# --------------------------------------------------------------------------
+# 6. ROLLING WALK-FORWARD
+# --------------------------------------------------------------------------
+
+def rolling_walk_forward(df, folds=5, starting_capital=100000.0,
+                         fee_per_trade=40.0, slippage_points=2.0,
+                         risk_per_trade=0.01):
+    """
+    Splits the history into `folds`+1 chronological segments. Fold i optimises
+    on segment i and validates on segment i+1, so every validation segment is
+    strictly forward in time from the data that chose the config.
+
+    A single 70/30 holdout can pass on luck. This answers the harder question
+    your goal statement asks: does the edge REPEAT across regimes?
+
+    The number to read is `folds_positive` and `consistency`. A strategy that
+    wins 5/5 folds with a small mean edge is far more trustworthy than one that
+    wins 2/5 with a large mean, because the large mean is one lucky segment.
+    """
+    n = len(df)
+    seg = n // (folds + 1)
+    if seg < 150:
+        return {"status": "error",
+                "message": f"Need ~{150 * (folds + 1)} bars for {folds} folds; have {n}."}
+
+    results = []
+    for k in range(folds):
+        train = df.iloc[k * seg:(k + 1) * seg]
+        valid = df.iloc[(k + 1) * seg:(k + 2) * seg]
+
+        best, best_obj = None, -1e18
+        for threshold in (0.20, 0.30, 0.40):
+            for reward_risk in (1.0, 1.5, 2.0):
+                for stop_atr_mult in (1.0, 2.0, 3.0):
+                    for mode in ("reversion_only", "trend_only"):
+                        cfg = dict(threshold=threshold, reward_risk=reward_risk,
+                                   stop_atr_mult=stop_atr_mult, max_hold=12,
+                                   mode=mode)
+                        r = run_backtest_v13(
+                            train, starting_capital=starting_capital,
+                            risk_per_trade=risk_per_trade,
+                            fee_per_trade=fee_per_trade,
+                            slippage_points=slippage_points,
+                            compounding=False, **cfg)
+                        if r.get("status") != "success" or r["total_trades"] < 15:
+                            continue
+                        obj = _objective_v13(r)
+                        if obj > best_obj:
+                            best_obj, best = obj, cfg
+
+        if best is None:
+            results.append({"fold": k + 1, "status": "no viable config on training"})
+            continue
+
+        v = run_backtest_v13(valid, starting_capital=starting_capital,
+                             risk_per_trade=risk_per_trade,
+                             fee_per_trade=fee_per_trade,
+                             slippage_points=slippage_points,
+                             compounding=False, **best)
+        results.append({
+            "fold": k + 1,
+            "train_period": [str(train.index[0]), str(train.index[-1])],
+            "valid_period": [str(valid.index[0]), str(valid.index[-1])],
+            "config": best,
+            "validation": {
+                "total_trades": v.get("total_trades"),
+                "win_rate": v.get("win_rate"),
+                "profit_factor": v.get("profit_factor"),
+                "expectancy_r": v.get("expectancy_r"),
+                "edge_vs_random_percentage_points": v.get("edge_vs_random_percentage_points"),
+                "max_drawdown_percent": v.get("max_drawdown_percent"),
+                "verdict": v.get("verdict"),
+            },
+        })
+
+    scored = [r for r in results if "validation" in r
+              and r["validation"].get("total_trades", 0) >= 10]
+    if not scored:
+        return {"status": "error",
+                "message": "No fold produced enough validation trades.",
+                "folds": results}
+
+    exps = [float(r["validation"]["expectancy_r"] or 0) for r in scored]
+    edges = [float(r["validation"]["edge_vs_random_percentage_points"] or 0) for r in scored]
+    mean_exp = sum(exps) / len(exps)
+    var = sum((x - mean_exp) ** 2 for x in exps) / len(exps)
+    sd = var ** 0.5
+    positive = sum(1 for x in exps if x > 0)
+
+    if positive == len(scored) and mean_exp > 0.03:
+        stability = "CONSISTENT"
+    elif positive >= len(scored) * 0.6 and mean_exp > 0:
+        stability = "MIXED"
+    else:
+        stability = "NOT REPEATABLE"
+
+    # config agreement across folds is itself evidence
+    modes = [r["config"]["mode"] for r in scored]
+    dominant = max(set(modes), key=modes.count)
+
+    return {
+        "status": "success", "model_version": "13.2",
+        "method": f"rolling walk-forward, {folds} folds, each validated forward in time",
+        "folds_scored": len(scored),
+        "folds_positive": positive,
+        "mean_expectancy_r": round(mean_exp, 4),
+        "stdev_expectancy_r": round(sd, 4),
+        "mean_edge_vs_random": round(sum(edges) / len(edges), 2),
+        "consistency": stability,
+        "config_agreement": {
+            "dominant_mode": dominant,
+            "folds_choosing_it": modes.count(dominant),
+            "read": ("If folds disagree on direction, the optimizer is fitting "
+                     "noise and no single config should be promoted."),
+        },
+        "folds": results,
+        "promotion_rule": (
+            "Your stated bar — consistent positive expectancy, controlled "
+            "drawdown, stable PF, repeatable across regimes — means "
+            "consistency=CONSISTENT, folds_positive equal to folds_scored, "
+            "and every fold's max drawdown inside your tolerance. Anything "
+            "less is still research."
+        ),
+    }

@@ -4427,6 +4427,10 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
       <input id="btHold" type="number" value="12" min="2" max="40" step="1">
     </div>
     <div class="backtest-field">
+      <label>Stop Width (× ATR)</label>
+      <input id="btStop" type="number" value="2.0" min="0.5" max="3" step="0.25">
+    </div>
+    <div class="backtest-field">
       <label>Fee Per Trade ₹</label>
       <input id="btFee" type="number" value="40" min="0" step="10">
     </div>
@@ -4439,6 +4443,11 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <button class="primary" style="width:100%;margin-top:12px" onclick="runBacktest()">Run Backtest</button>
   <button class="primary" style="width:100%;margin-top:8px" onclick="runOptimizer()">Optimize + Walk-Forward</button>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
+  <button class="primary" style="width:100%;margin-top:8px" onclick="runRollingWF()">Rolling Walk-Forward (5 folds)</button>
+  <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
+  <div class="bt-note" id="btRolling" style="margin-top:8px">
+    Rolling walk-forward optimises on one segment and validates on the next, five times. This is the test for repeatability across regimes.
+  </div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
   </div>
@@ -4825,7 +4834,8 @@ async function runBacktest(){
     fee_per_trade:String(fee),
     slippage_points:String(slip),
     mode:String(mode),
-    max_hold:String(hold)
+    max_hold:String(hold),
+    stop_atr_mult:String(Number((el("btStop")||{}).value||2.0))
   });
   try{
     const r=await fetch("/v13/backtest?"+qs.toString(),{cache:"no-store"});
@@ -4858,6 +4868,21 @@ async function runBacktest(){
       + `Win rate ${wr.toFixed(1)}% vs coin-flip baseline ${bl.toFixed(1)}% for this stop/target geometry. `
       + `Expectancy ${Number(d.expectancy_r||0).toFixed(3)} R. Direction: ${cfg.mode||"--"}.`
     );
+    const ca=d.cost_attribution||{};
+    if(ca.net_r_per_trade!==undefined){
+      setText("btCosts",
+        `Where the money goes, per trade → signal ${Number(ca.gross_r_per_trade||0).toFixed(3)} R, `
+        + `slippage ${Number(ca.slippage_r_per_trade||0).toFixed(3)} R, `
+        + `fees ${Number(ca.fee_r_per_trade||0).toFixed(3)} R, `
+        + `net ${Number(ca.net_r_per_trade||0).toFixed(3)} R. `
+        + (ca.slippage_share_of_total_cost!=null
+            ? `Slippage is ${Number(ca.slippage_share_of_total_cost).toFixed(0)}% of all costs. `
+            : "")
+        + (Math.abs(Number(ca.slippage_r_per_trade||0))>Math.abs(Number(ca.gross_r_per_trade||0))
+            ? "Costs dominate the signal — widen Stop Width or trade less often before touching the signal."
+            : "Signal dominates costs — the direction is the thing to work on.")
+      );
+    }
     setText("btStatus",`Completed · ${d.total_trades} trades · ${d.verdict||"--"}`);
     renderBacktestEquity(d.equity_curve||[]);
     el("btHistory").innerHTML=(d.trades||[]).slice().reverse().map(t=>`
@@ -4910,6 +4935,40 @@ async function runOptimizer(){
     );
     setText("btStatus",`Walk-forward complete · unseen verdict ${v.verdict}`);
   }catch(e){setText("btStatus","Optimizer error: "+e.message);}
+}
+
+async function runRollingWF(){
+  const capital=Number(el("btCapital").value||100000);
+  const period=el("btPeriod").value||"60d";
+  const risk=Number(el("btRisk").value||2)/100;
+  const fee=Number(el("btFee").value||40);
+  const slip=Number(el("btSlip").value||2);
+  setText("btStatus","Rolling walk-forward across 5 folds, this takes a while...");
+  try{
+    const qs=new URLSearchParams({
+      starting_capital:String(capital),period,
+      risk_per_trade:String(risk),
+      fee_per_trade:String(fee),slippage_points:String(slip),folds:"5"
+    });
+    const r=await fetch("/v13/walk-forward-rolling?"+qs.toString(),{cache:"no-store"});
+    const d=await r.json();
+    if(!r.ok||d.status!=="success") throw new Error(d.message||"Rolling walk-forward failed");
+    const rows=(d.folds||[]).filter(f=>f.validation).map(f=>
+      `Fold ${f.fold}: ${f.config.mode}, th ${f.config.threshold}, stop ${f.config.stop_atr_mult}×ATR `
+      + `→ ${f.validation.total_trades} trades, edge ${Number(f.validation.edge_vs_random_percentage_points||0).toFixed(1)} pts, `
+      + `exp ${Number(f.validation.expectancy_r||0).toFixed(3)} R, ${f.validation.verdict}`
+    ).join(" | ");
+    setText("btRolling",
+      `${d.consistency} — ${d.folds_positive}/${d.folds_scored} folds positive. `
+      + `Mean expectancy ${Number(d.mean_expectancy_r).toFixed(3)} R (sd ${Number(d.stdev_expectancy_r).toFixed(3)}), `
+      + `mean edge ${Number(d.mean_edge_vs_random).toFixed(1)} pts. `
+      + `${d.config_agreement.folds_choosing_it}/${d.folds_scored} folds chose ${d.config_agreement.dominant_mode}. `
+      + rows
+    );
+    const rEl=el("btRolling");
+    if(rEl){rEl.style.color=d.consistency==="CONSISTENT"?"#22d3a6":d.consistency==="MIXED"?"#f7b84b":"#fb5b6b";}
+    setText("btStatus",`Rolling walk-forward complete · ${d.consistency}`);
+  }catch(e){setText("btStatus","Rolling walk-forward error: "+e.message);}
 }
 
 async function loadAll(){
@@ -7647,5 +7706,29 @@ def v13_optimize(
         fee_per_trade=float(fee_per_trade),
         slippage_points=float(slippage_points),
         fast=bool(fast),
+    )
+@app.get("/v13/walk-forward-rolling")
+def v13_rolling_walk_forward(
+    period: str = "60d",
+    interval: str = "15m",
+    starting_capital: float = 100000,
+    risk_per_trade: float = 0.01,
+    fee_per_trade: float = 40.0,
+    slippage_points: float = 2.0,
+    folds: int = 5,
+):
+    """Rolling walk-forward. Each fold optimises on one chronological segment
+    and validates on the next, so the answer is about repeatability rather
+    than a single lucky holdout."""
+    df = _v13_frame(period, interval)
+    if df.empty:
+        return {"status": "error", "message": "Historical data unavailable."}
+    return lab.rolling_walk_forward(
+        df,
+        folds=max(2, min(int(folds), 8)),
+        starting_capital=float(starting_capital),
+        risk_per_trade=max(0.0025, min(float(risk_per_trade), 0.05)),
+        fee_per_trade=float(fee_per_trade),
+        slippage_points=float(slippage_points),
     )
 # ===================  end v13 EDGE LAB  ===================
