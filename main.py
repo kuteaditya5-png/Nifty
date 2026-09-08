@@ -4412,7 +4412,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     </div>
     <div class="backtest-field">
       <label>Reward : Risk</label>
-      <input id="btRR" type="number" value="1.5" min="0.8" max="3" step="0.1">
+      <input id="btRR" type="number" value="0.7" min="0.3" max="3" step="0.1">
     </div>
     <div class="backtest-field">
       <label>Compounding</label>
@@ -4428,7 +4428,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     </div>
     <div class="backtest-field">
       <label>Max Hold (bars)</label>
-      <input id="btHold" type="number" value="12" min="2" max="40" step="1">
+      <input id="btHold" type="number" value="6" min="2" max="40" step="1">
     </div>
     <div class="backtest-field">
       <label>Stop Width (× ATR)</label>
@@ -7692,7 +7692,7 @@ def v13_backtest(
         starting_capital=max(10000.0, min(float(starting_capital), 1e7)),
         threshold=max(0.10, min(float(threshold), 0.60)),
         risk_per_trade=max(0.0025, min(float(risk_per_trade), 0.05)),
-        reward_risk=max(0.8, min(float(reward_risk), 3.0)),
+        reward_risk=max(0.3, min(float(reward_risk), 3.0)),
         stop_atr_mult=max(0.5, min(float(stop_atr_mult), 3.0)),
         max_hold=max(2, min(int(max_hold), 40)),
         compounding=bool(compounding),

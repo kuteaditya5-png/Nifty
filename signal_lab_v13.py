@@ -622,13 +622,13 @@ def optimize_v13(df, starting_capital=100000.0, fee_per_trade=40.0,
     # sensitivity testing showed matter least, taking 240 runs down to 40.
     if fast:
         thresholds = (0.20, 0.25, 0.30, 0.35)
-        reward_risks = (1.0, 1.5, 2.0, 2.5)
+        reward_risks = (0.5, 0.7, 1.0, 1.5)
         stop_mults = (1.0,)
         max_holds = (12,)
         modes = ("reversion_only", "trend_only")
     else:
         thresholds = (0.15, 0.20, 0.25, 0.30, 0.35, 0.40)
-        reward_risks = (1.0, 1.25, 1.5, 2.0, 2.5)
+        reward_risks = (0.4, 0.5, 0.7, 1.0, 1.5, 2.0)
         stop_mults = (1.0, 1.5)
         max_holds = (6, 12, 20)
         modes = ("reversion_only", "trend_only", "auto")
@@ -758,11 +758,11 @@ def rolling_walk_forward(df, folds=5, starting_capital=100000.0,
 
         best, best_obj = None, -1e18
         for threshold in (0.20, 0.30, 0.40):
-            for reward_risk in (1.0, 1.5, 2.0):
-                for stop_atr_mult in (1.0, 2.0, 3.0):
+            for reward_risk in (0.5, 0.7, 1.0, 1.5):
+                for stop_atr_mult in (1.0, 2.0):
                     for mode in ("reversion_only", "trend_only"):
                         cfg = dict(threshold=threshold, reward_risk=reward_risk,
-                                   stop_atr_mult=stop_atr_mult, max_hold=12,
+                                   stop_atr_mult=stop_atr_mult, max_hold=6,
                                    mode=mode)
                         r = run_backtest_v13(
                             train, starting_capital=starting_capital,
