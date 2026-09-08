@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 import yfinance as yf
 import requests
 import os
+import io
 import pandas as pd
 import psycopg
 import re
@@ -35,7 +36,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "14.6",
+        "version": "14.7",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4556,6 +4557,8 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <button class="primary" style="width:100%;margin-top:8px" onclick="runExtendedValidation()">Extended Historical Validation v14.5</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="syncHistoryStore()">Sync Historical Store v14.6</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="historyStoreStatus()">History Store Status</button>
+          <input id="historyBackfillFile" type="file" accept=".csv" style="width:100%;margin-top:8px;padding:10px;border:1px solid #2b3f59;border-radius:10px;background:#0b1828;color:#dce8f8">
+          <button class="primary" style="width:100%;margin-top:8px" onclick="uploadHistoryBackfill()">Import 15m CSV Backfill v14.7</button>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
   <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
@@ -4568,6 +4571,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btRegimeWF" style="margin-top:8px">v14.4 unseen validation has not been run yet.</div>
   <div class="bt-note" id="btExtendedValidation" style="margin-top:8px">v14.5 extended historical validation has not been run yet.</div>
   <div class="bt-note" id="btHistoryStore" style="margin-top:8px">Historical store has not been checked yet.</div>
+  <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
   </div>
@@ -5058,6 +5062,49 @@ async function runBacktest(){
 
 
 
+
+
+async function uploadHistoryBackfill(){
+  const input=document.getElementById("historyBackfillFile");
+  const box=document.getElementById("btBackfillStatus");
+
+  if(!input||!input.files||!input.files.length){
+    if(box) box.textContent="Choose a 15-minute NIFTY CSV file first.";
+    return;
+  }
+
+  const file=input.files[0];
+  const fd=new FormData();
+  fd.append("file",file);
+
+  if(box) box.textContent=
+    `Importing ${file.name} into the persistent historical store…`;
+
+  try{
+    const r=await fetch(
+      "/v14/history/backfill-csv?timeframe=15m",
+      {
+        method:"POST",
+        body:fd
+      }
+    );
+
+    const d=await r.json();
+
+    if(!r.ok||d.status!=="success"){
+      throw new Error(d.message||"CSV backfill failed");
+    }
+
+    if(box) box.textContent=
+      `BACKFILL COMPLETE · file rows ${d.valid_rows_in_file} · `
+      + `store ${d.stored_rows} candles · `
+      + `${d.stored_start||"--"} → ${d.stored_end||"--"} · `
+      + `${d.calendar_span_days||0} calendar days.`;
+
+  }catch(e){
+    if(box) box.textContent="Backfill error: "+e.message;
+  }
+}
 
 async function syncHistoryStore(){
   const box=document.getElementById("btHistoryStore");
@@ -6434,7 +6481,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "14.6",
+            "model_version": "14.7",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7287,7 +7334,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "14.6",
+            "model_version": "14.7",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7799,7 +7846,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "14.6",
+        "model_version": "14.7",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -7877,6 +7924,314 @@ def _v123_objective(m):
 
 
 
+
+
+
+# ============================================================
+# V14.7 HISTORICAL BACKFILL
+# ============================================================
+
+def _v147_normalize_backfill_csv(text):
+    """
+    Accept common NIFTY OHLC CSV layouts and normalize them to:
+      datetime, Open, High, Low, Close, Volume
+
+    Supported timestamp column examples:
+      datetime, timestamp, date, time, candle_time
+
+    Supported OHLC aliases:
+      open / o
+      high / h
+      low / l
+      close / c
+      volume / vol / v
+    """
+    if not text or not text.strip():
+        raise ValueError("Uploaded CSV is empty.")
+
+    df = pd.read_csv(io.StringIO(text))
+    if df.empty:
+        raise ValueError("Uploaded CSV contains no rows.")
+
+    original_cols = list(df.columns)
+    lookup = {str(c).strip().lower(): c for c in df.columns}
+
+    def pick(*names):
+        for name in names:
+            if name in lookup:
+                return lookup[name]
+        return None
+
+    dt_col = pick(
+        "datetime", "timestamp", "candle_time",
+        "date_time", "date"
+    )
+    time_col = pick("time")
+
+    open_col = pick("open", "o")
+    high_col = pick("high", "h")
+    low_col = pick("low", "l")
+    close_col = pick("close", "c", "ltp")
+    volume_col = pick("volume", "vol", "v")
+
+    missing = []
+    for name, col in (
+        ("datetime/date", dt_col),
+        ("open", open_col),
+        ("high", high_col),
+        ("low", low_col),
+        ("close", close_col),
+    ):
+        if col is None:
+            missing.append(name)
+
+    if missing:
+        raise ValueError(
+            "CSV missing required columns: "
+            + ", ".join(missing)
+            + ". Found columns: "
+            + ", ".join(map(str, original_cols))
+        )
+
+    if time_col is not None and str(dt_col).strip().lower() == "date":
+        ts = pd.to_datetime(
+            df[dt_col].astype(str).str.strip()
+            + " "
+            + df[time_col].astype(str).str.strip(),
+            errors="coerce",
+            dayfirst=False
+        )
+    else:
+        ts = pd.to_datetime(
+            df[dt_col],
+            errors="coerce",
+            dayfirst=False
+        )
+
+    # If timestamps are timezone-naive, localize to India because NIFTY
+    # candles are exchange-local. Convert all rows to an aware timestamp.
+    try:
+        if getattr(ts.dt, "tz", None) is None:
+            ts = ts.dt.tz_localize(
+                "Asia/Kolkata",
+                ambiguous="NaT",
+                nonexistent="shift_forward"
+            )
+    except Exception:
+        pass
+
+    out = pd.DataFrame(index=pd.DatetimeIndex(ts))
+    out["Open"] = pd.to_numeric(df[open_col], errors="coerce").values
+    out["High"] = pd.to_numeric(df[high_col], errors="coerce").values
+    out["Low"] = pd.to_numeric(df[low_col], errors="coerce").values
+    out["Close"] = pd.to_numeric(df[close_col], errors="coerce").values
+
+    if volume_col is not None:
+        out["Volume"] = pd.to_numeric(
+            df[volume_col],
+            errors="coerce"
+        ).fillna(0).values
+    else:
+        out["Volume"] = 0.0
+
+    out = out[
+        out.index.notna()
+    ].dropna(
+        subset=["Open", "High", "Low", "Close"]
+    )
+
+    out = out[
+        (out["High"] >= out["Low"])
+        & (out["Open"] > 0)
+        & (out["High"] > 0)
+        & (out["Low"] > 0)
+        & (out["Close"] > 0)
+    ]
+
+    out = out[~out.index.duplicated(keep="last")].sort_index()
+
+    if out.empty:
+        raise ValueError("No valid OHLC rows remained after CSV validation.")
+
+    return out
+
+
+def _v147_check_interval(df, expected_minutes=15):
+    """
+    Diagnose interval consistency. We do not reject occasional missing bars
+    because holidays, outages and vendor gaps are normal.
+    """
+    if len(df) < 3:
+        return {
+            "median_minutes": None,
+            "expected_minutes": expected_minutes,
+            "looks_like_expected_interval": False,
+        }
+
+    diffs = (
+        df.index.to_series()
+        .diff()
+        .dropna()
+        .dt.total_seconds()
+        .div(60.0)
+    )
+
+    intraday_diffs = diffs[
+        diffs <= 180
+    ]
+
+    median_minutes = (
+        float(intraday_diffs.median())
+        if not intraday_diffs.empty
+        else float(diffs.median())
+    )
+
+    return {
+        "median_minutes": round(median_minutes, 2),
+        "expected_minutes": expected_minutes,
+        "looks_like_expected_interval": abs(
+            median_minutes - expected_minutes
+        ) <= 1.0,
+    }
+
+
+@app.post("/v14/history/backfill-csv")
+async def v147_history_backfill_csv(
+    file: UploadFile = File(...),
+    timeframe: str = "15m"
+):
+    """
+    Import historical NIFTY candles from a CSV into the persistent store.
+    Existing rows are upserted; older stored history is preserved.
+    """
+    try:
+        if timeframe != "15m":
+            return {
+                "status": "error",
+                "message": (
+                    "v14.7 validation backfill currently accepts only 15m "
+                    "history so all backtests use one consistent timeframe."
+                )
+            }
+
+        filename = (file.filename or "").lower()
+        if not filename.endswith(".csv"):
+            return {
+                "status": "error",
+                "message": "Please upload a .csv file."
+            }
+
+        raw_bytes = await file.read()
+
+        if len(raw_bytes) > 25 * 1024 * 1024:
+            return {
+                "status": "error",
+                "message": "CSV is larger than the 25 MB upload limit."
+            }
+
+        try:
+            text = raw_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw_bytes.decode("latin-1")
+
+        df = _v147_normalize_backfill_csv(text)
+        interval_check = _v147_check_interval(
+            df,
+            expected_minutes=15
+        )
+
+        if not interval_check["looks_like_expected_interval"]:
+            return {
+                "status": "error",
+                "message": (
+                    "The uploaded data does not look like 15-minute candles. "
+                    f"Median intraday interval is "
+                    f"{interval_check['median_minutes']} minutes."
+                ),
+                "interval_check": interval_check
+            }
+
+        written = _v146_upsert_history(
+            df,
+            timeframe="15m",
+            source="csv_backfill"
+        )
+
+        stored = _v146_load_raw_history("15m")
+
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "valid_rows_in_file": len(df),
+            "upserted_rows": written,
+            "file_start": df.index[0].isoformat(),
+            "file_end": df.index[-1].isoformat(),
+            "stored_rows": len(stored),
+            "stored_start": (
+                stored.index[0].isoformat()
+                if not stored.empty else None
+            ),
+            "stored_end": (
+                stored.index[-1].isoformat()
+                if not stored.empty else None
+            ),
+            "calendar_span_days": (
+                (stored.index[-1].date() - stored.index[0].date()).days
+                if not stored.empty else 0
+            ),
+            "interval_check": interval_check,
+            "message": (
+                "Historical backfill imported. Existing candles were updated "
+                "where timestamps matched; older/newer rows were preserved."
+            )
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@app.get("/v14/history/backfill-template")
+def v147_backfill_template():
+    """
+    Small template users can copy into CSV format.
+    """
+    return {
+        "status": "success",
+        "required_timeframe": "15m",
+        "required_columns": [
+            "datetime",
+            "open",
+            "high",
+            "low",
+            "close"
+        ],
+        "optional_columns": ["volume"],
+        "example_rows": [
+            {
+                "datetime": "2026-01-02 09:15:00",
+                "open": 23800.0,
+                "high": 23815.0,
+                "low": 23790.0,
+                "close": 23808.0,
+                "volume": 0
+            },
+            {
+                "datetime": "2026-01-02 09:30:00",
+                "open": 23808.0,
+                "high": 23820.0,
+                "low": 23798.0,
+                "close": 23812.0,
+                "volume": 0
+            }
+        ],
+        "note": (
+            "Use NIFTY 50 index 15-minute OHLC data. "
+            "Do not mix 5m/30m/1h/daily candles into this file."
+        )
+    }
 
 
 # ============================================================
@@ -8378,7 +8733,7 @@ def v145_extended_validation(
 
         return {
             "status": "success",
-            "model_version": "14.6",
+            "model_version": "14.7",
             "requested_months": months,
             "actual_yfinance_period": actual_period,
             "historical_candles": len(df),
@@ -8668,7 +9023,7 @@ def v144_regime_aware_walk_forward(
 
         return {
             "status": "success",
-            "model_version": "14.6",
+            "model_version": "14.7",
             "rule_under_test": {
                 "TRENDING": "REVERSION",
                 "RANGE": "WAIT",
@@ -8900,7 +9255,7 @@ def v143_regime_engine_matrix(
 
         return {
             "status": "success",
-            "model_version": "14.6",
+            "model_version": "14.7",
             "period": period,
             "threshold": threshold,
             "matrix": matrix,
@@ -9138,7 +9493,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "14.6",
+            "model_version": "14.7",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
