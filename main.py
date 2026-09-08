@@ -7729,6 +7729,36 @@ def v13_optimize(
         slippage_points=float(slippage_points),
         fast=bool(fast),
     )
+@app.get("/v13/calibration")
+def v13_calibration():
+    """Reads prediction_audit and answers: does the confidence number mean
+    anything? Discrimination decides whether to keep it; calibration decides
+    whether to remap it."""
+    try:
+        import calibration_v13 as cal
+        from auth import _db
+    except Exception as e:
+        return {"status": "error", "message": f"Calibration unavailable: {e}"}
+    try:
+        return cal.calibration_report(_db)
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/v13/signal-breakdown")
+def v13_signal_breakdown():
+    """Live hit rate split by CE/PE and prediction label."""
+    try:
+        import calibration_v13 as cal
+        from auth import _db
+    except Exception as e:
+        return {"status": "error", "message": f"Breakdown unavailable: {e}"}
+    try:
+        return cal.signal_breakdown(_db)
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 @app.get("/v13/walk-forward-rolling")
 def v13_rolling_walk_forward(
     period: str = "60d",
