@@ -13,10 +13,11 @@ from pydantic import BaseModel
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+NIFTY_CANONICAL_HOST = os.getenv("NIFTY_CANONICAL_HOST", "").strip()
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_ALGORITHM = "HS256"
 SESSION_COOKIE = "nifty_ai_session"
-SESSION_DAYS = 30
+SESSION_DAYS = 90
 
 PUBLIC_PATHS = {
     "/", "/login", "/register",
@@ -34,6 +35,27 @@ class RegisterPayload(BaseModel):
 class LoginPayload(BaseModel):
     mobile_number: str
     password: str
+
+
+def _set_session_cookie(response, token):
+    """
+    Persistent login cookie.
+    Remains valid across normal production redeployments as long as:
+    - the user opens the same production hostname
+    - JWT_SECRET is unchanged
+    Browser security does not allow cookies to move between different
+    Vercel preview/deployment hostnames.
+    """
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=SESSION_DAYS * 86400,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/"
+    )
+    return response
 
 
 def _normalize_mobile(value: str) -> str:
@@ -612,6 +634,20 @@ def setup_auth(app, fno_alert_provider=None):
     async def nifty_auth_middleware(request: Request, call_next):
         path = request.url.path
 
+        # Always use one stable production hostname. Vercel creates a new
+        # deployment hostname on every deploy, and browsers correctly keep
+        # cookies isolated per hostname. Redirecting to the canonical host
+        # preserves the same login cookie across deployments.
+        canonical_host = NIFTY_CANONICAL_HOST.replace("https://", "").replace("http://", "").strip("/")
+        current_host = (request.headers.get("host") or "").split(":")[0]
+        if canonical_host and current_host and current_host != canonical_host:
+            scheme = "https"
+            target = f"{scheme}://{canonical_host}{request.url.path}"
+            if request.url.query:
+                target += "?" + request.url.query
+            return RedirectResponse(target, status_code=307)
+
+
         if (
             path in PUBLIC_PATHS
             or path.startswith("/static/")
@@ -709,15 +745,7 @@ def setup_auth(app, fno_alert_provider=None):
                 "status": "success",
                 "message": "Account created."
             })
-            response.set_cookie(
-                SESSION_COOKIE,
-                _create_token(user_id, mobile),
-                max_age=SESSION_DAYS * 86400,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                path="/"
-            )
+            _set_session_cookie(response, _create_token(user_id, mobile))
             return response
 
         except Exception as e:
@@ -769,15 +797,7 @@ def setup_auth(app, fno_alert_provider=None):
                 "status": "success",
                 "message": "Login successful."
             })
-            response.set_cookie(
-                SESSION_COOKIE,
-                _create_token(user_id, mobile),
-                max_age=SESSION_DAYS * 86400,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                path="/"
-            )
+            _set_session_cookie(response, _create_token(user_id, mobile))
             return response
 
         except Exception as e:
