@@ -33,7 +33,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "12.3",
+        "version": "14.0",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -3052,6 +3052,106 @@ def detect_market_regime(
     }
 
 
+
+def route_prediction_engines(
+    regime,
+    technical_score,
+    momentum_score,
+    price_action_score,
+    statistics_score,
+    candle_score,
+    option_score,
+    breadth_score,
+    institutional_score,
+    futures_score,
+    vix_risk,
+    availability
+):
+    """
+    v14 routed architecture:
+      MARKET REGIME
+        -> TREND ENGINE or REVERSION ENGINE
+        -> CONTEXT FILTERS
+        -> directional routed score
+
+    This is deliberately explainable. Context filters confirm/penalize the
+    selected engine rather than being allowed to dominate it.
+    """
+    technical_score = float(technical_score or 0)
+    momentum_score = float(momentum_score or 0)
+    price_action_score = float(price_action_score or 0)
+    statistics_score = float(statistics_score or 0)
+    candle_score = float(candle_score or 0)
+
+    trend_engine = (
+        technical_score * 0.38
+        + momentum_score * 0.24
+        + price_action_score * 0.28
+        + candle_score * 0.10
+    )
+
+    # Mean-reversion engine: statistical stretch is inverted, while
+    # price/candle confirmation prevents blindly fading strong moves.
+    reversion_engine = (
+        (-statistics_score) * 0.48
+        + (-momentum_score) * 0.17
+        + price_action_score * 0.20
+        + candle_score * 0.15
+    )
+
+    if regime == "TRENDING":
+        selected_engine = "TREND"
+        engine_score = trend_engine
+    elif regime == "RANGE / MEAN-REVERTING":
+        selected_engine = "REVERSION"
+        engine_score = reversion_engine
+    elif regime == "EVENT / HIGH VOLATILITY":
+        selected_engine = "DEFENSIVE TREND"
+        engine_score = trend_engine * 0.70
+    else:
+        selected_engine = "BLENDED"
+        engine_score = trend_engine * 0.60 + reversion_engine * 0.40
+
+    context_items = []
+    for name, score, available in (
+        ("options", option_score, availability.get("option_chain", False)),
+        ("breadth", breadth_score, availability.get("breadth", False)),
+        ("FII/DII", institutional_score, availability.get("institutional", False)),
+        ("futures", futures_score, availability.get("futures", False)),
+    ):
+        if available:
+            context_items.append((name, float(score or 0)))
+
+    context_score = (
+        sum(v for _, v in context_items) / len(context_items)
+        if context_items else 0.0
+    )
+
+    # Context can confirm or reduce conviction, but not reverse the engine
+    # by itself. This keeps the architecture interpretable.
+    routed_score = engine_score
+    if context_items:
+        same_side = engine_score == 0 or context_score == 0 or engine_score * context_score > 0
+        if same_side:
+            routed_score = engine_score * 0.82 + context_score * 0.18
+        else:
+            routed_score = engine_score * 0.68
+
+    if str(vix_risk).upper() in ("HIGH", "VERY HIGH"):
+        routed_score *= 0.82
+
+    routed_score = max(-1.0, min(1.0, routed_score))
+
+    return {
+        "selected_engine": selected_engine,
+        "trend_engine_score": round(trend_engine, 3),
+        "reversion_engine_score": round(reversion_engine, 3),
+        "context_score": round(context_score, 3),
+        "context_sources": [name for name, _ in context_items],
+        "routed_score": round(routed_score, 3),
+    }
+
+
 def blend_available_signals(signal_scores, base_weights, multipliers, availability):
     """Blend only signals that are actually available and renormalize weights."""
     effective = {}
@@ -4327,7 +4427,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
 .market-price{font-size:28px;font-weight:900;margin-top:8px}.market-change{font-size:15px;color:#3fdda9;margin-top:4px}.spark{height:30px;margin-top:9px;background:linear-gradient(180deg,rgba(34,211,166,.18),transparent);clip-path:polygon(0 78%,8% 55%,14% 67%,23% 34%,31% 46%,38% 25%,45% 39%,54% 18%,63% 30%,72% 10%,79% 23%,88% 7%,94% 15%,100% 0,100% 100%,0 100%)}
 .main-layout{display:grid;grid-template-columns:minmax(0,1fr) 292px;gap:12px}.chart-card{overflow:hidden}.toolbar{height:52px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 14px;gap:12px}.intervals,.toggles{display:flex;align-items:center;gap:7px}.toolbar button{padding:8px 11px}.toolbar button.active{background:#2469dc;border-color:#3882ff}.toggle{display:flex;align-items:center;gap:7px;color:#becde1;font-size:12px}.toggle input{accent-color:#4187ff}
 .chart-meta{padding:11px 14px 3px}.chart-title{font-weight:850;font-size:15px}.ohlc{font-size:11px;color:#73d7c4;margin-top:4px}
-.chart-wrap{position:relative;height:520px}.prediction-zone-bg{position:absolute;z-index:1;pointer-events:none;top:0;right:0;width:34%;height:100%;border-left:1px dashed rgba(225,238,255,.75);transition:background .3s}.prediction-zone-bg.ce{background:linear-gradient(90deg,rgba(21,126,102,.08),rgba(27,195,143,.18))}.prediction-zone-bg.pe{background:linear-gradient(90deg,rgba(139,34,51,.08),rgba(239,68,68,.17))}.prediction-zone-bg.wait{background:linear-gradient(90deg,rgba(130,90,20,.06),rgba(247,184,75,.13))}
+.chart-wrap{position:relative;height:520px}.prediction-zone-bg{box-shadow:inset 3px 0 0 rgba(225,238,255,.18);position:absolute;z-index:1;pointer-events:none;top:0;right:0;width:34%;height:100%;border-left:1px dashed rgba(225,238,255,.75);transition:background .3s}.prediction-zone-bg.ce{background:linear-gradient(90deg,rgba(21,126,102,.08),rgba(27,195,143,.18))}.prediction-zone-bg.pe{background:linear-gradient(90deg,rgba(139,34,51,.08),rgba(239,68,68,.17))}.prediction-zone-bg.wait{background:linear-gradient(90deg,rgba(130,90,20,.06),rgba(247,184,75,.13))}
 .zone-label{position:absolute;z-index:4;right:18%;top:18px;pointer-events:none;border:1px solid rgba(72,224,179,.4);background:rgba(6,36,34,.84);color:#55e7bf;border-radius:7px;padding:8px 10px;font-size:11px;font-weight:800;text-align:center}.prediction-zone-bg.pe~.zone-label{color:#ff8c99;border-color:rgba(255,92,110,.4);background:rgba(52,13,22,.86)}.prediction-zone-bg.wait~.zone-label{color:#ffd074;border-color:rgba(247,184,75,.4);background:rgba(54,39,10,.86)}
 #niftyChart{position:relative;z-index:2;width:100%;height:100%}.chart-note{padding:7px 14px 10px;color:#7188a5;font-size:10px;border-top:1px solid rgba(32,54,80,.6)}
 .side{display:flex;flex-direction:column;gap:12px}.sidecard{padding:15px}.side-title{color:#cc83ff;font-size:12px;font-weight:850;text-transform:uppercase;letter-spacing:.04em;margin-bottom:12px}.insight-row{display:grid;grid-template-columns:86px 1fr;gap:7px;font-size:11px;margin:9px 0}.insight-row span:first-child{color:#a6b6cf}.insight-row span:last-child{color:#dde8f6}.summary-card{border-color:#50306a;background:linear-gradient(180deg,#15142c,#101225)}.summary-card .side-title{color:#d68cff}.sumrow{display:flex;justify-content:space-between;gap:9px;font-size:11px;margin:8px 0}.sumrow span:first-child{color:#c6a7e0}.sumrow b{font-weight:800}.risk{border-color:#654117;background:linear-gradient(180deg,#22170e,#17120d)}.risk .side-title{color:#ffc75d}.risk p{font-size:11px;color:#d9c9ac;line-height:1.5;margin:0}
@@ -4550,7 +4650,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
         <div class="zone-label" id="predictionZoneLabel">AI PREDICTION ZONE<br><span style="font-weight:500">(estimated future candles)</span></div>
         <div id="niftyChart"></div>
       </div>
-      <div class="chart-note">Shaded candles are model-estimated, not real market candles. They are shown every prediction cycle, including WAIT, so predicted path can be compared with future actual candles.</div>
+      <div class="chart-note">Frozen shaded candles are the model forecast captured at the prediction timestamp. They do not repaint on refresh; new actual candles can be compared against the original forecast.</div>
     </div>
 
     <div class="side">
@@ -4567,6 +4667,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
         <div class="insight-row"><span>Volume</span><span id="insVolume">--</span></div>
         <div class="insight-row"><span>Cross Asset</span><span id="insCross">--</span></div>
         <div class="insight-row"><span>Time / Event</span><span id="insTime">--</span></div>
+        <div class="insight-row"><span>Prediction Engine</span><span id="insConfirm">--</span></div>
       </div>
 
       <div class="card sidecard summary-card">
@@ -4680,6 +4781,8 @@ function renderPrediction(data){
   setText("insVolume",vol.status==="success"?`${vol.bias||"--"} · RV ${vol.relative_volume_20??"--"}`:"Unavailable");
   setText("insCross",cross.bias||"--");
   setText("insTime",`${tc.session_phase||"--"}${tc.expiry_day?" · EXPIRY":""}${tc.event_day?" · EVENT":""}`);
+  const arch=data.prediction_architecture||{};
+  setText("insConfirm",arch.selected_engine?`${arch.market_regime||"--"} → ${arch.selected_engine} · ${fmt(arch.routed_score,2)}`:"--");
   notifySignal(setup,reason);
 }
 
@@ -4729,7 +4832,8 @@ function buildForecast(data,prediction){
 function updateZone(prediction){
   const setup=String(prediction?.fno_setup||"WAIT").toUpperCase(),bg=el("predictionZoneBg"),label=el("predictionZoneLabel");
   bg.className="prediction-zone-bg "+(setup.includes("CE")?"ce":setup.includes("PE")?"pe":"wait");
-  label.innerHTML=`AI PREDICTION ZONE<br><span style="font-weight:500">${setup} · next estimated candles</span>`;
+  const stamp=prediction?.signal_generated_at?new Date(prediction.signal_generated_at).toLocaleTimeString():"--";
+  label.innerHTML=`FROZEN AI PREDICTION<br><span style="font-weight:500">${setup} · locked at ${stamp}</span>`;
 }
 function toggleZone(){const on=el("zoneToggle").checked;el("predictionZoneBg").style.display=on?"block":"none";el("predictionZoneLabel").style.display=on?"block":"none";predictionSeries.applyOptions({visible:on})}
 function toggleEma(){const on=el("emaToggle").checked;ema20Series.applyOptions({visible:on});ema50Series.applyOptions({visible:on})}
@@ -4739,7 +4843,20 @@ async function loadChart(prediction){
   const r=await fetch("/chart-data?interval="+encodeURIComponent(currentInterval),{cache:"no-store"}),d=await r.json();
   if(!r.ok||d.status!=="success")throw new Error(d.message||"Chart unavailable");
   latestChartData=d;candleSeries.setData(d.candles||[]);ema20Series.setData(d.ema20||[]);ema50Series.setData(d.ema50||[]);
-  const forecast=buildForecast(d,prediction);predictionSeries.setData(forecast);updateZone(prediction);
+  // Freeze the forecast for this exact completed-candle prediction.
+  // Refreshing live data must never repaint the original predicted path.
+  const predictionStamp=String(prediction?.signal_generated_at||"unknown");
+  const freezeKey=`nifty_ai_frozen_prediction_${currentInterval}_${predictionStamp}`;
+  let forecast=null;
+  try{
+    const saved=localStorage.getItem(freezeKey);
+    if(saved) forecast=JSON.parse(saved);
+  }catch(e){}
+  if(!Array.isArray(forecast)||!forecast.length){
+    forecast=buildForecast(d,prediction);
+    try{localStorage.setItem(freezeKey,JSON.stringify(forecast));}catch(e){}
+  }
+  predictionSeries.setData(forecast);updateZone(prediction);
   const setup=String(prediction?.fno_setup||"WAIT").toUpperCase(),bars=d.candles||[];
   if(bars.length){
     const marker={time:bars[bars.length-1].time,position:setup.includes("PE")?"aboveBar":"belowBar",color:signalColor(setup),shape:setup.includes("CE")?"arrowUp":setup.includes("PE")?"arrowDown":"circle",text:`Prediction Start · ${setup}`};
@@ -5873,6 +5990,37 @@ def prediction(include_alerts: bool = False):
         )
 
         # -----------------------------
+        # 19B. V14 REGIME-ROUTED ENGINE
+        # -----------------------------
+        routed_engine = route_prediction_engines(
+            regime=regime_data["regime"],
+            technical_score=technical_score,
+            momentum_score=momentum_score,
+            price_action_score=price_action_score,
+            statistics_score=statistics_score,
+            candle_score=candle_score,
+            option_score=option_score,
+            breadth_score=breadth_score,
+            institutional_score=institutional_score,
+            futures_score=futures_score,
+            vix_risk=vix_risk,
+            availability=availability
+        )
+
+        legacy_combined_score = combined_score
+
+        # The routed engine is primary; the broad legacy blend remains a
+        # secondary stabilizer so v14 is an evolution rather than a hard reset.
+        combined_score = max(
+            -1.0,
+            min(
+                1.0,
+                routed_engine["routed_score"] * 0.72
+                + legacy_combined_score * 0.28
+            )
+        )
+
+        # -----------------------------
         # 20. PROBABILITY MODEL
         # -----------------------------
         direction_strength = abs(combined_score)
@@ -6076,19 +6224,29 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "12.3",
+            "model_version": "14.0",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
             "confidence": confidence,
             "fno_setup": fno_setup,
             "fno_setup_reason": fno_setup_reason,
-            "signal_generated_at": datetime.now().isoformat(timespec="seconds"),
+            "signal_generated_at": (
+                str(price_action_data.get("last_completed_candle"))
+                if price_action_data.get("last_completed_candle")
+                else datetime.now().replace(second=0, microsecond=0).isoformat()
+            ),
             "fno_alerts": fno_alerts,
             "bullish_probability": bullish_probability,
             "sideways_probability": sideways_probability,
             "bearish_probability": bearish_probability,
             "combined_score": round(combined_score, 3),
+            "legacy_combined_score": round(legacy_combined_score, 3),
+            "prediction_architecture": {
+                "market_regime": regime_data["regime"],
+                **routed_engine,
+                "flow": "MARKET REGIME -> TREND/REVERSION ENGINE -> CONTEXT FILTERS -> CE/PE/WAIT"
+            },
             "data_coverage_percent": round(data_coverage * 100, 1),
             "effective_weights": {
                 name: round(weight, 4)
@@ -6919,7 +7077,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "12.3",
+            "model_version": "14.0",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7431,7 +7589,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "12.3",
+        "model_version": "14.0",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
