@@ -4412,7 +4412,19 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     </div>
     <div class="backtest-field">
       <label>Compounding</label>
-      <select id="btCompound"><option value="true" selected>ON</option><option value="false">OFF</option></select>
+      <select id="btCompound"><option value="false" selected>OFF</option><option value="true">ON</option></select>
+    </div>
+    <div class="backtest-field">
+      <label>Signal Direction</label>
+      <select id="btMode">
+        <option value="reversion_only" selected>Mean reversion</option>
+        <option value="trend_only">Momentum (v12.3)</option>
+        <option value="auto">Regime router</option>
+      </select>
+    </div>
+    <div class="backtest-field">
+      <label>Max Hold (bars)</label>
+      <input id="btHold" type="number" value="12" min="2" max="40" step="1">
     </div>
     <div class="backtest-field">
       <label>Fee Per Trade ₹</label>
@@ -4428,7 +4440,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <button class="primary" style="width:100%;margin-top:8px" onclick="runOptimizer()">Optimize + Walk-Forward</button>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
-    v12.3 optimizer tests thresholds 0.30–0.50 and CE/PE/regime filters, then validates the winner on unseen candles.
+    v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
   </div>
 
   <div class="backtest-results">
@@ -4436,6 +4448,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     <div class="btmetric"><span>Return</span><b id="btReturn">--%</b></div>
     <div class="btmetric"><span>Total Trades</span><b id="btTrades">--</b></div>
     <div class="btmetric"><span>Win Rate</span><b id="btWinRate">--%</b></div>
+    <div class="btmetric"><span>Edge vs Random</span><b id="btEdge">--</b></div>
     <div class="btmetric"><span>Profit Factor</span><b id="btPF">--</b></div>
     <div class="btmetric"><span>Max Drawdown</span><b id="btDD">--%</b></div>
     <div class="btmetric"><span>Expectancy / Trade</span><b id="btExpectancy">₹--</b></div>
@@ -4799,7 +4812,9 @@ async function runBacktest(){
   const comp=el("btCompound").value==="true";
   const fee=Number(el("btFee").value||40);
   const slip=Number(el("btSlip").value||2);
-  setText("btStatus","Running chronological audited backtest...");
+  const mode=(el("btMode")||{}).value||"reversion_only";
+  const hold=Number((el("btHold")||{}).value||12);
+  setText("btStatus","Running v13 backtest...");
   const qs=new URLSearchParams({
     starting_capital:String(capital),
     period,
@@ -4808,10 +4823,12 @@ async function runBacktest(){
     reward_risk:String(rr),
     compounding:String(comp),
     fee_per_trade:String(fee),
-    slippage_points:String(slip)
+    slippage_points:String(slip),
+    mode:String(mode),
+    max_hold:String(hold)
   });
   try{
-    const r=await fetch("/backtest/run?"+qs.toString(),{cache:"no-store"});
+    const r=await fetch("/v13/backtest?"+qs.toString(),{cache:"no-store"});
     const d=await r.json();
     if(!r.ok||d.status!=="success")throw new Error(d.message||"Backtest failed");
     setText("btFinal","₹"+Number(d.final_capital).toLocaleString("en-IN",{maximumFractionDigits:2}));
@@ -4819,29 +4836,36 @@ async function runBacktest(){
     setText("btTrades",d.total_trades);
     setText("btWinRate",Number(d.win_rate).toFixed(1)+"%");
     setText("btPF",d.profit_factor==null?"--":Number(d.profit_factor).toFixed(2));
+    const edge=Number(d.edge_vs_random_percentage_points||0);
+    setText("btEdge",(edge>=0?"+":"")+edge.toFixed(1)+" pts");
+    const edgeEl=el("btEdge");
+    if(edgeEl){edgeEl.style.color=edge>2?"#22d3a6":edge>0?"#f7b84b":"#fb5b6b";}
     setText("btDD",Number(d.max_drawdown_percent).toFixed(2)+"%");
     setText("btExpectancy","₹"+Number(d.expectancy_per_trade||0).toFixed(2));
     setText("btConsec",d.max_consecutive_losses||0);
-    setText("btWait",Number(d.wait_ratio_percent||0).toFixed(1)+"%");
+    const sc=d.signal_counts||{};
+    const tot=(sc.CE||0)+(sc.PE||0)+(sc.WAIT||0);
+    setText("btWait",tot?((sc.WAIT||0)/tot*100).toFixed(1)+"%":"--%");
     setText("btVerdict",d.verdict||"--");
     const verdictEl=el("btVerdict");
     if(verdictEl){
       verdictEl.style.color=d.verdict==="PASS"?"#22d3a6":d.verdict==="CAUTION"?"#f7b84b":"#fb5b6b";
     }
-    const ce=d.ce_stats||{},pe=d.pe_stats||{};
+    const cfg=d.config||{};
+    const wr=Number(d.win_rate||0), bl=Number(d.random_walk_baseline_win_rate||0);
     setText("btDiagnostics",
       `Signals → CE ${d.signal_counts?.CE||0}, PE ${d.signal_counts?.PE||0}, WAIT ${d.signal_counts?.WAIT||0}. `
-      + `CE win rate ${Number(ce.win_rate||0).toFixed(1)}%, PE win rate ${Number(pe.win_rate||0).toFixed(1)}%. `
-      + `Verdict: ${d.verdict||"--"}.`
+      + `Win rate ${wr.toFixed(1)}% vs coin-flip baseline ${bl.toFixed(1)}% for this stop/target geometry. `
+      + `Expectancy ${Number(d.expectancy_r||0).toFixed(3)} R. Direction: ${cfg.mode||"--"}.`
     );
-    setText("btStatus",`Completed · ${d.total_trades} trades · ${d.period} · ${d.verdict||"--"}`);
+    setText("btStatus",`Completed · ${d.total_trades} trades · ${d.verdict||"--"}`);
     renderBacktestEquity(d.equity_curve||[]);
     el("btHistory").innerHTML=(d.trades||[]).slice().reverse().map(t=>`
       <tr>
         <td>${new Date(t.entry_time).toLocaleString()}</td>
         <td>${t.signal}</td>
         <td>${Number(t.score).toFixed(2)}</td>
-        <td>${Number(t.threshold).toFixed(2)}</td>
+        <td>${t.source||"--"}</td>
         <td>${t.regime}</td>
         <td>${Number(t.pnl)>=0?"+":""}₹${Number(t.pnl).toFixed(2)}</td>
         <td>${t.exit_reason}</td>
@@ -4864,20 +4888,27 @@ async function runOptimizer(){
   try{
     const qs=new URLSearchParams({
       starting_capital:String(capital),period,
-      risk_per_trade:String(risk),reward_risk:String(rr),
-      fee_per_trade:String(fee),slippage_points:String(slip)
+      fee_per_trade:String(fee),slippage_points:String(slip),
+      fast:"true"
     });
-    const r=await fetch("/backtest/optimize?"+qs.toString(),{cache:"no-store"});
+    const r=await fetch("/v13/optimize?"+qs.toString(),{cache:"no-store"});
     const d=await r.json();
     if(!r.ok||d.status!=="success") throw new Error(d.message||"Optimizer failed");
     const b=d.best_config||{}, v=d.validation||{}, tr=d.training||{};
+    const vEdge=Number(v.edge_vs_random_percentage_points||0);
+    const deg=Number(d.overfit_degradation_r||0);
     setText("btOptimizer",
-      `BEST CONFIG → threshold ${Number(b.threshold).toFixed(2)}, side ${b.side}, regimes ${b.regimes.join(", ")}. `
-      + `TRAIN: PF ${tr.profit_factor??"--"}, return ${Number(tr.return_percent||0).toFixed(2)}%, DD ${Number(tr.max_drawdown_percent||0).toFixed(2)}%. `
-      + `UNSEEN VALIDATION: ${v.verdict}, PF ${v.profit_factor??"--"}, expectancy ₹${Number(v.expectancy_per_trade||0).toFixed(2)}, `
-      + `return ${Number(v.return_percent||0).toFixed(2)}%, DD ${Number(v.max_drawdown_percent||0).toFixed(2)}%, trades ${v.total_trades||0}.`
+      `BEST → ${b.mode}, threshold ${Number(b.threshold).toFixed(2)}, R:R ${b.reward_risk}, stop ${b.stop_atr_mult}×ATR, hold ${b.max_hold}. `
+      + `TRAIN: PF ${tr.profit_factor??"--"}, edge ${Number(tr.edge_vs_random_percentage_points||0).toFixed(1)} pts, ${tr.total_trades||0} trades. `
+      + `UNSEEN VALIDATION: ${v.verdict}, PF ${v.profit_factor??"--"}, edge ${vEdge.toFixed(1)} pts, `
+      + `expectancy ${Number(v.expectancy_r||0).toFixed(3)} R, ${v.total_trades||0} trades. `
+      + `Overfit degradation ${deg.toFixed(3)} R. `
+      + (v.verdict==="PASS"&&(v.total_trades||0)>=30&&deg<0.10
+          ? "Promotable."
+          : "NOT promotable — needs PASS, ≥30 validation trades and degradation < 0.10.")
+      + ` Tested ${d.configurations_tested||0} configurations, so the training number is flattering by construction; read validation only.`
     );
-    setText("btStatus",`Walk-forward complete · unseen-data verdict ${v.verdict}`);
+    setText("btStatus",`Walk-forward complete · unseen verdict ${v.verdict}`);
   }catch(e){setText("btStatus","Optimizer error: "+e.message);}
 }
 
