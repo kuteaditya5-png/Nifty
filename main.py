@@ -33,7 +33,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "14.0",
+        "version": "14.3",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4549,6 +4549,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     <button class="primary" onclick="runOptimizer()">Optimize + Walk-Forward</button>
     <button class="primary" onclick="runRollingWF()">Rolling Walk-Forward (5 folds)</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalEdge()">Signal Edge Diagnostic v14.1</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="runRegimeMatrix()">Regime × Engine Matrix v14.3</button>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
   <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
@@ -4557,6 +4558,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     Rolling walk-forward optimises on one segment and validates on the next, five times. This is the test for repeatability across regimes.
   </div>
   <div class="bt-note" id="btSignalEdge" style="margin-top:8px">v14.1 raw signal edge has not been tested yet.</div>
+  <div class="bt-note" id="btRegimeMatrix" style="margin-top:8px">Regime × Engine Matrix has not been run yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
   </div>
@@ -5043,6 +5045,42 @@ async function runBacktest(){
 }
 
 
+
+
+async function runRegimeMatrix(){
+  const period=(document.getElementById("btPeriod")||{}).value||"60d";
+  const threshold=Number((document.getElementById("btThreshold")||{}).value||0.20);
+  const box=document.getElementById("btRegimeMatrix");
+  if(box) box.textContent="Running Regime × Engine Matrix…";
+
+  try{
+    const qs=new URLSearchParams({period,threshold:String(threshold)});
+    const r=await fetch("/v14/regime-engine-matrix?"+qs.toString(),{cache:"no-store"});
+    const d=await r.json();
+
+    if(!r.ok||d.status!=="success"){
+      throw new Error(d.message||"Regime × Engine Matrix failed");
+    }
+
+    const route=d.routing_recommendation||{};
+    const rank=(d.ranking||[]).slice(0,5);
+
+    const top=rank.map((x,i)=>
+      `${i+1}) ${x.regime} → ${x.engine}: `
+      + `${x.signals} signals, H6 ${x.h6.accuracy_percent}% / `
+      + `${x.h6.average_directional_move_bps}bps, ${x.verdict}`
+    ).join(" · ");
+
+    if(box) box.textContent=
+      `ROUTING → Trending: ${route.TRENDING||"WAIT"}, `
+      + `Range: ${route.RANGE||"WAIT"}, `
+      + `High Volatility: ${route.HIGH_VOLATILITY||"WAIT"}. `
+      + `Top combinations: ${top}`;
+
+  }catch(e){
+    if(box) box.textContent="Regime Matrix error: "+e.message;
+  }
+}
 
 async function runSignalEdge(){
   const period=(document.getElementById("btPeriod")||{}).value||"60d";
@@ -6261,7 +6299,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "14.1",
+            "model_version": "14.3",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7114,7 +7152,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "14.1",
+            "model_version": "14.3",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7626,7 +7664,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "14.1",
+        "model_version": "14.3",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -7700,6 +7738,229 @@ def _v123_objective(m):
     # Reject tiny samples; reward PF/expectancy, penalize drawdown.
     if n < 8: return -999999
     return pf*100 + exp*0.03 - dd*2 + min(n,50)*0.25
+
+
+
+# ============================================================
+# V14.3 REGIME × ENGINE MATRIX
+# ============================================================
+
+def _v143_engine_signal(row, engine="BLENDED", threshold=0.20):
+    """
+    Price-feature engine used only for historical diagnostic comparison.
+    Returns CE / PE / WAIT and the raw engine score.
+    """
+    signal, score, trend_score, reversion_score = _v141_directional_signal(
+        row,
+        engine=engine,
+        threshold=threshold
+    )
+    return {
+        "signal": signal,
+        "score": float(score),
+        "trend_score": float(trend_score),
+        "reversion_score": float(reversion_score),
+    }
+
+
+def _v143_regime_name(row):
+    """
+    Keep regimes explicit and mutually exclusive.
+    """
+    try:
+        close = float(row["close"])
+        ema20 = float(row["ema20"])
+        ema50 = float(row["ema50"])
+        atr = float(row["atr"])
+        rv = float(row["rolling_vol"])
+        spread = abs(ema20 - ema50) / close if close else 0.0
+        atr_pct = atr / close if close else 0.0
+
+        if rv >= 0.0050 or atr_pct >= 0.0060:
+            return "HIGH_VOLATILITY"
+        if spread >= 0.0025:
+            return "TRENDING"
+        return "RANGE"
+    except Exception:
+        return "UNKNOWN"
+
+
+def _v143_matrix_cell(df, engine, regime, threshold=0.20, horizons=(1,3,6,12)):
+    records = []
+    max_h = max(horizons)
+
+    for i in range(0, len(df) - max_h):
+        row = df.iloc[i]
+        if _v143_regime_name(row) != regime:
+            continue
+
+        decision = _v143_engine_signal(row, engine, threshold)
+        signal = decision["signal"]
+        if signal == "WAIT":
+            continue
+
+        entry = float(row["close"])
+        side = 1.0 if signal == "CE" else -1.0
+
+        rec = {
+            "time": df.index[i].isoformat(),
+            "signal": signal,
+            "score": round(decision["score"], 4),
+        }
+
+        for h in horizons:
+            future = float(df.iloc[i+h]["close"])
+            move = ((future - entry) / entry) * side
+            rec[f"h{h}_correct"] = move > 0
+            rec[f"h{h}_move_bps"] = move * 10000.0
+
+        records.append(rec)
+
+    result = {
+        "engine": engine,
+        "regime": regime,
+        "threshold": threshold,
+        "signals": len(records),
+    }
+
+    for h in horizons:
+        vals = [float(r[f"h{h}_move_bps"]) for r in records]
+        wins = sum(1 for r in records if r[f"h{h}_correct"])
+
+        if vals:
+            ordered = sorted(vals)
+            median = ordered[len(ordered)//2]
+            avg = sum(vals) / len(vals)
+            acc = wins / len(vals) * 100.0
+        else:
+            median = avg = acc = 0.0
+
+        result[f"h{h}"] = {
+            "accuracy_percent": round(acc, 1),
+            "average_directional_move_bps": round(avg, 2),
+            "median_directional_move_bps": round(median, 2),
+        }
+
+    # Simple evidence score focused on H6 because our prior diagnostics
+    # used H6 as the main ranking horizon.
+    h6 = result["h6"]
+    sample_bonus = min(result["signals"], 100) / 100.0 * 5.0
+    evidence_score = (
+        (h6["accuracy_percent"] - 50.0) * 1.4
+        + h6["average_directional_move_bps"] * 0.8
+        + sample_bonus
+    )
+    result["evidence_score"] = round(evidence_score, 2)
+
+    if result["signals"] < 30:
+        verdict = "INSUFFICIENT"
+    elif h6["accuracy_percent"] >= 54 and h6["average_directional_move_bps"] > 0:
+        verdict = "PROMISING"
+    elif h6["accuracy_percent"] >= 51 and h6["average_directional_move_bps"] > 0:
+        verdict = "WEAK POSITIVE"
+    else:
+        verdict = "NO EDGE"
+
+    result["verdict"] = verdict
+    return result
+
+
+@app.get("/v14/regime-engine-matrix")
+def v143_regime_engine_matrix(
+    period: str = "60d",
+    threshold: float = 0.20
+):
+    """
+    Compare every engine inside every regime.
+
+    Matrix:
+      TREND × TRENDING
+      TREND × RANGE
+      TREND × HIGH_VOLATILITY
+      REVERSION × TRENDING
+      REVERSION × RANGE
+      REVERSION × HIGH_VOLATILITY
+      BLENDED × TRENDING
+      BLENDED × RANGE
+      BLENDED × HIGH_VOLATILITY
+    """
+    try:
+        df = _bt_prepare_frame(period=period, interval="15m")
+        if df.empty or len(df) < 100:
+            return {
+                "status": "error",
+                "message": "Not enough historical candles for Regime × Engine Matrix."
+            }
+
+        engines = ("TREND", "REVERSION", "BLENDED")
+        regimes = ("TRENDING", "RANGE", "HIGH_VOLATILITY")
+
+        matrix = []
+        for engine in engines:
+            for regime in regimes:
+                matrix.append(
+                    _v143_matrix_cell(
+                        df,
+                        engine=engine,
+                        regime=regime,
+                        threshold=threshold
+                    )
+                )
+
+        ranked = sorted(
+            matrix,
+            key=lambda x: (
+                x["evidence_score"],
+                x["signals"]
+            ),
+            reverse=True
+        )
+
+        usable = [
+            x for x in ranked
+            if x["signals"] >= 30
+            and x["h6"]["average_directional_move_bps"] > 0
+            and x["h6"]["accuracy_percent"] >= 51
+        ]
+
+        best_by_regime = {}
+        for regime in regimes:
+            cells = [x for x in ranked if x["regime"] == regime]
+            best_by_regime[regime] = cells[0] if cells else None
+
+        routing_recommendation = {}
+        for regime in regimes:
+            best = best_by_regime.get(regime)
+            if not best or best["verdict"] in ("NO EDGE", "INSUFFICIENT"):
+                routing_recommendation[regime] = "WAIT"
+            else:
+                routing_recommendation[regime] = best["engine"]
+
+        return {
+            "status": "success",
+            "model_version": "14.3",
+            "period": period,
+            "threshold": threshold,
+            "matrix": matrix,
+            "ranking": ranked,
+            "best_by_regime": best_by_regime,
+            "routing_recommendation": routing_recommendation,
+            "usable_combinations": usable,
+            "promotion_rule": (
+                "Do not change the live router from this report alone. "
+                "A combination must also pass rolling unseen validation."
+            ),
+            "interpretation": (
+                "This isolates which engine has directional edge inside which market regime. "
+                "It does not include options premiums, stop-loss, targets, fees or slippage."
+            )
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 # ============================================================
@@ -7915,7 +8176,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "14.1",
+            "model_version": "14.3",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
