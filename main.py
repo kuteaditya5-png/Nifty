@@ -4548,6 +4548,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     <button class="primary" onclick="runBacktest()">Run Backtest</button>
     <button class="primary" onclick="runOptimizer()">Optimize + Walk-Forward</button>
     <button class="primary" onclick="runRollingWF()">Rolling Walk-Forward (5 folds)</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalEdge()">Signal Edge Diagnostic v14.1</button>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
   <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
@@ -4555,6 +4556,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btRolling" style="margin-top:8px">
     Rolling walk-forward optimises on one segment and validates on the next, five times. This is the test for repeatability across regimes.
   </div>
+  <div class="bt-note" id="btSignalEdge" style="margin-top:8px">v14.1 raw signal edge has not been tested yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
   </div>
@@ -5040,6 +5042,41 @@ async function runBacktest(){
   }
 }
 
+
+
+async function runSignalEdge(){
+  const period=(document.getElementById("btPeriod")||{}).value||"60d";
+  const threshold=Number((document.getElementById("btThreshold")||{}).value||0.20);
+  const box=document.getElementById("btSignalEdge");
+  if(box) box.textContent="Running raw CE/PE signal-edge diagnostic…";
+
+  try{
+    const qs=new URLSearchParams({period,threshold:String(threshold)});
+    const r=await fetch("/v14/signal-edge?"+qs.toString(),{cache:"no-store"});
+    const d=await r.json();
+    if(!r.ok||d.status!=="success") throw new Error(d.message||"Signal edge diagnostic failed");
+
+    const best=d.engines[d.best_engine];
+    const h1=best.overall.h1, h3=best.overall.h3, h6=best.overall.h6, h12=best.overall.h12;
+    const e6=best.edge_vs_random.h6;
+    const regimes=best.by_regime||{};
+
+    const regimeText=Object.entries(regimes)
+      .map(([k,v])=>`${k}: ${v.signals} signals, H6 ${v.h6.accuracy_percent}% / ${v.h6.average_directional_move_bps}bps`)
+      .join(" · ");
+
+    if(box) box.textContent=
+      `${d.verdict} · Best ${d.best_engine} · WAIT ${best.wait_ratio_percent}% · `
+      + `H1 ${h1.accuracy_percent}% (${h1.average_directional_move_bps}bps), `
+      + `H3 ${h3.accuracy_percent}% (${h3.average_directional_move_bps}bps), `
+      + `H6 ${h6.accuracy_percent}% (${h6.average_directional_move_bps}bps), `
+      + `H12 ${h12.accuracy_percent}% (${h12.average_directional_move_bps}bps). `
+      + `H6 edge vs random: ${e6.accuracy_edge_points} pts / ${e6.move_edge_bps}bps. `
+      + regimeText;
+  }catch(e){
+    if(box) box.textContent="Signal Edge error: "+e.message;
+  }
+}
 
 async function runOptimizer(){
   const capital=Number(el("btCapital").value||100000);
@@ -6224,7 +6261,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "14.0",
+            "model_version": "14.1",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7077,7 +7114,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "14.0",
+            "model_version": "14.1",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7589,7 +7626,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "14.0",
+        "model_version": "14.1",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -7663,6 +7700,236 @@ def _v123_objective(m):
     # Reject tiny samples; reward PF/expectancy, penalize drawdown.
     if n < 8: return -999999
     return pf*100 + exp*0.03 - dd*2 + min(n,50)*0.25
+
+
+# ============================================================
+# V14.1 SIGNAL EDGE DIAGNOSTIC
+# ============================================================
+
+def _v141_directional_signal(row, engine="BLENDED", threshold=0.20):
+    """
+    Raw directional test only. No SL, target, fees, slippage or position sizing.
+    This deliberately separates prediction quality from execution quality.
+    """
+    try:
+        technical = float(row.get("technical_score", 0) or 0)
+        momentum = float(row.get("momentum_score", 0) or 0)
+        price_action = float(row.get("price_action_score", 0) or 0)
+        statistics = float(row.get("statistics_score", 0) or 0)
+        candle = float(row.get("candle_score", 0) or 0)
+    except Exception:
+        technical = momentum = price_action = statistics = candle = 0.0
+
+    # Historical backtest frames may not contain the live aggregate columns.
+    # Fall back to the indicator columns already available in the backtest frame.
+    if abs(technical) + abs(momentum) + abs(price_action) + abs(statistics) + abs(candle) < 1e-9:
+        close = float(row["close"])
+        ema20 = float(row["ema20"])
+        ema50 = float(row["ema50"])
+        rsi = float(row["rsi"])
+        macd = float(row["macd"])
+        macd_signal = float(row["macd_signal"])
+        z = float(row["zscore"])
+        ret3 = float(row["ret3"])
+        ret6 = float(row["ret6"])
+        bb = float(row["bb_percent_b"])
+
+        trend = (
+            (0.35 if close > ema20 else -0.35)
+            + (0.30 if ema20 > ema50 else -0.30)
+            + (0.20 if macd > macd_signal else -0.20)
+            + max(-0.15, min(0.15, ret6 / 0.008 * 0.15))
+        )
+        reversion = (
+            max(-0.38, min(0.38, -z / 1.8 * 0.38))
+            + max(-0.22, min(0.22, -(rsi - 50) / 25 * 0.22))
+            + max(-0.20, min(0.20, -(bb - 0.5) / 0.5 * 0.20))
+            + max(-0.20, min(0.20, -ret3 / 0.005 * 0.20))
+        )
+    else:
+        trend = technical * 0.38 + momentum * 0.24 + price_action * 0.28 + candle * 0.10
+        reversion = (-statistics) * 0.48 + (-momentum) * 0.17 + price_action * 0.20 + candle * 0.15
+
+    engine = str(engine).upper()
+    if engine == "TREND":
+        score = trend
+    elif engine == "REVERSION":
+        score = reversion
+    else:
+        score = trend * 0.60 + reversion * 0.40
+
+    if score >= threshold:
+        signal = "CE"
+    elif score <= -threshold:
+        signal = "PE"
+    else:
+        signal = "WAIT"
+
+    return signal, float(score), float(trend), float(reversion)
+
+
+def _v141_regime(row):
+    close = float(row["close"])
+    ema20 = float(row["ema20"])
+    ema50 = float(row["ema50"])
+    atr = float(row["atr"])
+    rv = float(row["rolling_vol"])
+    spread = abs(ema20 - ema50) / close if close else 0.0
+    atr_pct = atr / close if close else 0.0
+
+    if rv >= 0.006 or atr_pct >= 0.007:
+        return "HIGH_VOLATILITY"
+    if spread >= 0.0025:
+        return "TRENDING"
+    return "RANGE"
+
+
+def _v141_edge_report(df, engine="BLENDED", threshold=0.20, horizons=(1,3,6,12)):
+    import random
+
+    rows = []
+    regime_stats = {}
+    signal_counts = {"CE": 0, "PE": 0, "WAIT": 0}
+
+    max_h = max(horizons)
+    for i in range(0, len(df) - max_h):
+        row = df.iloc[i]
+        signal, score, trend_score, reversion_score = _v141_directional_signal(row, engine, threshold)
+        signal_counts[signal] += 1
+        if signal == "WAIT":
+            continue
+
+        entry = float(row["close"])
+        side = 1.0 if signal == "CE" else -1.0
+        regime = _v141_regime(row)
+
+        rec = {
+            "time": df.index[i].isoformat(),
+            "signal": signal,
+            "score": round(score, 4),
+            "trend_score": round(trend_score, 4),
+            "reversion_score": round(reversion_score, 4),
+            "regime": regime
+        }
+
+        for h in horizons:
+            future = float(df.iloc[i+h]["close"])
+            raw_return = (future - entry) / entry
+            directional_return = raw_return * side
+            rec[f"h{h}_correct"] = directional_return > 0
+            rec[f"h{h}_move_bps"] = directional_return * 10000
+
+        rows.append(rec)
+
+    def summarize(records):
+        out = {"signals": len(records)}
+        for h in horizons:
+            vals = [float(r[f"h{h}_move_bps"]) for r in records]
+            wins = sum(1 for r in records if r[f"h{h}_correct"])
+            out[f"h{h}"] = {
+                "accuracy_percent": round(wins / len(records) * 100, 1) if records else 0.0,
+                "average_directional_move_bps": round(sum(vals) / len(vals), 2) if vals else 0.0,
+                "median_directional_move_bps": round(sorted(vals)[len(vals)//2], 2) if vals else 0.0
+            }
+        return out
+
+    overall = summarize(rows)
+
+    for regime in ("TRENDING", "RANGE", "HIGH_VOLATILITY"):
+        regime_stats[regime] = summarize([r for r in rows if r["regime"] == regime])
+
+    # Random-side baseline on the exact same signal timestamps.
+    # Seeded for reproducibility.
+    rng = random.Random(141)
+    random_rows = []
+    for r in rows:
+        rr = dict(r)
+        random_side = 1.0 if rng.random() >= 0.5 else -1.0
+        i = df.index.get_loc(r["time"]) if r["time"] in df.index else None
+        # Reconstruct from stored directional result: flipping side flips directional move.
+        original_side = 1.0 if r["signal"] == "CE" else -1.0
+        factor = random_side / original_side
+        for h in horizons:
+            rr[f"h{h}_move_bps"] = float(r[f"h{h}_move_bps"]) * factor
+            rr[f"h{h}_correct"] = rr[f"h{h}_move_bps"] > 0
+        random_rows.append(rr)
+
+    random_summary = summarize(random_rows)
+
+    edge_vs_random = {}
+    for h in horizons:
+        edge_vs_random[f"h{h}"] = {
+            "accuracy_edge_points": round(
+                overall[f"h{h}"]["accuracy_percent"] - random_summary[f"h{h}"]["accuracy_percent"], 1
+            ),
+            "move_edge_bps": round(
+                overall[f"h{h}"]["average_directional_move_bps"] -
+                random_summary[f"h{h}"]["average_directional_move_bps"], 2
+            )
+        }
+
+    return {
+        "engine": engine,
+        "threshold": threshold,
+        "signal_counts": signal_counts,
+        "wait_ratio_percent": round(
+            signal_counts["WAIT"] / max(1, sum(signal_counts.values())) * 100, 1
+        ),
+        "overall": overall,
+        "by_regime": regime_stats,
+        "random_baseline": random_summary,
+        "edge_vs_random": edge_vs_random,
+        "sample": rows[-25:]
+    }
+
+
+@app.get("/v14/signal-edge")
+def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
+    try:
+        df = _bt_prepare_frame(period=period, interval="15m")
+        if df.empty or len(df) < 80:
+            return {"status": "error", "message": "Not enough historical candles for signal-edge analysis."}
+
+        engines = {}
+        for engine in ("TREND", "REVERSION", "BLENDED"):
+            engines[engine] = _v141_edge_report(df, engine, threshold)
+
+        # Rank primarily by 6-candle directional move edge, then accuracy edge.
+        ranking = sorted(
+            engines.keys(),
+            key=lambda e: (
+                engines[e]["edge_vs_random"]["h6"]["move_edge_bps"],
+                engines[e]["edge_vs_random"]["h6"]["accuracy_edge_points"]
+            ),
+            reverse=True
+        )
+
+        best = ranking[0]
+        best6 = engines[best]["edge_vs_random"]["h6"]
+        if best6["move_edge_bps"] > 0 and best6["accuracy_edge_points"] >= 2:
+            verdict = "EDGE DETECTED"
+        elif best6["move_edge_bps"] > 0:
+            verdict = "WEAK / UNCONFIRMED EDGE"
+        else:
+            verdict = "NO RAW SIGNAL EDGE"
+
+        return {
+            "status": "success",
+            "model_version": "14.1",
+            "period": period,
+            "bar_interval": "15m",
+            "verdict": verdict,
+            "best_engine": best,
+            "engine_ranking": ranking,
+            "engines": engines,
+            "interpretation": (
+                "This test ignores stop-loss, target, fees, slippage and position sizing. "
+                "It measures whether CE/PE direction itself predicts future NIFTY movement."
+            )
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 @app.get("/backtest/optimize")
 def optimize_backtest(
