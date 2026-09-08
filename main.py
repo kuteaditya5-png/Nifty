@@ -33,7 +33,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "14.3",
+        "version": "14.4",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4550,6 +4550,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     <button class="primary" onclick="runRollingWF()">Rolling Walk-Forward (5 folds)</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalEdge()">Signal Edge Diagnostic v14.1</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="runRegimeMatrix()">Regime × Engine Matrix v14.3</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="runRegimeWalkForward()">Regime-Aware Walk-Forward v14.4</button>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
   <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
@@ -4559,6 +4560,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   </div>
   <div class="bt-note" id="btSignalEdge" style="margin-top:8px">v14.1 raw signal edge has not been tested yet.</div>
   <div class="bt-note" id="btRegimeMatrix" style="margin-top:8px">Regime × Engine Matrix has not been run yet.</div>
+  <div class="bt-note" id="btRegimeWF" style="margin-top:8px">v14.4 unseen validation has not been run yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
   </div>
@@ -5046,6 +5048,40 @@ async function runBacktest(){
 
 
 
+
+
+async function runRegimeWalkForward(){
+  const period=(document.getElementById("btPeriod")||{}).value||"60d";
+  const box=document.getElementById("btRegimeWF");
+  if(box) box.textContent="Running expanding-window unseen validation for TRENDING → REVERSION…";
+
+  try{
+    const qs=new URLSearchParams({period,folds:"5"});
+    const r=await fetch("/v14/regime-aware-walk-forward?"+qs.toString(),{cache:"no-store"});
+    const d=await r.json();
+
+    if(!r.ok||d.status!=="success"){
+      throw new Error(d.message||"Regime-aware walk-forward failed");
+    }
+
+    const foldText=(d.folds||[]).map(f=>
+      `F${f.fold}: ${f.verdict}, T${Number(f.selected_threshold).toFixed(2)}, `
+      + `H6 ${f.validation.h6.accuracy_percent}% / ${f.validation.h6.average_directional_move_bps}bps, `
+      + `${f.validation.signals} signals`
+    ).join(" · ");
+
+    if(box) box.textContent=
+      `${d.overall_verdict} · PROMOTABLE ${d.promotable_to_live_router?"YES":"NO"} · `
+      + `Avg unseen H6 ${d.average_unseen_h6_accuracy_percent}% / ${d.average_unseen_h6_move_bps}bps · `
+      + `Unseen signals ${d.total_unseen_signals} · Avg degradation ${d.average_accuracy_degradation_points} pts · `
+      + `Stable threshold ${Number(d.stable_threshold).toFixed(2)} `
+      + `(${d.stable_threshold_selected_in_folds}/${d.fold_count} folds). `
+      + foldText;
+
+  }catch(e){
+    if(box) box.textContent="Regime Walk-Forward error: "+e.message;
+  }
+}
 
 async function runRegimeMatrix(){
   const period=(document.getElementById("btPeriod")||{}).value||"60d";
@@ -6299,7 +6335,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "14.3",
+            "model_version": "14.4",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7152,7 +7188,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "14.3",
+            "model_version": "14.4",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7664,7 +7700,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "14.3",
+        "model_version": "14.4",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -7739,6 +7775,305 @@ def _v123_objective(m):
     if n < 8: return -999999
     return pf*100 + exp*0.03 - dd*2 + min(n,50)*0.25
 
+
+
+
+# ============================================================
+# V14.4 REGIME-AWARE ROLLING WALK-FORWARD
+# ============================================================
+
+def _v144_candidate_thresholds():
+    # We discovered TRENDING -> REVERSION in v14.3.
+    # v14.4 does not search arbitrary engines again; it validates this
+    # discovered rule at nearby thresholds to test robustness.
+    return [0.15, 0.20, 0.25, 0.30]
+
+
+def _v144_fold_metrics(df, threshold, horizons=(1,3,6,12)):
+    """
+    Evaluate only the discovered rule:
+      TRENDING regime -> REVERSION engine
+      all other regimes -> WAIT
+    """
+    records = []
+    max_h = max(horizons)
+
+    for i in range(0, len(df) - max_h):
+        row = df.iloc[i]
+        if _v143_regime_name(row) != "TRENDING":
+            continue
+
+        decision = _v143_engine_signal(
+            row,
+            engine="REVERSION",
+            threshold=threshold
+        )
+        signal = decision["signal"]
+        if signal == "WAIT":
+            continue
+
+        entry = float(row["close"])
+        side = 1.0 if signal == "CE" else -1.0
+
+        rec = {
+            "time": df.index[i].isoformat(),
+            "signal": signal,
+            "score": float(decision["score"]),
+        }
+
+        for h in horizons:
+            future = float(df.iloc[i+h]["close"])
+            directional = ((future - entry) / entry) * side
+            rec[f"h{h}_move_bps"] = directional * 10000.0
+            rec[f"h{h}_correct"] = directional > 0
+
+        records.append(rec)
+
+    result = {
+        "threshold": threshold,
+        "signals": len(records),
+    }
+
+    for h in horizons:
+        vals = [float(r[f"h{h}_move_bps"]) for r in records]
+        wins = sum(1 for r in records if r[f"h{h}_correct"])
+        if vals:
+            med = statistics.median(vals)
+            avg = statistics.mean(vals)
+            acc = wins / len(vals) * 100.0
+        else:
+            med = avg = acc = 0.0
+
+        result[f"h{h}"] = {
+            "accuracy_percent": round(acc, 1),
+            "average_directional_move_bps": round(avg, 2),
+            "median_directional_move_bps": round(med, 2),
+        }
+
+    return result
+
+
+def _v144_select_training_threshold(train_df):
+    """
+    Pick threshold using training data only.
+    Objective emphasizes H6 because v14.3 discovery was strongest there,
+    while penalizing tiny samples.
+    """
+    candidates = []
+    for threshold in _v144_candidate_thresholds():
+        metrics = _v144_fold_metrics(train_df, threshold)
+        n = metrics["signals"]
+        h6 = metrics["h6"]
+
+        if n < 25:
+            objective = -999999.0
+        else:
+            objective = (
+                (h6["accuracy_percent"] - 50.0) * 1.6
+                + h6["average_directional_move_bps"] * 1.0
+                + min(n, 120) / 120.0 * 4.0
+            )
+
+        candidates.append({
+            "threshold": threshold,
+            "metrics": metrics,
+            "objective": round(objective, 4)
+        })
+
+    candidates.sort(key=lambda x: x["objective"], reverse=True)
+    return candidates[0], candidates
+
+
+def _v144_fold_verdict(validation, training):
+    n = int(validation.get("signals") or 0)
+    vh6 = validation["h6"]
+    th6 = training["h6"]
+
+    degradation_acc = th6["accuracy_percent"] - vh6["accuracy_percent"]
+    degradation_bps = th6["average_directional_move_bps"] - vh6["average_directional_move_bps"]
+
+    if n < 20:
+        verdict = "INSUFFICIENT"
+    elif (
+        vh6["accuracy_percent"] >= 53.0
+        and vh6["average_directional_move_bps"] > 1.5
+        and degradation_acc <= 5.0
+    ):
+        verdict = "PASS"
+    elif (
+        vh6["accuracy_percent"] >= 51.0
+        and vh6["average_directional_move_bps"] > 0
+        and degradation_acc <= 7.0
+    ):
+        verdict = "CAUTION"
+    else:
+        verdict = "FAIL"
+
+    return {
+        "verdict": verdict,
+        "accuracy_degradation_points": round(degradation_acc, 1),
+        "move_degradation_bps": round(degradation_bps, 2),
+    }
+
+
+@app.get("/v14/regime-aware-walk-forward")
+def v144_regime_aware_walk_forward(
+    period: str = "60d",
+    folds: int = 5
+):
+    """
+    Expanding-window walk-forward validation for the discovered rule:
+      TRENDING -> REVERSION
+      RANGE -> WAIT
+      HIGH_VOLATILITY -> WAIT
+
+    Each fold:
+      - trains only on past data
+      - chooses threshold on training data
+      - validates on the immediately following unseen block
+    """
+    try:
+        df = _bt_prepare_frame(period=period, interval="15m")
+        if df.empty or len(df) < 300:
+            return {
+                "status": "error",
+                "message": "Not enough historical candles for regime-aware walk-forward."
+            }
+
+        folds = max(3, min(int(folds), 8))
+        n = len(df)
+
+        # Reserve roughly half the sample for the initial training window,
+        # then split the rest into sequential unseen validation blocks.
+        initial_train = max(180, int(n * 0.50))
+        remaining = n - initial_train
+        test_size = max(35, remaining // folds)
+
+        fold_results = []
+
+        for fold_idx in range(folds):
+            train_end = initial_train + fold_idx * test_size
+            test_start = train_end
+            test_end = min(n, test_start + test_size)
+
+            if test_end - test_start < 25:
+                break
+
+            train_df = df.iloc[:train_end]
+            test_df = df.iloc[test_start:test_end]
+
+            best, all_candidates = _v144_select_training_threshold(train_df)
+            threshold = best["threshold"]
+
+            validation = _v144_fold_metrics(test_df, threshold)
+            verdict_data = _v144_fold_verdict(
+                validation,
+                best["metrics"]
+            )
+
+            fold_results.append({
+                "fold": fold_idx + 1,
+                "train_start": train_df.index[0].isoformat(),
+                "train_end": train_df.index[-1].isoformat(),
+                "validation_start": test_df.index[0].isoformat(),
+                "validation_end": test_df.index[-1].isoformat(),
+                "selected_threshold": threshold,
+                "training": best["metrics"],
+                "validation": validation,
+                **verdict_data,
+                "training_candidates": all_candidates
+            })
+
+        if not fold_results:
+            return {
+                "status": "error",
+                "message": "No valid walk-forward folds were produced."
+            }
+
+        valid = [f for f in fold_results if f["verdict"] != "INSUFFICIENT"]
+        pass_count = sum(1 for f in valid if f["verdict"] == "PASS")
+        caution_count = sum(1 for f in valid if f["verdict"] == "CAUTION")
+        fail_count = sum(1 for f in valid if f["verdict"] == "FAIL")
+
+        h6_accs = [f["validation"]["h6"]["accuracy_percent"] for f in valid]
+        h6_bps = [f["validation"]["h6"]["average_directional_move_bps"] for f in valid]
+        h6_medians = [f["validation"]["h6"]["median_directional_move_bps"] for f in valid]
+        val_signals = [f["validation"]["signals"] for f in valid]
+        degradations = [f["accuracy_degradation_points"] for f in valid]
+
+        avg_acc = round(statistics.mean(h6_accs), 1) if h6_accs else 0.0
+        avg_bps = round(statistics.mean(h6_bps), 2) if h6_bps else 0.0
+        avg_med = round(statistics.mean(h6_medians), 2) if h6_medians else 0.0
+        total_signals = sum(val_signals)
+        avg_deg = round(statistics.mean(degradations), 1) if degradations else 0.0
+
+        # Stability of selected threshold across folds
+        threshold_counts = {}
+        for f in fold_results:
+            t = f["selected_threshold"]
+            threshold_counts[t] = threshold_counts.get(t, 0) + 1
+        stable_threshold = max(threshold_counts, key=threshold_counts.get)
+
+        # Promotion gate
+        if (
+            len(valid) >= 4
+            and pass_count >= 3
+            and fail_count <= 1
+            and avg_acc >= 53.0
+            and avg_bps > 1.5
+            and total_signals >= 80
+            and avg_deg <= 5.0
+        ):
+            overall = "PASS"
+            promotable = True
+        elif (
+            len(valid) >= 3
+            and (pass_count + caution_count) >= 3
+            and avg_acc >= 51.5
+            and avg_bps > 0
+            and total_signals >= 60
+        ):
+            overall = "CAUTION"
+            promotable = False
+        else:
+            overall = "FAIL"
+            promotable = False
+
+        return {
+            "status": "success",
+            "model_version": "14.4",
+            "rule_under_test": {
+                "TRENDING": "REVERSION",
+                "RANGE": "WAIT",
+                "HIGH_VOLATILITY": "WAIT"
+            },
+            "method": "expanding-window rolling walk-forward",
+            "period": period,
+            "fold_count": len(fold_results),
+            "overall_verdict": overall,
+            "promotable_to_live_router": promotable,
+            "pass_folds": pass_count,
+            "caution_folds": caution_count,
+            "fail_folds": fail_count,
+            "average_unseen_h6_accuracy_percent": avg_acc,
+            "average_unseen_h6_move_bps": avg_bps,
+            "average_unseen_h6_median_bps": avg_med,
+            "total_unseen_signals": total_signals,
+            "average_accuracy_degradation_points": avg_deg,
+            "stable_threshold": stable_threshold,
+            "stable_threshold_selected_in_folds": threshold_counts[stable_threshold],
+            "folds": fold_results,
+            "promotion_rule": (
+                "Promote only if overall PASS, unseen H6 accuracy >=53%, "
+                "positive unseen H6 move, >=80 unseen signals, and acceptable degradation."
+            )
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 # ============================================================
@@ -7938,7 +8273,7 @@ def v143_regime_engine_matrix(
 
         return {
             "status": "success",
-            "model_version": "14.3",
+            "model_version": "14.4",
             "period": period,
             "threshold": threshold,
             "matrix": matrix,
@@ -8176,7 +8511,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "14.3",
+            "model_version": "14.4",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
