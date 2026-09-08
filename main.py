@@ -7564,9 +7564,14 @@ def v13_backtest(
     slippage_points: float = 2.0,
     use_reversion: bool = True,
     trade_high_vol: bool = False,
+    mode: str = "reversion_only",
 ):
     """Execution-realistic replay: next-bar entry, session-bounded holds,
-    symmetric slippage, compounding off by default."""
+    symmetric slippage, compounding off by default.
+
+    mode=reversion_only is the default because the edge report showed every
+    momentum indicator negative and reversion positive at all four horizons.
+    Use mode=trend_only to reproduce the v12.3 direction for comparison."""
     df = _v13_frame(period, interval)
     if df.empty:
         return {"status": "error", "message": "Historical data unavailable."}
@@ -7583,6 +7588,8 @@ def v13_backtest(
         slippage_points=max(0.0, min(float(slippage_points), 50.0)),
         use_reversion=bool(use_reversion),
         trade_high_vol=bool(trade_high_vol),
+        mode=(mode if mode in ("reversion_only", "trend_only", "auto")
+              else "reversion_only"),
     )
 
 

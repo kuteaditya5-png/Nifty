@@ -45,13 +45,34 @@ Confirm the deploy with:
 
   your-app.vercel.app/v13/baseline?reward_risk=1.5   -> should return 40.0
 
+EDGE REPORT RESULT (60d to 2026-09-08, 1455 bars)
+-------------------------------------------------
+All 9 momentum indicators were NEGATIVE at all 4 horizons.
+reversion_score was POSITIVE at all 4. NIFTY 15m was mean-reverting;
+v12.3 was systematically buying strength and selling weakness.
+
+Default is therefore mode=reversion_only.
+
+Caveats on that result:
+  - corrected for overlapping windows, no full-sample IC reached |t| > 1.1.
+    The sign consistency is the evidence, not the magnitude.
+  - the HIGH VOLATILITY trend IC of -0.397 is NOT an edge. 186 bars with
+    6-bar overlapping returns is ~31 independent observations, clustered
+    into a couple of episodes, and it was the most extreme of 6 cells
+    inspected. Do not build on it.
+  - the regime cells were not significant (|t| < 0.7), so mode=auto gates
+    on noise. It is kept for comparison only.
+
 THEN
 ----
 1. Open /v13/edge-report and read the fwd_6bar row.
      below -0.02  -> component is backwards, flip its sign
      above +0.03  -> real, build around it
      all inside +/-0.02 -> stop tuning; price indicators on 15m have no edge
-2. Test each leg alone: /v13/backtest?use_reversion=false then true
+2. Compare directions:
+     /v13/backtest?mode=reversion_only     <- expected best
+     /v13/backtest?mode=trend_only         <- v12.3's direction
+   Read edge_vs_random_percentage_points, not return_percent.
 3. Optimize locally (uvicorn main:app --reload), read only the validation block
 4. Promote nothing unless validation is PASS with >=30 trades and
    overfit_degradation_r < 0.10

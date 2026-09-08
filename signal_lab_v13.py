@@ -152,30 +152,39 @@ def build_features_v13(data):
     return out.dropna(subset=["atr", "trend_score", "reversion_score"]).copy()
 
 
-def route_signal_v13(row, threshold, use_reversion=True, trade_high_vol=False):
+def route_signal_v13(row, threshold, use_reversion=True, trade_high_vol=False,
+                     mode="auto"):
     """
-    Regime router. Returns (side, effective_score, source) or (None, .., reason).
+    Returns (side, effective_score, source) or (None, .., reason).
 
-    TRENDING        -> follow the trend score
-    SIDEWAYS        -> fade with the reversion score (this is the flip)
-    HIGH VOLATILITY -> stand down by default
+    mode:
+      "reversion_only" — use reversion_score in EVERY regime. Use this when
+                         the edge report shows momentum negative and reversion
+                         positive across horizons, which is the case for
+                         NIFTY 15m over Jul-Sep 2026.
+      "trend_only"     — use trend_score in every regime.
+      "auto"           — the original regime router. RETAINED ONLY FOR
+                         COMPARISON. The regime cells in the edge report were
+                         not significant (|t| < 0.7), so gating on them is
+                         fitting noise. Do not promote an "auto" config.
     """
     regime = row["regime"]
 
     if regime == "HIGH VOLATILITY" and not trade_high_vol:
         return None, 0.0, "high volatility stand-down"
 
-    if regime == "TRENDING":
-        s = float(row["trend_score"])
-        source = "trend"
+    if mode == "reversion_only":
+        s, source = float(row["reversion_score"]), "reversion"
+    elif mode == "trend_only":
+        s, source = float(row["trend_score"]), "trend"
+    elif regime == "TRENDING":
+        s, source = float(row["trend_score"]), "trend"
     elif regime == "SIDEWAYS":
         if not use_reversion:
             return None, 0.0, "sideways, reversion disabled"
-        s = float(row["reversion_score"])
-        source = "reversion"
-    else:  # HIGH VOLATILITY with trade_high_vol=True
-        s = float(row["trend_score"]) * 0.5
-        source = "trend_damped"
+        s, source = float(row["reversion_score"]), "reversion"
+    else:
+        s, source = float(row["trend_score"]) * 0.5, "trend_damped"
 
     if abs(s) < threshold:
         return None, s, f"|{source}| {abs(s):.2f} < {threshold:.2f}"
@@ -294,6 +303,7 @@ def run_backtest_v13(
     trade_high_vol=False,
     no_entry_last_bars=4,
     allow_overnight=False,
+    mode="reversion_only",
 ):
     """
     Fixes vs v12.3 engine:
@@ -335,7 +345,8 @@ def run_backtest_v13(
             continue
 
         side, score, source = route_signal_v13(
-            row, threshold, use_reversion=use_reversion, trade_high_vol=trade_high_vol
+            row, threshold, use_reversion=use_reversion,
+            trade_high_vol=trade_high_vol, mode=mode
         )
         if side is None:
             counts["WAIT"] += 1
@@ -420,6 +431,7 @@ def run_backtest_v13(
         "risk_per_trade_percent": round(risk_per_trade * 100, 2),
         "compounding": compounding, "use_reversion": use_reversion,
         "trade_high_vol": trade_high_vol, "allow_overnight": allow_overnight,
+        "mode": mode,
         "fee_per_trade": fee_per_trade, "slippage_points": slippage_points,
     })
 
@@ -526,26 +538,28 @@ def optimize_v13(df, starting_capital=100000.0, fee_per_trade=40.0,
     # fast mode drops max_hold and stop_atr_mult sweeps, which the
     # sensitivity testing showed matter least, taking 240 runs down to 40.
     if fast:
-        thresholds = (0.25, 0.30, 0.35, 0.40)
+        thresholds = (0.20, 0.25, 0.30, 0.35)
         reward_risks = (1.0, 1.5, 2.0, 2.5)
         stop_mults = (1.0,)
         max_holds = (12,)
+        modes = ("reversion_only", "trend_only")
     else:
-        thresholds = (0.20, 0.25, 0.30, 0.35, 0.40)
+        thresholds = (0.15, 0.20, 0.25, 0.30, 0.35, 0.40)
         reward_risks = (1.0, 1.25, 1.5, 2.0, 2.5)
         stop_mults = (1.0, 1.5)
         max_holds = (6, 12, 20)
+        modes = ("reversion_only", "trend_only", "auto")
 
     grid = []
     for threshold in thresholds:
         for reward_risk in reward_risks:
             for stop_atr_mult in stop_mults:
                 for max_hold in max_holds:
-                    for use_reversion in (True, False):
+                    for mode in modes:
                         grid.append(dict(
                             threshold=threshold, reward_risk=reward_risk,
                             stop_atr_mult=stop_atr_mult, max_hold=max_hold,
-                            use_reversion=use_reversion))
+                            mode=mode))
 
     results = []
     for cfg in grid:
