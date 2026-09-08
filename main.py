@@ -8,6 +8,7 @@ import re
 import math
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import statistics
 
 load_dotenv()
 
