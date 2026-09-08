@@ -7502,3 +7502,112 @@ def run_backtest(
         fee_per_trade=fee_per_trade,
         slippage_points=slippage_points
     )
+
+
+# =====================  v13 EDGE LAB  =====================
+# Added in v13. Nothing above this line is modified.
+# /backtest/run and /backtest/optimize behave exactly as before.
+import signal_lab_v13 as lab
+
+_V13_CACHE = {"key": None, "frame": None, "ts": None}
+
+
+def _v13_frame(period="60d", interval="15m"):
+    """Cache the feature frame for 5 minutes. The optimizer calls the
+    engine hundreds of times and yfinance should not be hit each run."""
+    key = f"{period}:{interval}"
+    now = datetime.now()
+    if (_V13_CACHE["key"] == key
+            and _V13_CACHE["frame"] is not None
+            and _V13_CACHE["ts"]
+            and (now - _V13_CACHE["ts"]).total_seconds() < 300):
+        return _V13_CACHE["frame"]
+    frame = lab.load_frame_v13(period=period, interval=interval)
+    _V13_CACHE.update({"key": key, "frame": frame, "ts": now})
+    return frame
+
+
+@app.get("/v13/edge-report")
+def v13_edge_report(period: str = "60d", interval: str = "15m"):
+    """RUN THIS FIRST.
+
+    Rank correlation between each score component and the forward
+    2/4/6/12-bar return, split by regime. If every value sits inside
+    +/-0.02 there is no edge to tune and parameter search is pointless.
+    Negative values mean that component is wired backwards.
+    """
+    df = _v13_frame(period, interval)
+    if df.empty:
+        return {"status": "error", "message": "Historical data unavailable."}
+    return lab.edge_report(df)
+
+
+@app.get("/v13/baseline")
+def v13_baseline(reward_risk: float = 1.5, stop_atr_mult: float = 1.0):
+    """The win rate a coin flip achieves with this stop/target geometry.
+    Any live win rate below this number means the signal is subtracting value."""
+    return lab.barrier_baseline(reward_risk, stop_atr_mult)
+
+
+@app.get("/v13/backtest")
+def v13_backtest(
+    period: str = "60d",
+    interval: str = "15m",
+    starting_capital: float = 100000,
+    threshold: float = 0.30,
+    risk_per_trade: float = 0.01,
+    reward_risk: float = 1.5,
+    stop_atr_mult: float = 1.0,
+    max_hold: int = 12,
+    compounding: bool = False,
+    fee_per_trade: float = 40.0,
+    slippage_points: float = 2.0,
+    use_reversion: bool = True,
+    trade_high_vol: bool = False,
+):
+    """Execution-realistic replay: next-bar entry, session-bounded holds,
+    symmetric slippage, compounding off by default."""
+    df = _v13_frame(period, interval)
+    if df.empty:
+        return {"status": "error", "message": "Historical data unavailable."}
+    return lab.run_backtest_v13(
+        df,
+        starting_capital=max(10000.0, min(float(starting_capital), 1e7)),
+        threshold=max(0.10, min(float(threshold), 0.60)),
+        risk_per_trade=max(0.0025, min(float(risk_per_trade), 0.05)),
+        reward_risk=max(0.8, min(float(reward_risk), 3.0)),
+        stop_atr_mult=max(0.5, min(float(stop_atr_mult), 3.0)),
+        max_hold=max(2, min(int(max_hold), 40)),
+        compounding=bool(compounding),
+        fee_per_trade=max(0.0, min(float(fee_per_trade), 5000.0)),
+        slippage_points=max(0.0, min(float(slippage_points), 50.0)),
+        use_reversion=bool(use_reversion),
+        trade_high_vol=bool(trade_high_vol),
+    )
+
+
+@app.get("/v13/optimize")
+def v13_optimize(
+    period: str = "60d",
+    interval: str = "15m",
+    starting_capital: float = 100000,
+    fee_per_trade: float = 40.0,
+    slippage_points: float = 2.0,
+    fast: bool = False,
+):
+    """Re-runs the full engine per configuration, then validates the winner
+    on bars it never saw. Read the validation block, not the training block.
+
+    Set fast=true to shrink the grid if this times out on Vercel.
+    """
+    df = _v13_frame(period, interval)
+    if df.empty:
+        return {"status": "error", "message": "Historical data unavailable."}
+    return lab.optimize_v13(
+        df,
+        starting_capital=float(starting_capital),
+        fee_per_trade=float(fee_per_trade),
+        slippage_points=float(slippage_points),
+        fast=bool(fast),
+    )
+# ===================  end v13 EDGE LAB  ===================
