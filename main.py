@@ -4,6 +4,7 @@ import yfinance as yf
 import requests
 import os
 import pandas as pd
+import psycopg
 import re
 import math
 from datetime import datetime, timedelta
@@ -34,7 +35,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "14.5",
+        "version": "14.6",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4553,6 +4554,8 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <button class="primary" style="width:100%;margin-top:8px" onclick="runRegimeMatrix()">Regime × Engine Matrix v14.3</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="runRegimeWalkForward()">Regime-Aware Walk-Forward v14.4</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="runExtendedValidation()">Extended Historical Validation v14.5</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="syncHistoryStore()">Sync Historical Store v14.6</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="historyStoreStatus()">History Store Status</button>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
   <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
@@ -4564,6 +4567,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btRegimeMatrix" style="margin-top:8px">Regime × Engine Matrix has not been run yet.</div>
   <div class="bt-note" id="btRegimeWF" style="margin-top:8px">v14.4 unseen validation has not been run yet.</div>
   <div class="bt-note" id="btExtendedValidation" style="margin-top:8px">v14.5 extended historical validation has not been run yet.</div>
+  <div class="bt-note" id="btHistoryStore" style="margin-top:8px">Historical store has not been checked yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
   </div>
@@ -5053,6 +5057,52 @@ async function runBacktest(){
 
 
 
+
+
+async function syncHistoryStore(){
+  const box=document.getElementById("btHistoryStore");
+  if(box) box.textContent="Syncing the latest 60-day 15-minute NIFTY window into PostgreSQL…";
+
+  try{
+    const r=await fetch("/v14/history/sync?period=60d&interval=15m",{cache:"no-store"});
+    const d=await r.json();
+
+    if(!r.ok||d.status!=="success"){
+      throw new Error(d.message||"History sync failed");
+    }
+
+    if(box) box.textContent=
+      `SYNC COMPLETE · fetched ${d.fetched_rows} · stored ${d.stored_rows} candles · `
+      + `${d.stored_start||"--"} → ${d.stored_end||"--"}. `
+      + `Future syncs keep older rows and append/update new candles.`;
+
+  }catch(e){
+    if(box) box.textContent="History Sync error: "+e.message;
+  }
+}
+
+
+async function historyStoreStatus(){
+  const box=document.getElementById("btHistoryStore");
+  if(box) box.textContent="Checking persistent history store…";
+
+  try{
+    const r=await fetch("/v14/history/status?interval=15m",{cache:"no-store"});
+    const d=await r.json();
+
+    if(!r.ok||d.status!=="success"){
+      throw new Error(d.message||"History status failed");
+    }
+
+    if(box) box.textContent=
+      `STORE STATUS · ${d.stored_rows||0} candles · `
+      + `${d.stored_start||"--"} → ${d.stored_end||"--"} · `
+      + `${d.calendar_span_days||0} calendar days.`;
+
+  }catch(e){
+    if(box) box.textContent="History Status error: "+e.message;
+  }
+}
 
 async function runExtendedValidation(){
   const box=document.getElementById("btExtendedValidation");
@@ -6384,7 +6434,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "14.5",
+            "model_version": "14.6",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7237,7 +7287,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "14.5",
+            "model_version": "14.6",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7749,7 +7799,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "14.5",
+        "model_version": "14.6",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -7828,103 +7878,331 @@ def _v123_objective(m):
 
 
 
+
+# ============================================================
+# V14.6 HISTORICAL DATA STORE
+# ============================================================
+
+def _v146_db():
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not configured.")
+    return psycopg.connect(database_url)
+
+
+def _v146_ensure_history_table():
+    """
+    Persistent candle store. Old rows are never deleted by normal syncs,
+    so the dataset can grow beyond the upstream provider's rolling window.
+    """
+    with _v146_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS nifty_candle_history (
+                    timeframe VARCHAR(12) NOT NULL,
+                    candle_time TIMESTAMPTZ NOT NULL,
+                    open_price DOUBLE PRECISION NOT NULL,
+                    high_price DOUBLE PRECISION NOT NULL,
+                    low_price DOUBLE PRECISION NOT NULL,
+                    close_price DOUBLE PRECISION NOT NULL,
+                    volume DOUBLE PRECISION,
+                    source VARCHAR(40) NOT NULL DEFAULT 'yfinance',
+                    inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (timeframe, candle_time)
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS ix_nifty_candle_history_time
+                ON nifty_candle_history(timeframe, candle_time DESC)
+            """)
+        conn.commit()
+
+
+def _v146_upsert_history(df, timeframe="15m", source="yfinance"):
+    if df is None or df.empty:
+        return 0
+
+    _v146_ensure_history_table()
+
+    rows = []
+    for ts, row in df.iterrows():
+        try:
+            rows.append((
+                timeframe,
+                ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts,
+                float(row["Open"] if "Open" in row else row["open"]),
+                float(row["High"] if "High" in row else row["high"]),
+                float(row["Low"] if "Low" in row else row["low"]),
+                float(row["Close"] if "Close" in row else row["close"]),
+                float(row.get("Volume", row.get("volume", 0)) or 0),
+                source,
+            ))
+        except Exception:
+            continue
+
+    if not rows:
+        return 0
+
+    with _v146_db() as conn:
+        with conn.cursor() as cur:
+            cur.executemany("""
+                INSERT INTO nifty_candle_history(
+                    timeframe, candle_time,
+                    open_price, high_price, low_price, close_price,
+                    volume, source
+                )
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT(timeframe, candle_time)
+                DO UPDATE SET
+                    open_price=EXCLUDED.open_price,
+                    high_price=EXCLUDED.high_price,
+                    low_price=EXCLUDED.low_price,
+                    close_price=EXCLUDED.close_price,
+                    volume=EXCLUDED.volume,
+                    source=EXCLUDED.source,
+                    updated_at=CURRENT_TIMESTAMP
+            """, rows)
+        conn.commit()
+
+    return len(rows)
+
+
+def _v146_load_raw_history(timeframe="15m", limit=50000):
+    _v146_ensure_history_table()
+
+    with _v146_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT candle_time, open_price, high_price, low_price,
+                       close_price, volume
+                FROM nifty_candle_history
+                WHERE timeframe=%s
+                ORDER BY candle_time ASC
+                LIMIT %s
+            """, (timeframe, int(limit)))
+            rows = cur.fetchall()
+
+    if not rows:
+        return pd.DataFrame()
+
+    idx = pd.DatetimeIndex([r[0] for r in rows])
+    return pd.DataFrame({
+        "Open": [float(r[1]) for r in rows],
+        "High": [float(r[2]) for r in rows],
+        "Low": [float(r[3]) for r in rows],
+        "Close": [float(r[4]) for r in rows],
+        "Volume": [float(r[5] or 0) for r in rows],
+    }, index=idx)
+
+
+def _v146_feature_frame_from_raw(raw):
+    """
+    Build the same research features used by the v14 validators from stored OHLC.
+    """
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+
+    df = raw.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+
+    close = df["Close"].astype(float)
+    high = df["High"].astype(float)
+    low = df["Low"].astype(float)
+
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    ema50 = close.ewm(span=50, adjust=False).mean()
+
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rsi = 100 - (100 / (1 + gain / loss.replace(0, float("nan"))))
+
+    macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+    macd_signal = macd.ewm(span=9, adjust=False).mean()
+
+    low14 = low.rolling(14).min()
+    high14 = high.rolling(14).max()
+    stoch_k = 100 * (close - low14) / (high14 - low14).replace(0, float("nan"))
+    stoch_d = stoch_k.rolling(3).mean()
+
+    bb_mid = close.rolling(20).mean()
+    bb_std = close.rolling(20).std()
+    bb_upper = bb_mid + 2 * bb_std
+    bb_lower = bb_mid - 2 * bb_std
+    bb_percent_b = (close - bb_lower) / (bb_upper - bb_lower).replace(0, float("nan"))
+
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean()
+
+    mean20 = close.rolling(20).mean()
+    std20 = close.rolling(20).std()
+    zscore = (close - mean20) / std20.replace(0, float("nan"))
+
+    ret1 = close.pct_change(1)
+    ret3 = close.pct_change(3)
+    ret6 = close.pct_change(6)
+    rolling_vol = ret1.rolling(20).std()
+
+    return pd.DataFrame({
+        "open": df["Open"].astype(float),
+        "high": high,
+        "low": low,
+        "close": close,
+        "ema20": ema20,
+        "ema50": ema50,
+        "rsi": rsi,
+        "macd": macd,
+        "macd_signal": macd_signal,
+        "stoch_k": stoch_k,
+        "stoch_d": stoch_d,
+        "bb_percent_b": bb_percent_b,
+        "atr": atr,
+        "zscore": zscore,
+        "ret1": ret1,
+        "ret3": ret3,
+        "ret6": ret6,
+        "rolling_vol": rolling_vol,
+    }).dropna().copy()
+
+
+def _v146_sync_history(period="60d", interval="15m"):
+    """
+    Fetch the provider's currently available rolling window and merge it into
+    the permanent database. Existing older candles remain untouched.
+    """
+    raw = yf.Ticker("^NSEI").history(period=period, interval=interval)
+
+    if raw is None or raw.empty:
+        return {
+            "status": "error",
+            "message": "No NIFTY candles returned by the upstream provider."
+        }
+
+    written = _v146_upsert_history(
+        raw,
+        timeframe=interval,
+        source="yfinance"
+    )
+
+    stored = _v146_load_raw_history(interval)
+    return {
+        "status": "success",
+        "fetched_rows": len(raw),
+        "upserted_rows": written,
+        "stored_rows": len(stored),
+        "stored_start": stored.index[0].isoformat() if not stored.empty else None,
+        "stored_end": stored.index[-1].isoformat() if not stored.empty else None,
+    }
+
+
+@app.get("/v14/history/sync")
+def v146_history_sync(
+    period: str = "60d",
+    interval: str = "15m"
+):
+    try:
+        allowed_intervals = {"5m", "15m", "30m", "60m"}
+        if interval not in allowed_intervals:
+            interval = "15m"
+
+        allowed_periods = {"30d", "60d"}
+        if period not in allowed_periods:
+            period = "60d"
+
+        return _v146_sync_history(
+            period=period,
+            interval=interval
+        )
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@app.get("/v14/history/status")
+def v146_history_status(interval: str = "15m"):
+    try:
+        raw = _v146_load_raw_history(interval)
+
+        if raw.empty:
+            return {
+                "status": "success",
+                "interval": interval,
+                "stored_rows": 0,
+                "message": "History store is empty. Run Sync History first."
+            }
+
+        span_days = (
+            raw.index[-1].date() - raw.index[0].date()
+        ).days
+
+        return {
+            "status": "success",
+            "interval": interval,
+            "stored_rows": len(raw),
+            "stored_start": raw.index[0].isoformat(),
+            "stored_end": raw.index[-1].isoformat(),
+            "calendar_span_days": span_days,
+            "database": "PostgreSQL",
+            "note": (
+                "Future syncs upsert new candles without deleting old ones, "
+                "so the dataset grows beyond the provider rolling window."
+            )
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
 # ============================================================
 # V14.5 EXTENDED HISTORICAL VALIDATION
 # ============================================================
 
 def _v145_download_history(months=6, interval="15m"):
-    months = max(2, min(int(months), 12))
-    requested_days = months * 31
-    attempts = [f"{requested_days}d", "180d", "120d", "90d", "60d"]
+    """
+    v14.6: database-first extended history.
 
-    seen = set()
-    last_error = None
+    1. Refresh the provider's current rolling window into PostgreSQL.
+    2. Load ALL accumulated stored candles.
+    3. Return the accumulated feature frame.
 
-    for period in attempts:
-        if period in seen:
-            continue
-        seen.add(period)
+    The database therefore becomes our persistent research dataset.
+    """
+    try:
+        _v146_sync_history(
+            period="60d",
+            interval=interval
+        )
+    except Exception as e:
+        # If the provider is temporarily unavailable, existing stored data
+        # is still usable.
+        print("v14.6 history sync warning:", str(e))
 
-        try:
-            raw = yf.Ticker("^NSEI").history(period=period, interval=interval)
-            if raw is None or raw.empty or len(raw) < 250:
-                continue
+    raw = _v146_load_raw_history(interval)
 
-            df = raw.dropna(subset=["Open", "High", "Low", "Close"]).copy()
-            close = df["Close"].astype(float)
-            high = df["High"].astype(float)
-            low = df["Low"].astype(float)
+    if raw is None or raw.empty or len(raw) < 250:
+        raise RuntimeError(
+            "Historical store does not yet contain enough candles. "
+            "Run Sync History and try again."
+        )
 
-            ema20 = close.ewm(span=20, adjust=False).mean()
-            ema50 = close.ewm(span=50, adjust=False).mean()
+    out = _v146_feature_frame_from_raw(raw)
 
-            delta = close.diff()
-            gain = delta.clip(lower=0).rolling(14).mean()
-            loss = (-delta.clip(upper=0)).rolling(14).mean()
-            rsi = 100 - (100 / (1 + gain / loss.replace(0, float("nan"))))
+    if len(out) < 250:
+        raise RuntimeError(
+            "Historical store does not contain enough usable feature rows."
+        )
 
-            macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
-            macd_signal = macd.ewm(span=9, adjust=False).mean()
-
-            low14 = low.rolling(14).min()
-            high14 = high.rolling(14).max()
-            stoch_k = 100 * (close - low14) / (high14 - low14).replace(0, float("nan"))
-            stoch_d = stoch_k.rolling(3).mean()
-
-            bb_mid = close.rolling(20).mean()
-            bb_std = close.rolling(20).std()
-            bb_upper = bb_mid + 2 * bb_std
-            bb_lower = bb_mid - 2 * bb_std
-            bb_percent_b = (close - bb_lower) / (bb_upper - bb_lower).replace(0, float("nan"))
-
-            prev_close = close.shift(1)
-            tr = pd.concat([
-                high - low,
-                (high - prev_close).abs(),
-                (low - prev_close).abs(),
-            ], axis=1).max(axis=1)
-            atr = tr.rolling(14).mean()
-
-            mean20 = close.rolling(20).mean()
-            std20 = close.rolling(20).std()
-            zscore = (close - mean20) / std20.replace(0, float("nan"))
-
-            ret1 = close.pct_change(1)
-            ret3 = close.pct_change(3)
-            ret6 = close.pct_change(6)
-            rolling_vol = ret1.rolling(20).std()
-
-            out = pd.DataFrame({
-                "open": df["Open"].astype(float),
-                "high": high,
-                "low": low,
-                "close": close,
-                "ema20": ema20,
-                "ema50": ema50,
-                "rsi": rsi,
-                "macd": macd,
-                "macd_signal": macd_signal,
-                "stoch_k": stoch_k,
-                "stoch_d": stoch_d,
-                "bb_percent_b": bb_percent_b,
-                "atr": atr,
-                "zscore": zscore,
-                "ret1": ret1,
-                "ret3": ret3,
-                "ret6": ret6,
-                "rolling_vol": rolling_vol,
-            }).dropna().copy()
-
-            if len(out) >= 250:
-                return out, period
-
-        except Exception as e:
-            last_error = str(e)
-
-    raise RuntimeError(
-        "Unable to retrieve extended 15-minute NIFTY history."
-        + (f" Last error: {last_error}" if last_error else "")
-    )
+    return out, f"postgres:{len(raw)}rows"
 
 
 def _v145_regime_counts(df):
@@ -8100,7 +8378,7 @@ def v145_extended_validation(
 
         return {
             "status": "success",
-            "model_version": "14.5",
+            "model_version": "14.6",
             "requested_months": months,
             "actual_yfinance_period": actual_period,
             "historical_candles": len(df),
@@ -8390,7 +8668,7 @@ def v144_regime_aware_walk_forward(
 
         return {
             "status": "success",
-            "model_version": "14.5",
+            "model_version": "14.6",
             "rule_under_test": {
                 "TRENDING": "REVERSION",
                 "RANGE": "WAIT",
@@ -8622,7 +8900,7 @@ def v143_regime_engine_matrix(
 
         return {
             "status": "success",
-            "model_version": "14.5",
+            "model_version": "14.6",
             "period": period,
             "threshold": threshold,
             "matrix": matrix,
@@ -8860,7 +9138,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "14.5",
+            "model_version": "14.6",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
