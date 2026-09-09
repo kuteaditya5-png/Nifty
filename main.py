@@ -4576,6 +4576,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="runPromotionValidationV155()">Promotion Validation v15.5</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFailureAttributionV156()">Failure Attribution v15.6</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalQualityV157()">Signal Quality Rebuild v15.7</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureWalkForwardV158()">Feature Walk-Forward v15.8</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4597,6 +4598,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btPromotionValidation" style="margin-top:8px">v15.5 frozen-rule promotion validation has not been run yet.</div>
   <div class="bt-note" id="btFailureAttribution" style="margin-top:8px">v15.6 failure attribution has not been run yet.</div>
   <div class="bt-note" id="btSignalQuality157" style="margin-top:8px">v15.7 signal quality rebuild has not been run yet.</div>
+  <div class="bt-note" id="btFeatureWF158" style="margin-top:8px">v15.8 chronological feature walk-forward has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5267,6 +5269,18 @@ async function runSignalQualityV157(){
   const top=(d.top_features||[]).slice(0,6).map(x=>`${x.feature} ${x.direction} · H6 ${x.h6_accuracy_percent}%/${x.h6_avg_bps}bps · score ${x.quality_score}`).join(" | ");
   if(b)b.textContent=`v15.7 ${d.verdict} · ${d.unseen_candles} unseen candles · ${d.features_tested} features tested · TOP ${top||"--"} · ${d.next_action}`;
  }catch(e){if(b)b.textContent="v15.7 signal quality error: "+e.message}
+}
+
+async function runFeatureWalkForwardV158(){
+ const b=document.getElementById("btFeatureWF158");
+ if(b)b.textContent="v15.8 freezing feature rules on earlier data and validating them on later chronological blocks…";
+ try{
+  const r=await fetch("/v15/feature-walk-forward?blocks=4&top_k=4",{cache:"no-store"});
+  const d=await r.json(); if(!r.ok||d.status!=="success")throw new Error(d.message||"Feature walk-forward failed");
+  const x=d.summary||{};
+  const fs=(d.folds||[]).map(z=>`F${z.fold} ${z.accuracy_percent}%/${z.avg_bps}bps n=${z.signals}`).join(" · ");
+  if(b)b.textContent=`v15.8 ${d.verdict} · ${d.features_considered} features · ${x.total_signals||0} validation signals · accuracy ${x.weighted_accuracy_percent||0}% · edge ${x.weighted_avg_bps||0}bps · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · ${fs} · ${d.next_action}`;
+ }catch(e){if(b)b.textContent="v15.8 feature walk-forward error: "+e.message}
 }
 
 async function recoverHistoricalData(){
@@ -11095,4 +11109,78 @@ def v157_signal_quality(threshold: float=.20):
         verdict="FEATURE CANDIDATES FOUND" if strong else "NO ROBUST FEATURE CANDIDATE"
         action=("Freeze the strongest feature hypotheses and test them in a new chronological walk-forward candidate; do not modify live routing from this diagnostic alone." if strong else "Do not add filters. Revisit labels, horizon definition and additional market/option-chain features before another promotion attempt.")
         return {"status":"success","model_version":"15.7","test":"unseen_feature_forward_return_diagnostic","data_quality":quality,"unseen_candles":len(unseen),"features_tested":len(rows),"horizons_bars":list(horizons),"top_features":rows[:10],"all_features":rows,"verdict":verdict,"next_action":action,"limitation":"Research diagnostic only. Feature polarity and ranking are hypotheses and require fresh chronological validation before use in live predictions."}
+    except Exception as e: return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# V15.8 CHRONOLOGICAL FEATURE WALK-FORWARD
+# Freeze feature selection, polarity and thresholds on train only;
+# score only the immediately-following unseen chronological block.
+# Research-only: never alters live prediction/router.
+# ============================================================
+def _v158_train_rule(x, y):
+    z=pd.DataFrame({"x":x,"y":y}).replace([np.inf,-np.inf],np.nan).dropna()
+    if len(z)<180 or z["x"].nunique()<10: return None
+    lo=float(z["x"].quantile(.30)); hi=float(z["x"].quantile(.70))
+    low=z[z.x<=lo].y; high=z[z.x>=hi].y
+    if min(len(low),len(high))<35: return None
+    polarity=1 if float(high.mean())>=float(low.mean()) else -1
+    train_moves=pd.concat([-polarity*low,polarity*high])
+    return {"lo":lo,"hi":hi,"polarity":polarity,"train_accuracy":float((train_moves>0).mean()*100),"train_bps":float(train_moves.mean()),"train_samples":int(len(train_moves))}
+
+def _v158_apply_rule(x, y, rule):
+    z=pd.DataFrame({"x":x,"y":y}).replace([np.inf,-np.inf],np.nan).dropna()
+    lo=z[z.x<=rule["lo"]].y; hi=z[z.x>=rule["hi"]].y; p=rule["polarity"]
+    moves=pd.concat([-p*lo,p*hi])
+    if len(moves)<20: return None
+    return {"signals":int(len(moves)),"wins":int((moves>0).sum()),"accuracy_percent":round(float((moves>0).mean()*100),1),"avg_bps":round(float(moves.mean()),2)}
+
+@app.get("/v15/feature-walk-forward")
+def v158_feature_walk_forward(blocks:int=4, top_k:int=4):
+    try:
+        blocks=max(3,min(int(blocks),6)); top_k=max(1,min(int(top_k),6))
+        raw=_v146_load_raw_history("15m",limit=50000); quality=_v148_quality_report(raw,timeframe="15m")
+        if not quality.get("backtest_ready"): return {"status":"error","message":"History is not backtest-ready."}
+        df=_v146_feature_frame_from_raw(raw)
+        if df is None or len(df)<1800: return {"status":"error","message":"Not enough feature-ready history for chronological walk-forward."}
+        feats=_v157_candidate_features(df); close=_v157_num(df["close"]); y=(close.shift(-6)-close)/close*10000.0
+        n=len(df); initial=max(900,int(n*.45)); remaining=n-initial
+        block_size=remaining//blocks
+        if block_size<150: return {"status":"error","message":"Chronological validation blocks are too small."}
+        folds=[]; total_wins=total_signals=0; weighted_bps=0.0; feature_names=set()
+        for i in range(blocks):
+            train_end=initial+i*block_size; val_start=train_end; val_end=n if i==blocks-1 else min(n,val_start+block_size)
+            candidates=[]
+            for feature in feats.columns:
+                rule=_v158_train_rule(feats[feature].iloc[:train_end],y.iloc[:train_end])
+                if rule and rule["train_bps"]>0:
+                    score=(rule["train_accuracy"]-50)*.6+min(20,abs(rule["train_bps"]))*0.4
+                    candidates.append((score,feature,rule))
+            candidates.sort(reverse=True,key=lambda q:q[0]); chosen=candidates[:top_k]
+            if not chosen: continue
+            # Each selected feature casts one independent directional vote only in its frozen tails.
+            vote_rows=[]
+            for _,feature,rule in chosen:
+                xv=feats[feature].iloc[val_start:val_end]; yv=y.iloc[val_start:val_end]
+                for idx,xval in xv.items():
+                    if pd.isna(xval) or pd.isna(yv.loc[idx]): continue
+                    side=0
+                    if xval<=rule["lo"]: side=-rule["polarity"]
+                    elif xval>=rule["hi"]: side=rule["polarity"]
+                    if side: vote_rows.append((idx,side,float(yv.loc[idx]),feature))
+                feature_names.add(feature)
+            byidx={}
+            for idx,side,move,feature in vote_rows:
+                q=byidx.setdefault(idx,{"vote":0,"move":move}); q["vote"]+=side
+            signed=[(1 if q["vote"]>0 else -1)*q["move"] for q in byidx.values() if q["vote"]!=0]
+            sig=len(signed); wins=sum(v>0 for v in signed); avg=float(np.mean(signed)) if signed else 0.0
+            total_signals+=sig; total_wins+=wins; weighted_bps+=avg*sig
+            folds.append({"fold":i+1,"train_candles":train_end,"validation_candles":val_end-val_start,"signals":sig,"accuracy_percent":round(wins/sig*100,1) if sig else 0,"avg_bps":round(avg,2),"features":[f for _,f,_ in chosen]})
+        if not total_signals: return {"status":"error","message":"Frozen feature rules produced no validation signals."}
+        positive=sum(1 for f in folds if f["accuracy_percent"]>50 and f["avg_bps"]>0)
+        acc=total_wins/total_signals*100; avg=weighted_bps/total_signals; worst=min((f["accuracy_percent"] for f in folds),default=0)
+        robust=positive>=max(2,len(folds)-1) and acc>=52.5 and avg>0 and worst>=48
+        verdict="REPEATABLE FEATURE EDGE" if robust else "FEATURE EDGE NOT YET STABLE"
+        action=("Feature evidence survived chronological freezing. Next build a paper-only candidate ensemble and compare it against the current engine; keep live routing unchanged." if robust else "Do not promote these features. Keep live routing unchanged and test labels/horizons or additional independent features before another candidate engine.")
+        return {"status":"success","model_version":"15.8","test":"chronological_feature_walk_forward","horizon_bars":6,"features_considered":len(feature_names),"folds":folds,"summary":{"folds":len(folds),"total_signals":total_signals,"weighted_accuracy_percent":round(acc,1),"weighted_avg_bps":round(avg,2),"positive_folds":positive,"worst_fold_accuracy_percent":round(worst,1)},"verdict":verdict,"next_action":action,"limitation":"Research-only price-direction validation. Feature selection, polarity and thresholds are frozen per fold; live CE/PE routing is not changed."}
     except Exception as e: return {"status":"error","message":str(e)}
