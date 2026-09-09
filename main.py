@@ -4571,6 +4571,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="acquisitionPlanV152()">Acquisition Progress v15.2</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="autoCollectV153()">Auto Collect History v15.3</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="collectorDiagV1531()">Collector Diagnostics v15.3.1</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runFullValidationV154()">Run Full Validation v15.4</button>
           </div>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
@@ -4587,6 +4588,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btHistoryQuality" style="margin-top:8px">Historical data quality has not been checked yet.</div>
   <div class="bt-note" id="btRecoveryStatus" style="margin-top:8px">Historical recovery has not been run yet.</div>
 <div class="bt-note" id="btDatasetBuilder" style="margin-top:8px">v15.1 dataset expansion has not been run yet.</div>
+  <div class="bt-note" id="btFullValidation" style="margin-top:8px">v15.4 full 200-session validation has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
@@ -5195,6 +5197,19 @@ async function autoCollectV153(){
  }catch(e){if(b)b.textContent="v15.3 auto collect error: "+e.message}
 }
 
+
+async function runFullValidationV154(){
+ const b=document.getElementById("btFullValidation");
+ if(b)b.textContent="v15.4 running data quality, readiness, regime matrix and unseen walk-forward on the persistent historical store…";
+ try{
+  const threshold=Number((document.getElementById("btThreshold")||{}).value||0.20);
+  const qs=new URLSearchParams({threshold:String(threshold),folds:"6"});
+  const r=await fetch("/v15/full-validation?"+qs.toString(),{cache:"no-store"});
+  const d=await r.json(); if(!r.ok||d.status!=="success")throw new Error(d.message||"Full validation failed");
+  const q=d.data_quality||{}, wf=d.walk_forward||{}, best=d.matrix_best||{}, e=d.signal_edge||{};
+  if(b)b.textContent=`v15.4 ${d.final_verdict} · STORE ${d.historical_candles||0} candles / ${q.actual_trading_sessions||0} sessions · QUALITY ${q.verdict||"--"} · READY ${d.backtest_ready?"YES":"NO"} · BEST ${best.regime||"--"}→${best.engine||"--"} H6 ${best.h6?.accuracy_percent??"--"}%/${best.h6?.average_directional_move_bps??"--"}bps (${best.signals||0} signals) · WF ${wf.overall_verdict||"--"}, unseen H6 ${wf.average_h6_accuracy||0}%/${wf.average_h6_bps||0}bps, ${wf.total_signals||0} signals, degradation ${wf.average_degradation||0} pts · EDGE H6 ${e.h6_accuracy_edge_points??"--"} pts/${e.h6_move_edge_bps??"--"}bps · ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="v15.4 validation error: "+e.message}
+}
 
 async function recoverHistoricalData(){
   const box=document.getElementById("btRecoveryStatus");
@@ -9443,6 +9458,55 @@ def v146_history_status(interval: str = "15m"):
             "message": str(e)
         }
 
+
+
+# ============================================================
+# V15.4 FULL 200-SESSION STRATEGY VALIDATION
+# ============================================================
+@app.get("/v15/full-validation")
+def v154_full_validation(threshold: float = 0.20, folds: int = 6):
+    """Run the research validation chain on the persistent 15m history store."""
+    try:
+        threshold = max(0.10, min(float(threshold), 0.60))
+        folds = max(4, min(int(folds), 8))
+        quality = _v148_quality_report(_v146_load_raw_history("15m", limit=50000), timeframe="15m")
+        if not quality.get("backtest_ready"):
+            return {"status":"error","message":"Persistent history is not backtest-ready. Run Data Quality & Gap Check and fix the reported gaps first.","data_quality":quality}
+        raw = _v146_load_raw_history("15m", limit=50000)
+        df = _v146_feature_frame_from_raw(raw)
+        if df is None or df.empty or len(df) < 300:
+            return {"status":"error","message":"Not enough feature-ready candles in the persistent historical store."}
+        matrix = _v145_matrix_summary(df, threshold=threshold)
+        wf = _v145_extended_walk_forward(df, folds=folds)
+        best = matrix.get("best") or {}
+        best_engine = best.get("engine") or "BLENDED"
+        edge = _v141_edge_report(df, engine=best_engine, threshold=threshold)
+        h6edge = (edge.get("edge_vs_random") or {}).get("h6") or {}
+        sessions = int(quality.get("actual_trading_sessions") or 0)
+        quality_ok = bool(quality.get("backtest_ready")) and sessions >= 200
+        wf_pass = wf.get("overall_verdict") == "PASS" and bool(wf.get("promotable"))
+        wf_caution = wf.get("overall_verdict") == "CAUTION"
+        positive_edge = float(h6edge.get("accuracy_edge_points") or 0) > 0 and float(h6edge.get("move_edge_bps") or 0) > 0
+        best_positive = int(best.get("signals") or 0) >= 30 and float((best.get("h6") or {}).get("average_directional_move_bps") or 0) > 0
+        if quality_ok and wf_pass and positive_edge and best_positive:
+            verdict = "PASS"
+            next_action = "Validation passed. Freeze the research rule and paper-test it live before any production promotion."
+        elif quality_ok and best_positive and (wf_caution or positive_edge):
+            verdict = "PROMISING"
+            next_action = "Evidence is promising but not strong enough for promotion. Keep live routing unchanged and continue unseen/paper validation."
+        else:
+            verdict = "FAIL"
+            next_action = "Do not promote this strategy. Review the regime/engine rule or collect more unseen history before retesting."
+        return {
+            "status":"success","model_version":"15.4","validation_source":"persistent_15m_history_store",
+            "historical_candles":len(df),"history_start":df.index[0].isoformat(),"history_end":df.index[-1].isoformat(),
+            "data_quality":quality,"backtest_ready":quality_ok,"matrix_best":best,"matrix_top_5":matrix.get("ranking",[])[:5],
+            "walk_forward":wf,"signal_edge":{"engine":best_engine,"h6_accuracy_edge_points":h6edge.get("accuracy_edge_points",0),"h6_move_edge_bps":h6edge.get("move_edge_bps",0),"wait_ratio_percent":edge.get("wait_ratio_percent",0)},
+            "final_verdict":verdict,"next_action":next_action,
+            "limitation":"This validates NIFTY price-direction signals, not historical option-premium execution. Profit factor, rupee expectancy and option drawdown require historical option-premium snapshots."
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
 
 # ============================================================
 # V14.5 EXTENDED HISTORICAL VALIDATION
