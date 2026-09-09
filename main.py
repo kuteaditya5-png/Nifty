@@ -4569,6 +4569,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-bottom:8px" onclick="datasetBuilderStatus()">Dataset Builder Status</button>
             <button class="primary" style="width:100%" onclick="expandHistoricalDataset()">Expand / Plan 200 Sessions v15.1</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="acquisitionPlanV152()">Acquisition Progress v15.2</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="autoCollectV153()">Auto Collect History v15.3</button>
           </div>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
@@ -5177,6 +5178,15 @@ async function acquisitionPlanV152(){
  if(b)b.textContent=`v15.2 ACQUISITION · ${q.actual_trading_sessions||0}/${p.target_sessions||200} sessions (${p.progress_percent||0}%) · ${q.stored_rows||0} candles · need ${p.sessions_to_target||0} sessions. ${p.ready?"TARGET REACHED — run quality/readiness validation.":`NEXT OLDER RANGE ${p.suggested_older_start||"--"} → ${p.suggested_older_end||"--"}.`} ${ranges?"Priority gaps: "+ranges:""} ${d.next_action||""}`;
  }catch(e){if(b)b.textContent="Acquisition progress error: "+e.message}
 }
+
+async function autoCollectV153(){
+ const b=document.getElementById("btDatasetBuilder"); if(b)b.textContent="v15.3 collecting genuine 15-minute NIFTY history…";
+ try{const r=await fetch("/v15/acquisition/auto-collect",{method:"POST",cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Auto collection failed");
+ const q=d.quality||{},p=d.plan||{},c=d.collection||{};
+ if(b)b.textContent=`v15.3 AUTO COLLECT · provider ${c.provider||"--"} · fetched ${c.candles_fetched||0} · written ${c.rows_written||0} · ${q.actual_trading_sessions||0}/${p.target_sessions||200} sessions (${p.progress_percent||0}%) · need ${p.sessions_to_target||0}. ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="v15.3 auto collect error: "+e.message}
+}
+
 
 async function recoverHistoricalData(){
   const box=document.getElementById("btRecoveryStatus");
@@ -8255,6 +8265,77 @@ def v152_acquisition_plan():
         return {"status":"success","model_version":"15.2","quality":q,"plan":plan,"next_action":action}
     except Exception as e:
         return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# V15.3 AUTOMATED HISTORICAL DATA COLLECTOR
+# ============================================================
+def _v153_upstox_fetch(start_date, end_date):
+    """Fetch genuine NIFTY 50 15-minute candles from Upstox Historical V3."""
+    from urllib.parse import quote
+    token=(os.getenv("UPSTOX_ACCESS_TOKEN") or "").strip()
+    if not token:
+        raise RuntimeError("UPSTOX_ACCESS_TOKEN is not configured in Vercel Environment Variables.")
+    instrument=(os.getenv("UPSTOX_NIFTY_INSTRUMENT_KEY") or "NSE_INDEX|Nifty 50").strip()
+    url=("https://api.upstox.com/v3/historical-candle/"+quote(instrument,safe="")+
+         "/minutes/15/"+end_date.isoformat()+"/"+start_date.isoformat())
+    r=requests.get(url,headers={"Accept":"application/json","Authorization":"Bearer "+token},timeout=20)
+    if r.status_code!=200:
+        detail=r.text[:300]
+        raise RuntimeError(f"Upstox HTTP {r.status_code}: {detail}")
+    payload=r.json(); candles=((payload.get("data") or {}).get("candles") or [])
+    if not candles:
+        return pd.DataFrame()
+    rows=[]
+    for c in candles:
+        if len(c)<5: continue
+        rows.append({"datetime":c[0],"open":c[1],"high":c[2],"low":c[3],"close":c[4],"volume":c[5] if len(c)>5 else 0})
+    if not rows: return pd.DataFrame()
+    df=pd.DataFrame(rows)
+    df["datetime"]=pd.to_datetime(df["datetime"],errors="coerce")
+    df=df.dropna(subset=["datetime"]).set_index("datetime").sort_index()
+    return df[["open","high","low","close","volume"]]
+
+def _v153_month_chunks(start_date,end_date):
+    chunks=[]; cur=start_date
+    while cur<=end_date:
+        nxt=min(end_date,cur+timedelta(days=29))
+        chunks.append((cur,nxt)); cur=nxt+timedelta(days=1)
+    return chunks
+
+@app.post("/v15/acquisition/auto-collect")
+def v153_auto_collect():
+    try:
+        raw=_v146_load_raw_history("15m")
+        q0=_v148_quality_report(raw,timeframe="15m")
+        plan0=_v152_acquisition_plan(raw,q0)
+        if plan0.get("ready"):
+            return {"status":"success","model_version":"15.3","collection":{"provider":"Upstox V3","candles_fetched":0,"rows_written":0,"chunks":[]},"quality":q0,"plan":plan0,"next_action":"200-session target already reached. Run Data Quality & Gap Check and Backtest Readiness Gate."}
+        start_s=plan0.get("suggested_older_start"); end_s=plan0.get("suggested_older_end")
+        if not start_s or not end_s:
+            raise RuntimeError("No acquisition range could be calculated from the current store.")
+        start=pd.Timestamp(start_s).date(); end=pd.Timestamp(end_s).date()
+        fetched=written=0; chunk_results=[]
+        for a,b in _v153_month_chunks(start,end):
+            try:
+                df=_v153_upstox_fetch(a,b); n=len(df); fetched+=n
+                w=int(_v146_upsert_history(df,timeframe="15m",source="upstox_v15_3") or 0) if n else 0
+                written+=w; chunk_results.append({"from":a.isoformat(),"to":b.isoformat(),"candles":n,"written":w,"status":"OK"})
+            except Exception as e:
+                chunk_results.append({"from":a.isoformat(),"to":b.isoformat(),"status":"ERROR","message":str(e)[:300]})
+                # Authentication/provider errors should stop repeated failing calls.
+                if "401" in str(e) or "403" in str(e) or "ACCESS_TOKEN" in str(e): break
+        raw2=_v146_load_raw_history("15m"); q=_v148_quality_report(raw2,timeframe="15m"); plan=_v152_acquisition_plan(raw2,q)
+        errors=[x for x in chunk_results if x.get("status")=="ERROR"]
+        if plan.get("ready"):
+            action="200-session target reached. Run Data Quality & Gap Check, then Backtest Readiness Gate."
+        elif errors and fetched==0:
+            action="Collector could not acquire data. Check UPSTOX_ACCESS_TOKEN in Vercel and retry; no candles were fabricated."
+        else:
+            action="Collection completed. Re-run Auto Collect if sessions are still below 200, then run quality/readiness checks."
+        return {"status":"success","model_version":"15.3","collection":{"provider":"Upstox Historical Candle V3","instrument":"NSE_INDEX|Nifty 50","candles_fetched":fetched,"rows_written":written,"chunks":chunk_results},"quality":q,"plan":plan,"next_action":action}
+    except Exception as e:
+        return {"status":"error","model_version":"15.3","message":str(e)}
 
 # ============================================================
 # V14.9 HISTORICAL DATA RECOVERY + BACKTEST READINESS GATE
