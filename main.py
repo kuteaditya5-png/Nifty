@@ -36,7 +36,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "15.0.2",
+        "version": "15.1",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4563,10 +4563,11 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <input id="historyBackfillFile" type="file" accept=".csv" style="width:100%;margin-top:8px;padding:10px;border:1px solid #2b3f59;border-radius:10px;background:#0b1828;color:#dce8f8">
           <button class="primary" style="width:100%;margin-top:8px" onclick="uploadHistoryBackfill()">Import 15m CSV Backfill v14.7</button>
           <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)">
-            <div style="font-size:12px;font-weight:700;margin-bottom:8px">v15.0.2 HISTORICAL DATASET BUILDER</div>
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px">v15.1 HISTORICAL DATASET EXPANSION</div>
             <input id="v150DatasetFiles" type="file" accept=".csv,text/csv" multiple style="width:100%;margin-bottom:8px">
-            <button class="primary" style="width:100%;margin-bottom:8px" onclick="buildHistoricalDataset()">Build / Merge Dataset v15.0.2</button>
-            <button class="primary" style="width:100%" onclick="datasetBuilderStatus()">Dataset Builder Status</button>
+            <button class="primary" style="width:100%;margin-bottom:8px" onclick="buildHistoricalDataset()">Build / Merge Dataset v15.1</button>
+            <button class="primary" style="width:100%;margin-bottom:8px" onclick="datasetBuilderStatus()">Dataset Builder Status</button>
+            <button class="primary" style="width:100%" onclick="expandHistoricalDataset()">Expand / Plan 200 Sessions v15.1</button>
           </div>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
@@ -4582,7 +4583,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btHistoryStore" style="margin-top:8px">Historical store has not been checked yet.</div>
   <div class="bt-note" id="btHistoryQuality" style="margin-top:8px">Historical data quality has not been checked yet.</div>
   <div class="bt-note" id="btRecoveryStatus" style="margin-top:8px">Historical recovery has not been run yet.</div>
-<div class="bt-note" id="btDatasetBuilder" style="margin-top:8px">v15.0 dataset builder has not been run yet.</div>
+<div class="bt-note" id="btDatasetBuilder" style="margin-top:8px">v15.1 dataset expansion has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
@@ -5160,6 +5161,13 @@ async function buildHistoricalDataset(){
  const q=d.quality||{},fr=(d.file_results||[]).map(x=>`${x.filename}: ${x.status}${x.valid_candles!=null?` ${x.valid_candles} candles`:""}${x.message?` — ${x.message}`:""}`).join(" | ");
  if(b)b.textContent=`FILES ${d.files_imported}/${d.files_received} imported · processed ${d.valid_candles_processed||0} candles · STORE ${q.stored_rows||0} candles / ${q.actual_trading_sessions||0} sessions · COVERAGE ${q.overall_coverage_percent||0}% · BACKTEST READY ${q.backtest_ready?"YES":"NO"}. ${d.next_action} ${fr}`}
  catch(e){if(b)b.textContent="Dataset builder error: "+e.message}
+}
+async function expandHistoricalDataset(){
+ const b=document.getElementById("btDatasetBuilder"); if(b)b.textContent="Refreshing recoverable history and building the 200-session expansion plan…";
+ try{const r=await fetch("/v15/dataset/expand",{method:"POST",cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Expansion failed");
+ const q=d.quality||{},p=d.expansion_plan||{},ranges=(p.priority_ranges||[]).slice(0,4).map(x=>`${x.start}→${x.end} (${x.weekdays} weekdays)`).join(" | ");
+ if(b)b.textContent=`v15.1 EXPANSION · ${q.stored_rows||0} candles / ${q.actual_trading_sessions||0} sessions · coverage ${q.overall_coverage_percent||0}% · need ${p.sessions_to_200||0} more sessions. ${p.ready_for_200?"200-SESSION TARGET REACHED.":`BACKFILL TARGET ${p.suggested_backfill_start||"--"} → ${p.suggested_backfill_end||"--"}.`} ${ranges?"Priority gaps: "+ranges:""} ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="Dataset expansion error: "+e.message}
 }
 async function recoverHistoricalData(){
   const box=document.getElementById("btRecoveryStatus");
@@ -8121,7 +8129,7 @@ def _v150_status():
 
 @app.get("/v15/dataset/status")
 def v150_dataset_status():
-    try: return {"status":"success","model_version":"15.0.2",**_v150_status()}
+    try: return {"status":"success","model_version":"15.1",**_v150_status()}
     except Exception as e: return {"status":"error","message":str(e)}
 
 @app.post("/v15/dataset/import")
@@ -8140,7 +8148,69 @@ async def v150_dataset_import(files: list[UploadFile]=File(...)):
         except Exception as e:
             results.append({"filename":name,"status":"REJECTED","message":str(e)})
     st=_v150_status(); q=st["quality"]
-    return {"status":"success","model_version":"15.0.2","files_received":len(files),"files_imported":sum(x.get("status")=="IMPORTED" for x in results),"files_rejected":sum(x.get("status")=="REJECTED" for x in results),"valid_candles_processed":processed,"rows_written":written,"file_results":results,**st,"next_action":"DATASET READY — proceed to walk-forward validation." if q.get("backtest_ready") else "DATASET NOT READY — import more 15m NIFTY history, prioritising missing dates."}
+    return {"status":"success","model_version":"15.1","files_received":len(files),"files_imported":sum(x.get("status")=="IMPORTED" for x in results),"files_rejected":sum(x.get("status")=="REJECTED" for x in results),"valid_candles_processed":processed,"rows_written":written,"file_results":results,**st,"next_action":"DATASET READY — proceed to walk-forward validation." if q.get("backtest_ready") else "DATASET NOT READY — import more 15m NIFTY history, prioritising missing dates."}
+
+# ============================================================
+# V15.1 HISTORICAL DATASET EXPANSION PLANNER
+# ============================================================
+def _v151_group_dates(date_strings):
+    if not date_strings:
+        return []
+    vals=sorted(pd.to_datetime(date_strings).date)
+    groups=[]; start=prev=vals[0]; count=1
+    for d in vals[1:]:
+        # Missing lists are weekday based, so allow a weekend between Friday/Monday.
+        delta=(d-prev).days
+        if delta<=3:
+            prev=d; count+=1
+        else:
+            groups.append({"start":start.isoformat(),"end":prev.isoformat(),"weekdays":count})
+            start=prev=d; count=1
+    groups.append({"start":start.isoformat(),"end":prev.isoformat(),"weekdays":count})
+    return groups
+
+def _v151_expansion_plan(raw, quality):
+    sessions=int(quality.get("actual_trading_sessions",0) or 0)
+    need=max(0,200-sessions)
+    missing=_v149_missing_session_dates(raw) if raw is not None and not raw.empty else []
+    priority=_v151_group_dates(missing)
+    start=end=None
+    if raw is not None and not raw.empty and need>0:
+        earliest=raw.index.min().date()
+        # Add ~15% weekday buffer for exchange holidays; imported data is still validated.
+        target_weekdays=max(need,int(math.ceil(need*1.15)))
+        days=[]; d=earliest-timedelta(days=1)
+        while len(days)<target_weekdays:
+            if d.weekday()<5: days.append(d)
+            d-=timedelta(days=1)
+        start=min(days).isoformat(); end=(earliest-timedelta(days=1)).isoformat()
+    return {
+        "target_sessions":200,
+        "current_sessions":sessions,
+        "sessions_to_200":need,
+        "ready_for_200":need==0,
+        "suggested_backfill_start":start,
+        "suggested_backfill_end":end,
+        "priority_ranges":priority[:20],
+        "missing_dates_sample":missing[:80],
+        "required_format":"15-minute NIFTY 50 OHLC CSV; datetime/open/high/low/close; volume optional",
+    }
+
+@app.post("/v15/dataset/expand")
+def v151_dataset_expand():
+    sync_result=None
+    try:
+        sync_result=_v146_sync_history(period="60d",interval="15m")
+    except Exception as e:
+        sync_result={"status":"warning","message":str(e)}
+    raw=_v146_load_raw_history("15m")
+    q=_v148_quality_report(raw,timeframe="15m")
+    plan=_v151_expansion_plan(raw,q)
+    if plan["ready_for_200"]:
+        action="200-session target reached. Run Data Quality & Gap Check, then Regime-Aware Walk-Forward and Extended Historical Validation."
+    else:
+        action="Import genuine older 15-minute NIFTY CSV data for the suggested range. v15.1 will merge/deduplicate it; do not fabricate candles for unavailable dates."
+    return {"status":"success","model_version":"15.1","quality":q,"sync":sync_result,"expansion_plan":plan,"next_action":action}
 
 # ============================================================
 # V14.9 HISTORICAL DATA RECOVERY + BACKTEST READINESS GATE
