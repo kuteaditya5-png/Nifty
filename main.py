@@ -4570,6 +4570,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%" onclick="expandHistoricalDataset()">Expand / Plan 200 Sessions v15.1</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="acquisitionPlanV152()">Acquisition Progress v15.2</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="autoCollectV153()">Auto Collect History v15.3</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="collectorDiagV1531()">Collector Diagnostics v15.3.1</button>
           </div>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
@@ -5177,6 +5178,13 @@ async function acquisitionPlanV152(){
  const p=d.plan||{},q=d.quality||{},ranges=(p.priority_ranges||[]).slice(0,5).map(x=>`${x.start}→${x.end} (${x.weekdays} weekdays)`).join(" | ");
  if(b)b.textContent=`v15.2 ACQUISITION · ${q.actual_trading_sessions||0}/${p.target_sessions||200} sessions (${p.progress_percent||0}%) · ${q.stored_rows||0} candles · need ${p.sessions_to_target||0} sessions. ${p.ready?"TARGET REACHED — run quality/readiness validation.":`NEXT OLDER RANGE ${p.suggested_older_start||"--"} → ${p.suggested_older_end||"--"}.`} ${ranges?"Priority gaps: "+ranges:""} ${d.next_action||""}`;
  }catch(e){if(b)b.textContent="Acquisition progress error: "+e.message}
+}
+
+async function collectorDiagV1531(){
+ const b=document.getElementById("btDatasetBuilder"); if(b)b.textContent="v15.3.1 checking historical collector configuration…";
+ try{const r=await fetch("/v15/acquisition/collector-diagnostics"); const d=await r.json(); if(d.status!=="success") throw new Error(d.message||"Diagnostics failed");
+ const t=d.token||{}, p=d.provider||{}; if(b)b.textContent=`v15.3.1 DIAGNOSTICS · token ${t.configured?"CONFIGURED":"MISSING"} · length ${t.length||0} · provider ${p.name||"--"} · probe ${p.probe_status||"NOT RUN"} ${p.http_status?"HTTP "+p.http_status:""} · ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="v15.3.1 diagnostics error: "+e.message}
 }
 
 async function autoCollectV153(){
@@ -8336,6 +8344,52 @@ def v153_auto_collect():
         return {"status":"success","model_version":"15.3","collection":{"provider":"Upstox Historical Candle V3","instrument":"NSE_INDEX|Nifty 50","candles_fetched":fetched,"rows_written":written,"chunks":chunk_results},"quality":q,"plan":plan,"next_action":action}
     except Exception as e:
         return {"status":"error","model_version":"15.3","message":str(e)}
+
+# ============================================================
+# V15.3.1 COLLECTOR DIAGNOSTICS
+# ============================================================
+@app.get("/v15/acquisition/collector-diagnostics")
+def v1531_collector_diagnostics():
+    """Safe diagnostics: never returns the access token itself."""
+    try:
+        from urllib.parse import quote
+        token=(os.getenv("UPSTOX_ACCESS_TOKEN") or "").strip()
+        instrument=(os.getenv("UPSTOX_NIFTY_INSTRUMENT_KEY") or "NSE_INDEX|Nifty 50").strip()
+        result={"status":"success","model_version":"15.3.1",
+                "token":{"configured":bool(token),"length":len(token)},
+                "provider":{"name":"Upstox Historical Candle V3","instrument":instrument,"probe_status":"NOT RUN"}}
+        if not token:
+            result["next_action"]="UPSTOX_ACCESS_TOKEN is missing. Add it to Vercel Production Environment Variables, redeploy, then run diagnostics again."
+            return result
+        # Probe a tiny recent historical window; response body is truncated and token is never logged.
+        end=(datetime.now().date()-timedelta(days=1)); start=end-timedelta(days=5)
+        url=("https://api.upstox.com/v3/historical-candle/"+quote(instrument,safe="")+
+             "/minutes/15/"+end.isoformat()+"/"+start.isoformat())
+        try:
+            r=requests.get(url,headers={"Accept":"application/json","Authorization":"Bearer "+token},timeout=15)
+            result["provider"]["http_status"]=r.status_code
+            if r.status_code==200:
+                payload=r.json(); candles=((payload.get("data") or {}).get("candles") or [])
+                result["provider"]["probe_status"]="PASS"
+                result["provider"]["probe_candles"]=len(candles)
+                result["next_action"]="Provider authentication is working. Run Auto Collect History v15.3."
+            elif r.status_code in (401,403):
+                result["provider"]["probe_status"]="AUTH FAILED"
+                result["next_action"]="The token is present but Upstox rejected it. Generate a fresh access token, update UPSTOX_ACCESS_TOKEN in Vercel Production, and redeploy."
+            elif r.status_code==429:
+                result["provider"]["probe_status"]="RATE LIMITED"
+                result["next_action"]="Upstox rate limit reached. Wait and retry; do not repeatedly press Auto Collect."
+            else:
+                result["provider"]["probe_status"]="PROVIDER ERROR"
+                result["provider"]["response_preview"]=(r.text or "")[:180]
+                result["next_action"]="Provider returned an unexpected response. Use the HTTP status/preview above to diagnose before collection."
+        except Exception as e:
+            result["provider"]["probe_status"]="NETWORK ERROR"
+            result["provider"]["error"]=str(e)[:180]
+            result["next_action"]="Vercel could not reach the historical-data provider. Retry diagnostics before collection."
+        return result
+    except Exception as e:
+        return {"status":"error","model_version":"15.3.1","message":str(e)}
 
 # ============================================================
 # V14.9 HISTORICAL DATA RECOVERY + BACKTEST READINESS GATE
