@@ -5,6 +5,7 @@ import requests
 import os
 import io
 import pandas as pd
+import numpy as np
 import psycopg
 import re
 import math
