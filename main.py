@@ -36,7 +36,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "14.9",
+        "version": "15.0",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4562,6 +4562,12 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <button class="primary" style="width:100%;margin-top:8px" onclick="checkBacktestReadiness()">Backtest Readiness Gate</button>
           <input id="historyBackfillFile" type="file" accept=".csv" style="width:100%;margin-top:8px;padding:10px;border:1px solid #2b3f59;border-radius:10px;background:#0b1828;color:#dce8f8">
           <button class="primary" style="width:100%;margin-top:8px" onclick="uploadHistoryBackfill()">Import 15m CSV Backfill v14.7</button>
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)">
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px">v15.0 HISTORICAL DATASET BUILDER</div>
+            <input id="v150DatasetFiles" type="file" accept=".csv,text/csv" multiple style="width:100%;margin-bottom:8px">
+            <button class="primary" style="width:100%;margin-bottom:8px" onclick="buildHistoricalDataset()">Build / Merge Dataset v15.0</button>
+            <button class="primary" style="width:100%" onclick="datasetBuilderStatus()">Dataset Builder Status</button>
+          </div>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
   <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
@@ -4576,6 +4582,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btHistoryStore" style="margin-top:8px">Historical store has not been checked yet.</div>
   <div class="bt-note" id="btHistoryQuality" style="margin-top:8px">Historical data quality has not been checked yet.</div>
   <div class="bt-note" id="btRecoveryStatus" style="margin-top:8px">Historical recovery has not been run yet.</div>
+<div class="bt-note" id="btDatasetBuilder" style="margin-top:8px">v15.0 dataset builder has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
@@ -5138,6 +5145,22 @@ async function syncHistoryStore(){
 
 
 
+
+async function datasetBuilderStatus(){
+ const b=document.getElementById("btDatasetBuilder"); if(b)b.textContent="Checking dataset…";
+ try{const r=await fetch("/v15/dataset/status",{cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Status failed");
+ const q=d.quality||{};if(b)b.textContent=`${q.backtest_ready?"READY":"NOT READY"} · ${q.stored_rows||0} candles · ${q.actual_trading_sessions||0} sessions · coverage ${q.overall_coverage_percent||0}% · missing weekdays ${d.missing_weekday_sessions||0} · need ${d.sessions_to_200||0} sessions for 200-session target.`}
+ catch(e){if(b)b.textContent="Dataset status error: "+e.message}
+}
+async function buildHistoricalDataset(){
+ const b=document.getElementById("btDatasetBuilder"),i=document.getElementById("v150DatasetFiles");
+ if(!i||!i.files.length){if(b)b.textContent="Choose one or more 15-minute NIFTY CSV files first.";return}
+ if(b)b.textContent=`Validating and merging ${i.files.length} file(s)…`;const fd=new FormData();Array.from(i.files).forEach(f=>fd.append("files",f));
+ try{const r=await fetch("/v15/dataset/import",{method:"POST",body:fd}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Build failed");
+ const q=d.quality||{},fr=(d.file_results||[]).map(x=>`${x.filename}: ${x.status}${x.valid_candles!=null?` ${x.valid_candles} candles`:""}${x.message?` — ${x.message}`:""}`).join(" | ");
+ if(b)b.textContent=`FILES ${d.files_imported}/${d.files_received} imported · processed ${d.valid_candles_processed||0} candles · STORE ${q.stored_rows||0} candles / ${q.actual_trading_sessions||0} sessions · COVERAGE ${q.overall_coverage_percent||0}% · BACKTEST READY ${q.backtest_ready?"YES":"NO"}. ${d.next_action} ${fr}`}
+ catch(e){if(b)b.textContent="Dataset builder error: "+e.message}
+}
 async function recoverHistoricalData(){
   const box=document.getElementById("btRecoveryStatus");
   if(box) box.textContent="Refreshing recoverable NIFTY history and recalculating gaps…";
@@ -6578,7 +6601,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "14.9",
+            "model_version": "15.0",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7431,7 +7454,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "14.9",
+            "model_version": "15.0",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7943,7 +7966,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "14.9",
+        "model_version": "15.0",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -8025,6 +8048,99 @@ def _v123_objective(m):
 
 
 
+
+
+# ============================================================
+# V15.0 HISTORICAL DATASET BUILDER
+# ============================================================
+def _v150_col(df, names):
+    norm=lambda x: re.sub(r"[^a-z0-9]","",str(x).lower())
+    mp={norm(c):c for c in df.columns}
+    for n in names:
+        if norm(n) in mp: return mp[norm(n)]
+    return None
+
+def _v150_parse_csv(content, filename):
+    text=None
+    for enc in ("utf-8-sig","utf-8","cp1252"):
+        try:
+            text=content.decode(enc); break
+        except Exception: pass
+    if text is None: raise ValueError("Unsupported CSV encoding.")
+    df=None
+    for sep in (",",";","\t"):
+        try:
+            x=pd.read_csv(io.StringIO(text),sep=sep)
+            if x.shape[1]>=4: df=x; break
+        except Exception: pass
+    if df is None or df.empty: raise ValueError("CSV could not be parsed.")
+    n0=len(df)
+    dc=_v150_col(df,["datetime","timestamp","date time","date_time"])
+    datec=_v150_col(df,["date","tradingdate","trade_date"])
+    timec=_v150_col(df,["time","tradingtime","trade_time"])
+    if dc:
+        ts=pd.to_datetime(df[dc],errors="coerce")
+    elif datec and timec:
+        ts=pd.to_datetime(df[datec].astype(str)+" "+df[timec].astype(str),errors="coerce")
+    elif datec:
+        ts=pd.to_datetime(df[datec],errors="coerce")
+    else:
+        ts=pd.to_datetime(df.iloc[:,0],errors="coerce")
+        if ts.notna().mean()<.8: raise ValueError("Datetime column not identified.")
+    cols={
+      "Open":_v150_col(df,["open","o"]),
+      "High":_v150_col(df,["high","h"]),
+      "Low":_v150_col(df,["low","l"]),
+      "Close":_v150_col(df,["close","c","ltp"])
+    }
+    miss=[k for k,v in cols.items() if v is None]
+    if miss: raise ValueError("Missing OHLC columns: "+", ".join(miss))
+    out=pd.DataFrame(index=ts)
+    for k,c in cols.items(): out[k]=pd.to_numeric(df[c].values,errors="coerce")
+    vc=_v150_col(df,["volume","vol","v"])
+    out["Volume"]=pd.to_numeric(df[vc].values,errors="coerce").fillna(0) if vc else 0
+    out=out[~out.index.isna()].dropna(subset=["Open","High","Low","Close"])
+    valid=(out.Open>0)&(out.High>0)&(out.Low>0)&(out.Close>0)&(out.High>=out[["Open","Close","Low"]].max(axis=1))&(out.Low<=out[["Open","Close","High"]].min(axis=1))
+    invalid=int((~valid).sum()); out=out[valid]
+    try:
+        out.index=out.index.tz_localize("Asia/Kolkata") if out.index.tz is None else out.index.tz_convert("Asia/Kolkata")
+    except Exception: pass
+    out=out[[((t.hour>9 or (t.hour==9 and t.minute>=15)) and (t.hour<15 or (t.hour==15 and t.minute<=30))) for t in out.index]]
+    b=len(out); out=out[~out.index.duplicated(keep="last")].sort_index(); dup=b-len(out)
+    d=out.index.to_series().diff().dropna().dt.total_seconds()/60
+    d=d[(d>0)&(d<=180)]
+    med=float(d.median()) if not d.empty else None
+    return out,{"filename":filename,"input_rows":n0,"valid_candles":len(out),"invalid_removed":invalid,"duplicates_removed":dup,"median_interval":round(med,2) if med is not None else None,"start":out.index[0].isoformat() if len(out) else None,"end":out.index[-1].isoformat() if len(out) else None}
+
+def _v150_status():
+    raw=_v146_load_raw_history("15m")
+    q=_v148_quality_report(raw,timeframe="15m")
+    md=_v149_missing_session_dates(raw)
+    gaps=_v149_missing_intraday_slots(raw)
+    return {"quality":q,"missing_weekday_sessions":len(md),"missing_dates_sample":md[:60],"intraday_gap_days":len(gaps),"sessions_to_200":max(0,200-int(q.get("actual_trading_sessions",0)))}
+
+@app.get("/v15/dataset/status")
+def v150_dataset_status():
+    try: return {"status":"success","model_version":"15.0",**_v150_status()}
+    except Exception as e: return {"status":"error","message":str(e)}
+
+@app.post("/v15/dataset/import")
+async def v150_dataset_import(files: list[UploadFile]=File(...)):
+    results=[]; processed=0; written=0
+    for f in files:
+        name=f.filename or "upload.csv"
+        try:
+            frame,meta=_v150_parse_csv(await f.read(),name)
+            if frame.empty: raise ValueError("No valid candles after normalization.")
+            med=meta["median_interval"]
+            if med is not None and not 14<=med<=16: raise ValueError(f"Detected {med}m interval; expected 15m.")
+            w=_v146_upsert_history(frame,timeframe="15m",source="v15_dataset_builder:"+name)
+            meta.update(status="IMPORTED",written=int(w or 0)); results.append(meta)
+            processed+=len(frame); written+=int(w or 0)
+        except Exception as e:
+            results.append({"filename":name,"status":"REJECTED","message":str(e)})
+    st=_v150_status(); q=st["quality"]
+    return {"status":"success","model_version":"15.0","files_received":len(files),"files_imported":sum(x.get("status")=="IMPORTED" for x in results),"files_rejected":sum(x.get("status")=="REJECTED" for x in results),"valid_candles_processed":processed,"rows_written":written,"file_results":results,**st,"next_action":"DATASET READY — proceed to walk-forward validation." if q.get("backtest_ready") else "DATASET NOT READY — import more 15m NIFTY history, prioritising missing dates."}
 
 # ============================================================
 # V14.9 HISTORICAL DATA RECOVERY + BACKTEST READINESS GATE
@@ -8182,7 +8298,7 @@ def v149_history_readiness():
 
         return {
             "status": "success",
-            "model_version": "14.9",
+            "model_version": "15.0",
             **gate
         }
 
@@ -9295,7 +9411,7 @@ def v145_extended_validation(
 
         return {
             "status": "success",
-            "model_version": "14.9",
+            "model_version": "15.0",
             "requested_months": months,
             "actual_yfinance_period": actual_period,
             "historical_candles": len(df),
@@ -9586,7 +9702,7 @@ def v144_regime_aware_walk_forward(
 
         return {
             "status": "success",
-            "model_version": "14.9",
+            "model_version": "15.0",
             "rule_under_test": {
                 "TRENDING": "REVERSION",
                 "RANGE": "WAIT",
@@ -9818,7 +9934,7 @@ def v143_regime_engine_matrix(
 
         return {
             "status": "success",
-            "model_version": "14.9",
+            "model_version": "15.0",
             "period": period,
             "threshold": threshold,
             "matrix": matrix,
@@ -10056,7 +10172,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "14.9",
+            "model_version": "15.0",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
