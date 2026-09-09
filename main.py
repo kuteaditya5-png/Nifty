@@ -12099,12 +12099,24 @@ def v1512_option_oi_validation(blocks:int=4, cost_bps:float=3.0):
             for c in feat_cols
         }
 
+        # Normalize NIFTY feature timestamps to Asia/Kolkata BEFORE extracting
+        # the trading date. The persistent candle store can be UTC/GMT-aware;
+        # using raw .date() caused valid OI days to be mapped to the wrong
+        # calendar date and undercounted overlap.
+        df_idx = pd.DatetimeIndex(df.index)
+        if df_idx.tz is None:
+            df_idx_ist = df_idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
+        else:
+            df_idx_ist = df_idx.tz_convert("Asia/Kolkata")
+
+        trading_dates_ist = [ts.date() for ts in df_idx_ist]
+
         vf = pd.DataFrame(index=df.index)
         for c,m in date_maps.items():
-            # Exact trading-date map only: no forward filling across days that
-            # lack genuine option OI observations.
+            # Exact IST trading-date map only: no forward filling across days
+            # that lack genuine option OI observations.
             vf[c] = pd.Series(
-                [m.get(pd.Timestamp(i).date(), np.nan) for i in df.index],
+                [m.get(d, np.nan) for d in trading_dates_ist],
                 index=df.index,
                 dtype=float
             )
@@ -12114,10 +12126,21 @@ def v1512_option_oi_validation(blocks:int=4, cost_bps:float=3.0):
 
         valid_rows = vf.notna().any(axis=1)
         positions = np.flatnonzero(valid_rows.to_numpy())
+
+        oi_dates = set(pd.Timestamp(x).date() for x in daily.index)
+        nifty_dates = set(trading_dates_ist)
+        overlap_dates = sorted(oi_dates.intersection(nifty_dates))
+
         if len(positions) < 800:
             return {
                 "status":"error",
-                "message":f"Historical OI overlaps only {len(positions)} NIFTY bars. Acquire more OI dates before validation."
+                "version":"15.13.1",
+                "message":f"Historical OI overlaps only {len(positions)} NIFTY bars after IST alignment.",
+                "oi_days":len(oi_dates),
+                "nifty_days":len(nifty_dates),
+                "overlap_days":len(overlap_dates),
+                "overlap_sample":[d.isoformat() for d in overlap_dates[:10]],
+                "next_action":"Run Expand + Diagnose Option OI v15.13 again only if overlap_days is genuinely low."
             }
 
         # Chronological fold boundaries are based only on bars that actually
@@ -12215,7 +12238,7 @@ def v1512_option_oi_validation(blocks:int=4, cost_bps:float=3.0):
 
         return {
             "status":"success",
-            "version":"15.12",
+            "version":"15.13.1",
             "verdict":"INDEPENDENT OPTION-OI EDGE PASSES" if passed else "INDEPENDENT OPTION-OI EDGE NOT YET STABLE",
             "source":"Upstox historical Market OI by NIFTY trading date",
             "oi_days":len(od),
