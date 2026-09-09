@@ -36,7 +36,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "15.0.1",
+        "version": "15.0.2",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4563,9 +4563,9 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <input id="historyBackfillFile" type="file" accept=".csv" style="width:100%;margin-top:8px;padding:10px;border:1px solid #2b3f59;border-radius:10px;background:#0b1828;color:#dce8f8">
           <button class="primary" style="width:100%;margin-top:8px" onclick="uploadHistoryBackfill()">Import 15m CSV Backfill v14.7</button>
           <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)">
-            <div style="font-size:12px;font-weight:700;margin-bottom:8px">v15.0.1 HISTORICAL DATASET BUILDER</div>
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px">v15.0.2 HISTORICAL DATASET BUILDER</div>
             <input id="v150DatasetFiles" type="file" accept=".csv,text/csv" multiple style="width:100%;margin-bottom:8px">
-            <button class="primary" style="width:100%;margin-bottom:8px" onclick="buildHistoricalDataset()">Build / Merge Dataset v15.0.1</button>
+            <button class="primary" style="width:100%;margin-bottom:8px" onclick="buildHistoricalDataset()">Build / Merge Dataset v15.0.2</button>
             <button class="primary" style="width:100%" onclick="datasetBuilderStatus()">Dataset Builder Status</button>
           </div>
   </div>
@@ -8121,7 +8121,7 @@ def _v150_status():
 
 @app.get("/v15/dataset/status")
 def v150_dataset_status():
-    try: return {"status":"success","model_version":"15.0.1",**_v150_status()}
+    try: return {"status":"success","model_version":"15.0.2",**_v150_status()}
     except Exception as e: return {"status":"error","message":str(e)}
 
 @app.post("/v15/dataset/import")
@@ -8134,13 +8134,13 @@ async def v150_dataset_import(files: list[UploadFile]=File(...)):
             if frame.empty: raise ValueError("No valid candles after normalization.")
             med=meta["median_interval"]
             if med is not None and not 14<=med<=16: raise ValueError(f"Detected {med}m interval; expected 15m.")
-            w=_v146_upsert_history(frame,timeframe="15m",source="v15_dataset_builder:"+name)
+            w=_v146_upsert_history(frame,timeframe="15m",source="v15_dataset")
             meta.update(status="IMPORTED",written=int(w or 0)); results.append(meta)
             processed+=len(frame); written+=int(w or 0)
         except Exception as e:
             results.append({"filename":name,"status":"REJECTED","message":str(e)})
     st=_v150_status(); q=st["quality"]
-    return {"status":"success","model_version":"15.0.1","files_received":len(files),"files_imported":sum(x.get("status")=="IMPORTED" for x in results),"files_rejected":sum(x.get("status")=="REJECTED" for x in results),"valid_candles_processed":processed,"rows_written":written,"file_results":results,**st,"next_action":"DATASET READY — proceed to walk-forward validation." if q.get("backtest_ready") else "DATASET NOT READY — import more 15m NIFTY history, prioritising missing dates."}
+    return {"status":"success","model_version":"15.0.2","files_received":len(files),"files_imported":sum(x.get("status")=="IMPORTED" for x in results),"files_rejected":sum(x.get("status")=="REJECTED" for x in results),"valid_candles_processed":processed,"rows_written":written,"file_results":results,**st,"next_action":"DATASET READY — proceed to walk-forward validation." if q.get("backtest_ready") else "DATASET NOT READY — import more 15m NIFTY history, prioritising missing dates."}
 
 # ============================================================
 # V14.9 HISTORICAL DATA RECOVERY + BACKTEST READINESS GATE
