@@ -4572,6 +4572,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="autoCollectV153()">Auto Collect History v15.3</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="collectorDiagV1531()">Collector Diagnostics v15.3.1</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFullValidationV154()">Run Full Validation v15.4.4</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runPromotionValidationV155()">Promotion Validation v15.5</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4590,6 +4591,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btRecoveryStatus" style="margin-top:8px">Historical recovery has not been run yet.</div>
 <div class="bt-note" id="btDatasetBuilder" style="margin-top:8px">v15.1 dataset expansion has not been run yet.</div>
   <div class="bt-note" id="btFullValidation" style="margin-top:8px">v15.4 full 200-session validation has not been run yet.</div>
+  <div class="bt-note" id="btPromotionValidation" style="margin-top:8px">v15.5 frozen-rule promotion validation has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5222,6 +5224,20 @@ async function runFullValidationV154(){
   const q=d.data_quality||{}, wf=d.walk_forward||{}, best=d.matrix_best||{}, e=d.signal_edge||{};
   if(b)b.textContent=`v15.4 ${d.final_verdict} · STORE ${d.historical_candles||0} candles / ${q.actual_trading_sessions||0} sessions · QUALITY ${q.verdict||"--"} · READY ${d.backtest_ready?"YES":"NO"} · BEST ${best.regime||"--"}→${best.engine||"--"} H6 ${best.h6?.accuracy_percent??"--"}%/${best.h6?.average_directional_move_bps??"--"}bps (${best.signals||0} signals) · WF ${wf.overall_verdict||"--"}, unseen H6 ${wf.average_h6_accuracy||0}%/${wf.average_h6_bps||0}bps, ${wf.total_signals||0} signals, degradation ${wf.average_degradation||0} pts · EDGE H6 ${e.h6_accuracy_edge_points??"--"} pts/${e.h6_move_edge_bps??"--"}bps · ${d.next_action||""}`;
  }catch(e){if(b)b.textContent="v15.4 validation error: "+e.message}
+}
+
+async function runPromotionValidationV155(){
+ const b=document.getElementById("btPromotionValidation");
+ if(b)b.textContent="v15.5 freezing the research rule and testing chronological unseen blocks…";
+ try{
+  const threshold=Number((document.getElementById("btThreshold")||{}).value||0.20);
+  const qs=new URLSearchParams({threshold:String(threshold),blocks:"4"});
+  const r=await fetch("/v15/promotion-validation?"+qs.toString(),{cache:"no-store"});
+  const d=await r.json(); if(!r.ok||d.status!=="success")throw new Error(d.message||"Promotion validation failed");
+  const x=d.summary||{}, rule=d.frozen_regime_engines||{};
+  const blocks=(d.unseen_blocks||[]).map(z=>`B${z.block} ${z.h6_accuracy_percent}%/${z.h6_average_directional_move_bps}bps n=${z.signals}`).join(" · ");
+  if(b)b.textContent=`v15.5 ${d.final_verdict} · FROZEN T${d.frozen_threshold} · ROUTER ${Object.entries(rule).map(([k,v])=>k+"→"+v).join(", ")} · UNSEEN ${x.total_signals||0} signals · H6 ${x.weighted_h6_accuracy_percent||0}%/${x.weighted_h6_move_bps||0}bps · positive blocks ${x.positive_blocks||0}/${x.blocks||0} · worst ${x.worst_block_accuracy_percent||0}% · degradation ${x.accuracy_degradation_points||0} pts · ${blocks} · ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="v15.5 promotion validation error: "+e.message}
 }
 
 async function recoverHistoricalData(){
@@ -10829,3 +10845,85 @@ def v13_rolling_walk_forward(
         slippage_points=float(slippage_points),
     )
 # ===================  end v13 EDGE LAB  ===================
+# ============================================================
+# V15.5 PROMOTION VALIDATION — FROZEN RULE / CHRONOLOGICAL UNSEEN BLOCKS
+# ============================================================
+def _v155_router_metrics(df, regime_engines, threshold=0.20, horizon=6):
+    records=[]
+    for i in range(0, max(0, len(df)-horizon)):
+        row=df.iloc[i]
+        regime=_v143_regime_name(row)
+        engine=regime_engines.get(regime)
+        if not engine:
+            continue
+        decision=_v143_engine_signal(row, engine, threshold)
+        signal=decision.get("signal")
+        if signal=="WAIT":
+            continue
+        entry=float(row["close"]); future=float(df.iloc[i+horizon]["close"])
+        side=1.0 if signal=="CE" else -1.0
+        move=((future-entry)/entry)*side*10000.0
+        records.append(move)
+    n=len(records)
+    wins=sum(1 for x in records if x>0)
+    acc=(wins/n*100.0) if n else 0.0
+    avg=(sum(records)/n) if n else 0.0
+    return {"signals":n,"h6_accuracy_percent":round(acc,1),"h6_average_directional_move_bps":round(avg,2),"positive":bool(n>=20 and acc>=50.0 and avg>0)}
+
+@app.get("/v15/promotion-validation")
+def v155_promotion_validation(threshold: float=0.20, blocks: int=4):
+    """Freeze a rule on early history, then test it on later chronological blocks without retuning."""
+    try:
+        threshold=max(0.10,min(float(threshold),0.60)); blocks=max(3,min(int(blocks),5))
+        raw=_v146_load_raw_history("15m",limit=50000)
+        quality=_v148_quality_report(raw,timeframe="15m")
+        if not quality.get("backtest_ready"):
+            return {"status":"error","message":"History is not backtest-ready. Run Data Quality & Gap Check first.","data_quality":quality}
+        df=_v146_feature_frame_from_raw(raw)
+        if df is None or len(df)<1000:
+            return {"status":"error","message":"Not enough feature-ready history for promotion validation."}
+        # Discovery is deliberately isolated from all later promotion blocks.
+        split=max(500,int(len(df)*0.55)); discovery=df.iloc[:split]; unseen=df.iloc[split:]
+        matrix=_v145_matrix_summary(discovery,threshold=threshold)
+        regime_engines={}
+        for regime in ("TRENDING","RANGE","HIGH_VOLATILITY"):
+            cells=[x for x in matrix.get("matrix",[]) if x.get("regime")==regime and int(x.get("signals") or 0)>=30]
+            if cells:
+                regime_engines[regime]=max(cells,key=lambda x:(x.get("evidence_score",0),x.get("signals",0))).get("engine")
+        if not regime_engines:
+            return {"status":"error","message":"Discovery sample could not establish a frozen regime/engine rule."}
+        discovery_metrics=_v155_router_metrics(discovery,regime_engines,threshold)
+        size=len(unseen)//blocks; results=[]
+        for k in range(blocks):
+            s=k*size; e=len(unseen) if k==blocks-1 else (k+1)*size
+            part=unseen.iloc[s:e]
+            if len(part)<50: continue
+            m=_v155_router_metrics(part,regime_engines,threshold)
+            m.update({"block":k+1,"start":part.index[0].isoformat(),"end":part.index[-1].isoformat(),"candles":len(part)})
+            results.append(m)
+        total=sum(x["signals"] for x in results)
+        if total:
+            avg_acc=round(sum(x["h6_accuracy_percent"]*x["signals"] for x in results)/total,1)
+            avg_bps=round(sum(x["h6_average_directional_move_bps"]*x["signals"] for x in results)/total,2)
+        else: avg_acc=avg_bps=0.0
+        positive_blocks=sum(1 for x in results if x["positive"])
+        worst_acc=min([x["h6_accuracy_percent"] for x in results] or [0.0])
+        degradation=round(discovery_metrics["h6_accuracy_percent"]-avg_acc,1)
+        adequate=total>=150 and len(results)>=3
+        stable=positive_blocks>=max(3,len(results)-1) and worst_acc>=48.0 and degradation<=5.0
+        if adequate and stable and avg_acc>=53.0 and avg_bps>=1.0:
+            verdict="PROMOTION CANDIDATE"
+            next_action="Freeze this rule and start paper/live forward validation. Do not route real orders from this result alone."
+        elif adequate and avg_acc>=51.0 and avg_bps>0 and positive_blocks>=2:
+            verdict="CONTINUE TESTING"
+            next_action="The frozen rule retains some unseen edge, but evidence is not strong enough for promotion. Continue paper/unseen validation without retuning."
+        else:
+            verdict="REJECT"
+            next_action="The frozen rule did not meet promotion evidence requirements. Do not promote it; diagnose weak regimes before creating a new research candidate."
+        return {"status":"success","model_version":"15.5","test":"chronological_frozen_rule_promotion_validation","data_quality":quality,
+                "frozen_threshold":threshold,"frozen_regime_engines":regime_engines,"discovery":{"start":discovery.index[0].isoformat(),"end":discovery.index[-1].isoformat(),"candles":len(discovery),**discovery_metrics},
+                "unseen_blocks":results,"summary":{"blocks":len(results),"positive_blocks":positive_blocks,"total_signals":total,"weighted_h6_accuracy_percent":avg_acc,"weighted_h6_move_bps":avg_bps,"worst_block_accuracy_percent":worst_acc,"accuracy_degradation_points":degradation,"adequate_sample":adequate,"stable":stable},
+                "final_verdict":verdict,"next_action":next_action,
+                "limitation":"This is NIFTY directional-signal validation. It does not validate option premium fills, spreads, brokerage, latency, or live execution."}
+    except Exception as e:
+        return {"status":"error","message":str(e)}
