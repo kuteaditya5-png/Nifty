@@ -4573,6 +4573,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="collectorDiagV1531()">Collector Diagnostics v15.3.1</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFullValidationV154()">Run Full Validation v15.4.4</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runPromotionValidationV155()">Promotion Validation v15.5</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runFailureAttributionV156()">Failure Attribution v15.6</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4592,6 +4593,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
 <div class="bt-note" id="btDatasetBuilder" style="margin-top:8px">v15.1 dataset expansion has not been run yet.</div>
   <div class="bt-note" id="btFullValidation" style="margin-top:8px">v15.4 full 200-session validation has not been run yet.</div>
   <div class="bt-note" id="btPromotionValidation" style="margin-top:8px">v15.5 frozen-rule promotion validation has not been run yet.</div>
+  <div class="bt-note" id="btFailureAttribution" style="margin-top:8px">v15.6 failure attribution has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5238,6 +5240,18 @@ async function runPromotionValidationV155(){
   const blocks=(d.unseen_blocks||[]).map(z=>`B${z.block} ${z.h6_accuracy_percent}%/${z.h6_average_directional_move_bps}bps n=${z.signals}`).join(" · ");
   if(b)b.textContent=`v15.5 ${d.final_verdict} · FROZEN T${d.frozen_threshold} · ROUTER ${Object.entries(rule).map(([k,v])=>k+"→"+v).join(", ")} · UNSEEN ${x.total_signals||0} signals · H6 ${x.weighted_h6_accuracy_percent||0}%/${x.weighted_h6_move_bps||0}bps · positive blocks ${x.positive_blocks||0}/${x.blocks||0} · worst ${x.worst_block_accuracy_percent||0}% · degradation ${x.accuracy_degradation_points||0} pts · ${blocks} · ${d.next_action||""}`;
  }catch(e){if(b)b.textContent="v15.5 promotion validation error: "+e.message}
+}
+
+async function runFailureAttributionV156(){
+ const b=document.getElementById("btFailureAttribution");
+ if(b)b.textContent="v15.6 attributing unseen failures by regime, direction, time, confidence, volatility and engine…";
+ try{
+  const threshold=Number((document.getElementById("btThreshold")||{}).value||0.20);
+  const r=await fetch("/v15/failure-attribution?"+new URLSearchParams({threshold:String(threshold),blocks:"4"}),{cache:"no-store"});
+  const d=await r.json(); if(!r.ok||d.status!=="success")throw new Error(d.message||"Failure attribution failed");
+  const f=d.findings||{}; const fmt=(x)=>x?`${x.name} ${x.accuracy_percent}%/${x.avg_bps}bps n=${x.signals}`:"--";
+  if(b)b.textContent=`v15.6 ${d.verdict} · ${d.total_signals} unseen signals · overall ${d.overall_accuracy_percent}%/${d.overall_bps}bps · WORST REGIME ${fmt(f.worst_regime)} · DIRECTION ${fmt(f.worst_direction)} · TIME ${fmt(f.worst_time_bucket)} · CONF ${fmt(f.worst_confidence_bucket)} · VOL ${fmt(f.worst_volatility_bucket)} · ENGINE ${fmt(f.worst_engine)} · ${d.next_action}`;
+ }catch(e){if(b)b.textContent="v15.6 attribution error: "+e.message}
 }
 
 async function recoverHistoricalData(){
@@ -10927,3 +10941,61 @@ def v155_promotion_validation(threshold: float=0.20, blocks: int=4):
                 "limitation":"This is NIFTY directional-signal validation. It does not validate option premium fills, spreads, brokerage, latency, or live execution."}
     except Exception as e:
         return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# V15.6 FAILURE ATTRIBUTION — FROZEN RULE, UNSEEN SAMPLE ONLY
+# ============================================================
+def _v156_summary(rows, key):
+    groups={}
+    for r in rows:
+        name=str(r.get(key,"UNKNOWN")); g=groups.setdefault(name,[]); g.append(r)
+    out=[]
+    for name,g in groups.items():
+        n=len(g); wins=sum(1 for x in g if x["move_bps"]>0); avg=sum(x["move_bps"] for x in g)/n if n else 0
+        out.append({"name":name,"signals":n,"accuracy_percent":round(wins/n*100,1) if n else 0,"avg_bps":round(avg,2),"positive":bool(n>=20 and wins/n>=.5 and avg>0)})
+    return sorted(out,key=lambda x:(x["avg_bps"],x["accuracy_percent"]))
+
+def _v156_records(df, regime_engines, threshold=.20, horizon=6):
+    rows=[]
+    for i in range(max(0,len(df)-horizon)):
+        row=df.iloc[i]; regime=_v143_regime_name(row); engine=regime_engines.get(regime)
+        if not engine: continue
+        d=_v143_engine_signal(row,engine,threshold); sig=d.get("signal")
+        if sig=="WAIT": continue
+        entry=float(row["close"]); future=float(df.iloc[i+horizon]["close"]); side=1 if sig=="CE" else -1
+        move=(future-entry)/entry*side*10000
+        score=abs(float(d.get("score") or 0)); hour=getattr(df.index[i],"hour",0); minute=getattr(df.index[i],"minute",0); mins=hour*60+minute
+        time_bucket="OPEN" if mins<630 else ("MIDDAY" if mins<810 else "CLOSE")
+        conf="LOW" if score<max(threshold+.10,.30) else ("MEDIUM" if score<max(threshold+.30,.50) else "HIGH")
+        try:
+            atrpct=float(row["atr"])/float(row["close"])
+            vol="HIGH" if atrpct>=.006 else ("MEDIUM" if atrpct>=.003 else "LOW")
+        except: vol="UNKNOWN"
+        rows.append({"move_bps":move,"regime":regime,"engine":engine,"direction":sig,"time_bucket":time_bucket,"confidence_bucket":conf,"volatility_bucket":vol})
+    return rows
+
+@app.get("/v15/failure-attribution")
+def v156_failure_attribution(threshold: float=.20, blocks: int=4):
+    try:
+        threshold=max(.10,min(float(threshold),.60)); raw=_v146_load_raw_history("15m",limit=50000); quality=_v148_quality_report(raw,timeframe="15m")
+        if not quality.get("backtest_ready"): return {"status":"error","message":"History is not backtest-ready."}
+        df=_v146_feature_frame_from_raw(raw)
+        if df is None or len(df)<1000: return {"status":"error","message":"Not enough feature-ready history."}
+        split=max(500,int(len(df)*.55)); discovery=df.iloc[:split]; unseen=df.iloc[split:]
+        matrix=_v145_matrix_summary(discovery,threshold=threshold); router={}
+        for regime in ("TRENDING","RANGE","HIGH_VOLATILITY"):
+            cells=[x for x in matrix.get("matrix",[]) if x.get("regime")==regime and int(x.get("signals") or 0)>=30]
+            if cells: router[regime]=max(cells,key=lambda x:(x.get("evidence_score",0),x.get("signals",0))).get("engine")
+        rows=_v156_records(unseen,router,threshold); n=len(rows)
+        if not n: return {"status":"error","message":"Frozen router produced no unseen signals."}
+        dims={k:_v156_summary(rows,k) for k in ("regime","direction","time_bucket","confidence_bucket","volatility_bucket","engine")}
+        def worst(k):
+            eligible=[x for x in dims[k] if x["signals"]>=20]; return (eligible or dims[k] or [None])[0]
+        findings={"worst_regime":worst("regime"),"worst_direction":worst("direction"),"worst_time_bucket":worst("time_bucket"),"worst_confidence_bucket":worst("confidence_bucket"),"worst_volatility_bucket":worst("volatility_bucket"),"worst_engine":worst("engine")}
+        wins=sum(1 for r in rows if r["move_bps"]>0); avg=sum(r["move_bps"] for r in rows)/n
+        harmful=[x for x in findings.values() if x and x["signals"]>=20 and x["avg_bps"]<0 and x["accuracy_percent"]<50]
+        verdict="CONCENTRATED FAILURE" if harmful else "DIFFUSE FAILURE"
+        action=("Failure is concentrated in identifiable buckets. Use these only to define the next research hypothesis; do not change live routing yet." if harmful else "No single bucket cleanly explains failure. Avoid adding filters just to fit this sample; reassess signal features/labels next.")
+        return {"status":"success","model_version":"15.6","test":"unseen_failure_attribution","frozen_threshold":threshold,"frozen_regime_engines":router,"total_signals":n,"overall_accuracy_percent":round(wins/n*100,1),"overall_bps":round(avg,2),"dimensions":dims,"findings":findings,"verdict":verdict,"next_action":action,"limitation":"Diagnostic attribution is descriptive, not proof that filtering a weak bucket will improve future performance."}
+    except Exception as e: return {"status":"error","message":str(e)}
