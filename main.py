@@ -4574,6 +4574,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFullValidationV154()">Run Full Validation v15.4.4</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runPromotionValidationV155()">Promotion Validation v15.5</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFailureAttributionV156()">Failure Attribution v15.6</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalQualityV157()">Signal Quality Rebuild v15.7</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4594,6 +4595,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btFullValidation" style="margin-top:8px">v15.4 full 200-session validation has not been run yet.</div>
   <div class="bt-note" id="btPromotionValidation" style="margin-top:8px">v15.5 frozen-rule promotion validation has not been run yet.</div>
   <div class="bt-note" id="btFailureAttribution" style="margin-top:8px">v15.6 failure attribution has not been run yet.</div>
+  <div class="bt-note" id="btSignalQuality157" style="margin-top:8px">v15.7 signal quality rebuild has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5252,6 +5254,18 @@ async function runFailureAttributionV156(){
   const f=d.findings||{}; const fmt=(x)=>x?`${x.name} ${x.accuracy_percent}%/${x.avg_bps}bps n=${x.signals}`:"--";
   if(b)b.textContent=`v15.6 ${d.verdict} · ${d.total_signals} unseen signals · overall ${d.overall_accuracy_percent}%/${d.overall_bps}bps · WORST REGIME ${fmt(f.worst_regime)} · DIRECTION ${fmt(f.worst_direction)} · TIME ${fmt(f.worst_time_bucket)} · CONF ${fmt(f.worst_confidence_bucket)} · VOL ${fmt(f.worst_volatility_bucket)} · ENGINE ${fmt(f.worst_engine)} · ${d.next_action}`;
  }catch(e){if(b)b.textContent="v15.6 attribution error: "+e.message}
+}
+
+async function runSignalQualityV157(){
+ const b=document.getElementById("btSignalQuality157");
+ if(b)b.textContent="v15.7 measuring unseen feature quality across H1/H2/H4/H6 without changing the live strategy…";
+ try{
+  const threshold=Number((document.getElementById("btThreshold")||{}).value||0.20);
+  const r=await fetch("/v15/signal-quality?"+new URLSearchParams({threshold:String(threshold)}),{cache:"no-store"});
+  const d=await r.json(); if(!r.ok||d.status!=="success")throw new Error(d.message||"Signal quality diagnostic failed");
+  const top=(d.top_features||[]).slice(0,6).map(x=>`${x.feature} ${x.direction} · H6 ${x.h6_accuracy_percent}%/${x.h6_avg_bps}bps · score ${x.quality_score}`).join(" | ");
+  if(b)b.textContent=`v15.7 ${d.verdict} · ${d.unseen_candles} unseen candles · ${d.features_tested} features tested · TOP ${top||"--"} · ${d.next_action}`;
+ }catch(e){if(b)b.textContent="v15.7 signal quality error: "+e.message}
 }
 
 async function recoverHistoricalData(){
@@ -10998,4 +11012,86 @@ def v156_failure_attribution(threshold: float=.20, blocks: int=4):
         verdict="CONCENTRATED FAILURE" if harmful else "DIFFUSE FAILURE"
         action=("Failure is concentrated in identifiable buckets. Use these only to define the next research hypothesis; do not change live routing yet." if harmful else "No single bucket cleanly explains failure. Avoid adding filters just to fit this sample; reassess signal features/labels next.")
         return {"status":"success","model_version":"15.6","test":"unseen_failure_attribution","frozen_threshold":threshold,"frozen_regime_engines":router,"total_signals":n,"overall_accuracy_percent":round(wins/n*100,1),"overall_bps":round(avg,2),"dimensions":dims,"findings":findings,"verdict":verdict,"next_action":action,"limitation":"Diagnostic attribution is descriptive, not proof that filtering a weak bucket will improve future performance."}
+    except Exception as e: return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# V15.7 SIGNAL QUALITY REBUILD — FEATURE / FORWARD-RETURN DIAGNOSTICS
+# Research-only. Does not alter the live prediction/router.
+# ============================================================
+def _v157_num(series):
+    return pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+def _v157_candidate_features(df):
+    out=pd.DataFrame(index=df.index)
+    close=_v157_num(df["close"]); high=_v157_num(df["high"]); low=_v157_num(df["low"]); opn=_v157_num(df["open"])
+    # Prefer already-computed research indicators so this diagnostic stays aligned with v14/v15 history.
+    aliases={
+        "rsi":["rsi"], "macd":["macd","macd_line"], "macd_hist":["macd_hist","macd_histogram"],
+        "atr_pct":["atr"], "ema20_gap":["ema20"], "ema50_gap":["ema50"]
+    }
+    for name,cols in aliases.items():
+        col=next((c for c in cols if c in df.columns),None)
+        if col is None: continue
+        v=_v157_num(df[col])
+        if name=="atr_pct": out[name]=v/close
+        elif name.startswith("ema"): out[name]=(close-v)/close
+        elif name=="rsi": out[name]=(v-50.0)/50.0
+        else: out[name]=v
+    # Price/candle features available for every historical row.
+    out["momentum_1"] = close.pct_change(1)
+    out["momentum_2"] = close.pct_change(2)
+    out["momentum_4"] = close.pct_change(4)
+    out["momentum_8"] = close.pct_change(8)
+    out["candle_body"] = (close-opn)/close
+    out["candle_range"] = (high-low)/close
+    out["upper_wick"] = (high-pd.concat([opn,close],axis=1).max(axis=1))/close
+    out["lower_wick"] = (pd.concat([opn,close],axis=1).min(axis=1)-low)/close
+    out["range_position"] = ((close-low)/(high-low).replace(0,np.nan))-.5
+    out["realized_vol_4"] = close.pct_change().rolling(4).std()
+    out["realized_vol_8"] = close.pct_change().rolling(8).std()
+    return out.replace([np.inf,-np.inf],np.nan)
+
+def _v157_feature_score(x, future_bps):
+    z=pd.DataFrame({"x":x,"y":future_bps}).dropna()
+    if len(z)<150 or z["x"].nunique()<10: return None
+    lo=z["x"].quantile(.30); hi=z["x"].quantile(.70)
+    low=z[z["x"]<=lo]["y"]; high=z[z["x"]>=hi]["y"]
+    if min(len(low),len(high))<30: return None
+    # Determine the feature's directional polarity only from the diagnostic sample.
+    high_mean=float(high.mean()); low_mean=float(low.mean())
+    polarity=1.0 if high_mean>=low_mean else -1.0
+    selected=pd.concat([low.assign(side=-polarity),high.assign(side=polarity)]) if False else None
+    moves=pd.concat([low*(-polarity), high*polarity])
+    wins=float((moves>0).mean()*100.0); avg=float(moves.mean())
+    separation=abs(high_mean-low_mean)
+    score=(wins-50.0)*0.6 + min(20.0,separation)*0.4
+    return {"samples":int(len(moves)),"accuracy_percent":round(wins,1),"avg_bps":round(avg,2),"separation_bps":round(separation,2),"quality_score":round(score,2),"direction":"HIGH=BULLISH" if polarity>0 else "HIGH=BEARISH"}
+
+@app.get("/v15/signal-quality")
+def v157_signal_quality(threshold: float=.20):
+    try:
+        raw=_v146_load_raw_history("15m",limit=50000); quality=_v148_quality_report(raw,timeframe="15m")
+        if not quality.get("backtest_ready"): return {"status":"error","message":"History is not backtest-ready."}
+        df=_v146_feature_frame_from_raw(raw)
+        if df is None or len(df)<1000: return {"status":"error","message":"Not enough feature-ready history."}
+        # Match v15.5/v15.6 isolation: inspect only the later chronological 45%.
+        split=max(500,int(len(df)*.55)); unseen=df.iloc[split:].copy(); feats=_v157_candidate_features(unseen)
+        close=_v157_num(unseen["close"]); horizons=(1,2,4,6); rows=[]
+        for feature in feats.columns:
+            item={"feature":feature}; valid=False; h6=None
+            for h in horizons:
+                y=(close.shift(-h)-close)/close*10000.0
+                m=_v157_feature_score(feats[feature],y)
+                item[f"h{h}"]=m
+                if m: valid=True
+                if h==6: h6=m
+            if valid and h6:
+                item.update({"direction":h6["direction"],"h6_accuracy_percent":h6["accuracy_percent"],"h6_avg_bps":h6["avg_bps"],"quality_score":h6["quality_score"]})
+                rows.append(item)
+        rows.sort(key=lambda x:(x.get("quality_score",-999),x.get("h6_avg_bps",-999)),reverse=True)
+        strong=[x for x in rows if x["h6_accuracy_percent"]>=53 and x["h6_avg_bps"]>0 and x["quality_score"]>2]
+        verdict="FEATURE CANDIDATES FOUND" if strong else "NO ROBUST FEATURE CANDIDATE"
+        action=("Freeze the strongest feature hypotheses and test them in a new chronological walk-forward candidate; do not modify live routing from this diagnostic alone." if strong else "Do not add filters. Revisit labels, horizon definition and additional market/option-chain features before another promotion attempt.")
+        return {"status":"success","model_version":"15.7","test":"unseen_feature_forward_return_diagnostic","data_quality":quality,"unseen_candles":len(unseen),"features_tested":len(rows),"horizons_bars":list(horizons),"top_features":rows[:10],"all_features":rows,"verdict":verdict,"next_action":action,"limitation":"Research diagnostic only. Feature polarity and ranking are hypotheses and require fresh chronological validation before use in live predictions."}
     except Exception as e: return {"status":"error","message":str(e)}
