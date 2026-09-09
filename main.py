@@ -4572,6 +4572,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="autoCollectV153()">Auto Collect History v15.3</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="collectorDiagV1531()">Collector Diagnostics v15.3.1</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFullValidationV154()">Run Full Validation v15.4</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
@@ -4589,6 +4590,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btRecoveryStatus" style="margin-top:8px">Historical recovery has not been run yet.</div>
 <div class="bt-note" id="btDatasetBuilder" style="margin-top:8px">v15.1 dataset expansion has not been run yet.</div>
   <div class="bt-note" id="btFullValidation" style="margin-top:8px">v15.4 full 200-session validation has not been run yet.</div>
+  <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
@@ -5197,6 +5199,17 @@ async function autoCollectV153(){
  }catch(e){if(b)b.textContent="v15.3 auto collect error: "+e.message}
 }
 
+
+async function sessionTimestampDiagV1542(){
+ const b=document.getElementById("btTimestampDiag");
+ if(b)b.textContent="v15.4.2 inspecting stored timestamps and NSE session alignment…";
+ try{
+  const r=await fetch("/v15/session-timestamp-diagnostic",{cache:"no-store"});
+  const d=await r.json(); if(!r.ok||d.status!=="success")throw new Error(d.message||"Timestamp diagnostic failed");
+  const x=d.sample_session||{};
+  if(b)b.textContent=`v15.4.2 TIMESTAMP DIAGNOSTIC · raw TZ ${d.raw_index_timezone||"NA"} · assumption ${d.naive_timestamp_assumption||"NA"} · sample ${x.date||"--"} · candles ${x.total_candles||0} · raw ${x.raw_first||"--"} → ${x.raw_last||"--"} · IST ${x.ist_first||"--"} → ${x.ist_last||"--"} · expected IST ${x.expected_first||"09:15"} → ${x.expected_last||"15:15"} · matched ${x.expected_slots_present||0}/${x.expected_slots||0} · missing ${x.missing_slots_count||0}${(x.missing_slots||[]).length?" ["+x.missing_slots.slice(0,10).join(", ")+"]":""} · observed IST slots ${x.observed_slots_preview||"--"} · ${d.diagnosis||""}`;
+ }catch(e){if(b)b.textContent="v15.4.2 timestamp diagnostic error: "+e.message}
+}
 
 async function runFullValidationV154(){
  const b=document.getElementById("btFullValidation");
@@ -8624,6 +8637,25 @@ def _v148_quality_report(raw, timeframe="15m"):
     df = raw.copy()
     df = df.sort_index()
 
+    # v15.4.1: session-quality checks must use NSE local time.
+    # PostgreSQL/psycopg can return timestamptz values in UTC; comparing those
+    # clock times directly with 09:15-15:15 IST makes every valid NSE session
+    # look like a severe gap. Normalize only the diagnostic frame here so the
+    # stored timestamps and research/backtest series remain untouched.
+    try:
+        idx = pd.DatetimeIndex(df.index)
+        if idx.tz is None:
+            # Existing history is written as absolute timestamps; a naive value
+            # from the DB is therefore treated as UTC before converting to IST.
+            idx = idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
+        else:
+            idx = idx.tz_convert("Asia/Kolkata")
+        df.index = idx
+    except Exception:
+        # Keep the original index if normalization is impossible; downstream
+        # diagnostics will still report the observed coverage instead of crash.
+        pass
+
     # Duplicate timestamps in the loaded frame.
     duplicate_count = int(df.index.duplicated(keep=False).sum())
 
@@ -8781,6 +8813,68 @@ def _v148_quality_report(raw, timeframe="15m"):
             )
         )
     }
+
+
+@app.get("/v15/session-timestamp-diagnostic")
+def v1542_session_timestamp_diagnostic():
+    """Expose raw vs IST timestamp alignment for one representative stored session."""
+    try:
+        raw = _v146_load_raw_history("15m", limit=50000)
+        if raw is None or raw.empty:
+            return {"status":"error","message":"Historical store is empty."}
+        df = raw.copy().sort_index()
+        raw_idx = pd.DatetimeIndex(df.index)
+        raw_tz = str(raw_idx.tz) if raw_idx.tz is not None else "NAIVE"
+        assumption = "timezone-aware timestamps converted to Asia/Kolkata"
+        if raw_idx.tz is None:
+            ist_idx = raw_idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
+            assumption = "naive timestamps treated as UTC, then converted to Asia/Kolkata"
+        else:
+            ist_idx = raw_idx.tz_convert("Asia/Kolkata")
+        expected = _v148_expected_session_times()
+        expected_set = set(expected)
+        groups = {}
+        for pos, ts in enumerate(ist_idx):
+            groups.setdefault(ts.date().isoformat(), []).append(pos)
+        # Prefer a recent session with a normal-sized number of candles.
+        candidates = sorted(groups.items(), key=lambda kv: kv[0], reverse=True)
+        chosen_date, positions = candidates[0]
+        for d, ps in candidates:
+            if len(ps) >= 20:
+                chosen_date, positions = d, ps
+                break
+        raw_sample = raw_idx[positions]
+        ist_sample = ist_idx[positions]
+        observed = sorted(set((t.hour,t.minute) for t in ist_sample))
+        present = sorted(expected_set.intersection(observed))
+        missing = sorted(expected_set.difference(observed))
+        fmt=lambda hm:f"{hm[0]:02d}:{hm[1]:02d}"
+        outside=sorted(set(observed).difference(expected_set))
+        # Also show the raw clock slots; this makes a timezone mismatch visible immediately.
+        raw_slots=sorted(set((t.hour,t.minute) for t in raw_sample))
+        if len(present) >= 24:
+            diagnosis="Stored session aligns with the NSE 09:15–15:15 IST grid; if v14.8 still reports severe gaps, its grouping/coverage path is inconsistent with this diagnostic."
+        elif len(raw_slots) >= 20 and len(present) < 10:
+            diagnosis="Stored candles are plentiful but do not align with the expected IST grid after conversion. Use the raw/IST ranges above to correct the timestamp assumption before changing readiness thresholds."
+        else:
+            diagnosis="The sampled session is genuinely sparse or irregular; inspect missing slots before allowing long-horizon validation."
+        return {
+            "status":"success","model_version":"15.4.2","stored_rows":int(len(df)),
+            "raw_index_timezone":raw_tz,"naive_timestamp_assumption":assumption,
+            "sample_session":{
+                "date":chosen_date,"total_candles":int(len(positions)),
+                "raw_first":raw_sample[0].isoformat(),"raw_last":raw_sample[-1].isoformat(),
+                "ist_first":ist_sample[0].isoformat(),"ist_last":ist_sample[-1].isoformat(),
+                "expected_first":"09:15","expected_last":"15:15","expected_slots":len(expected),
+                "expected_slots_present":len(present),"missing_slots_count":len(missing),
+                "missing_slots":[fmt(x) for x in missing],
+                "outside_expected_slots":[fmt(x) for x in outside],
+                "raw_slots_preview":", ".join(fmt(x) for x in raw_slots[:12]),
+                "observed_slots_preview":", ".join(fmt(x) for x in observed[:12]),
+            },"diagnosis":diagnosis
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
 
 
 @app.get("/v14/history/quality")
