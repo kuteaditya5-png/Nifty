@@ -4605,6 +4605,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="acquireOptionOiV1512()">Acquire Historical Option OI v15.12</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runOptionOiValidationV1512()">Independent Option OI Validation v15.12</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="expandOptionOiV1513()">Expand + Diagnose Option OI v15.13</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="auditOptionOiV1514()">Audit Upstox OI Payload v15.14</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4632,6 +4633,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btOptionOiAcquire1512" style="margin-top:8px">v15.12 historical option OI has not been acquired yet.</div>
   <div class="bt-note" id="btOptionOiValidation1512" style="margin-top:8px">v15.12 independent option OI validation has not been run yet.</div>
   <div class="bt-note" id="btOptionOiExpand1513" style="margin-top:8px">v15.13 OI expansion/coverage diagnostic has not been run yet.</div>
+  <div class="bt-note" id="btOptionOiAudit1514" style="margin-top:8px">v15.14 Upstox OI payload audit has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5371,6 +5373,21 @@ async function runOptionOiValidationV1512(){
   const failed=Object.entries(d.gate_checks||{}).filter(([,v])=>!v).map(([k])=>k).join(", ")||"none";
   if(b)b.textContent=`v15.12 ${d.verdict} · HISTORICAL OPTION OI · ${x.independent_signals||0} independent signals · accuracy ${x.weighted_accuracy_percent||0}% · gross ${x.gross_avg_bps||0}bps · NET ${x.net_avg_bps||0}bps · p=${x.p_value} · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · OI days ${d.oi_days||0} · failing: ${failed} · ${fs} · ${d.next_action}`;
  }catch(e){if(b)b.textContent="v15.12 option OI validation error: "+e.message}
+}
+
+
+async function auditOptionOiV1514(){
+ const b=document.getElementById("btOptionOiAudit1514");
+ if(b)b.textContent="v15.14 auditing stored OI rows and fresh Upstox payload shape…";
+ try{
+  const r=await fetch("/v15/option-oi-payload-audit?sample_days=12",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"OI audit failed");
+  const x=d.summary||{};
+  const fields=Object.entries(d.stored_field_coverage||{}).map(([k,v])=>`${k}:${v}`).join(" · ");
+  const reasons=Object.entries(d.rejection_reasons||{}).map(([k,v])=>`${k}:${v}`).join(" · ");
+  if(b)b.textContent=`v15.14 OI PAYLOAD AUDIT · stored ${x.stored_days||0} days · usable ${x.usable_days||0} · unusable ${x.unusable_days||0} · fresh sampled ${x.fresh_sampled||0} · payload shapes ${x.payload_shapes||0} · fields ${fields} · rejection ${reasons} · ${d.diagnosis||""} · ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="v15.14 OI payload audit error: "+e.message}
 }
 
 async function expandOptionOiV1513(){
@@ -12422,6 +12439,158 @@ def v15132_option_oi_diagnostic():
                 "Validation readiness is now based only on usable OI dates/bars."
             ),
             "live_routing_changed":False
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# v15.14 — UPSTOX HISTORICAL OI PAYLOAD AUDIT
+# Diagnostic only. No live routing changes.
+# ============================================================
+
+def _v1514_raw_shape(obj):
+    if isinstance(obj,dict):
+        return sorted(str(k) for k in obj.keys())
+    return [type(obj).__name__]
+
+def _v1514_extract_payload_summary(body):
+    data=body.get("data") if isinstance(body,dict) else None
+    out={
+        "top_keys":_v1514_raw_shape(body),
+        "data_type":type(data).__name__,
+        "data_keys":_v1514_raw_shape(data) if isinstance(data,dict) else [],
+        "list_len":0,
+        "first_item_keys":[],
+        "recognized":{
+            "total_puts":None,"total_calls":None,"spot_closing_price":None,
+            "call_put_oi_data_list_present":False
+        }
+    }
+    if isinstance(data,dict):
+        out["recognized"]["total_puts"]=data.get("total_puts")
+        out["recognized"]["total_calls"]=data.get("total_calls")
+        out["recognized"]["spot_closing_price"]=data.get("spot_closing_price")
+        rows=data.get("call_put_oi_data_list")
+        out["recognized"]["call_put_oi_data_list_present"]=isinstance(rows,list)
+        if isinstance(rows,list):
+            out["list_len"]=len(rows)
+            if rows and isinstance(rows[0],dict):
+                out["first_item_keys"]=sorted(str(k) for k in rows[0].keys())
+    elif isinstance(data,list):
+        out["list_len"]=len(data)
+        if data and isinstance(data[0],dict):
+            out["first_item_keys"]=sorted(str(k) for k in data[0].keys())
+    return out
+
+@app.get("/v15/option-oi-payload-audit")
+def v1514_option_oi_payload_audit(sample_days:int=12):
+    try:
+        sample_days=max(4,min(int(sample_days),20))
+        od=_v1512_load_oi()
+        if od.empty:
+            return {"status":"error","message":"No stored historical OI rows exist."}
+
+        t=od.copy()
+        fields=["pcr_oi","near_atm_pcr","oi_imbalance","total_put_oi","total_call_oi"]
+        for c in fields:
+            t[c]=pd.to_numeric(t[c],errors="coerce").replace([np.inf,-np.inf],np.nan)
+
+        usable=t[fields].notna().any(axis=1)
+        usable_dates=[pd.Timestamp(x).date() for x in t.index[usable]]
+        unusable_dates=[pd.Timestamp(x).date() for x in t.index[~usable]]
+
+        coverage={c:int(t[c].notna().sum()) for c in fields}
+        rejection={
+            "all_research_fields_null":int((~usable).sum()),
+            "total_put_oi_null":int(t["total_put_oi"].isna().sum()),
+            "total_call_oi_null":int(t["total_call_oi"].isna().sum()),
+            "pcr_null":int(t["pcr_oi"].isna().sum()),
+            "near_atm_pcr_null":int(t["near_atm_pcr"].isna().sum()),
+            "imbalance_null":int(t["oi_imbalance"].isna().sum()),
+        }
+
+        # Prefer auditing unusable dates, plus a few known-usable controls.
+        targets=[]
+        for d in unusable_dates[-sample_days:]: targets.append(("unusable",d))
+        controls=max(2,min(4,sample_days//3))
+        for d in usable_dates[-controls:]: targets.append(("usable_control",d))
+
+        expiries=_v1512_expiries()
+        fresh=[]
+        shape_counts={}
+        headers=_v1512_headers()
+        for label,d in targets:
+            e=_v1512_pick_expiry(d,expiries)
+            rec={"class":label,"date":d.isoformat(),"expiry":e.isoformat() if e else None}
+            if not e:
+                rec["error"]="No expiry selected for date"
+                fresh.append(rec); continue
+            try:
+                r=requests.get(
+                    "https://api.upstox.com/v2/market/oi",
+                    params={"instrument_key":"NSE_INDEX|Nifty 50","expiry":e.isoformat(),"date":d.isoformat()},
+                    headers=headers,timeout=12
+                )
+                rec["http_status"]=r.status_code
+                if r.status_code==200:
+                    body=r.json()
+                    sm=_v1514_extract_payload_summary(body)
+                    rec["payload"]=sm
+                    sig="data="+sm["data_type"]+"|keys="+",".join(sm["data_keys"])+"|item="+",".join(sm["first_item_keys"])
+                    shape_counts[sig]=shape_counts.get(sig,0)+1
+                else:
+                    try: rec["error_body"]=r.json()
+                    except Exception: rec["error_body"]=r.text[:400]
+            except Exception as e2:
+                rec["error"]=str(e2)[:300]
+            fresh.append(rec)
+
+        # Determine whether parser/API-shape mismatch is evident.
+        fresh_200=[x for x in fresh if x.get("http_status")==200]
+        expected=sum(
+            1 for x in fresh_200
+            if isinstance(x.get("payload"),dict)
+            and (
+                x["payload"]["recognized"].get("total_puts") is not None
+                or x["payload"]["recognized"].get("total_calls") is not None
+                or x["payload"]["recognized"].get("call_put_oi_data_list_present")
+            )
+        )
+        alt_shapes=len(fresh_200)-expected
+
+        if alt_shapes>0:
+            diagnosis=(
+                "Fresh HTTP-200 responses include payload shapes that do not match the fields "
+                "currently parsed by v15.12. This points to a parser/API-response-shape issue."
+            )
+            next_action="Use the audit samples to update the parser before acquiring or validating more history."
+        elif fresh_200 and expected==len(fresh_200):
+            diagnosis=(
+                "Fresh sampled responses match the parser's expected Upstox OI shape. "
+                "The historical unusable rows are more likely stale/previously incomplete stored rows or provider-date availability differences."
+            )
+            next_action="Next build should selectively re-fetch unusable stored dates and overwrite them only when real OI fields are present."
+        else:
+            diagnosis="Fresh payload sampling did not produce enough HTTP-200 responses to classify the issue."
+            next_action="Review HTTP status/error bodies in audit_samples before changing the parser or validation."
+
+        return {
+            "status":"success","version":"15.14",
+            "summary":{
+                "stored_days":len(t),"usable_days":int(usable.sum()),
+                "unusable_days":int((~usable).sum()),
+                "fresh_sampled":len(fresh),"fresh_http_200":len(fresh_200),
+                "payload_shapes":len(shape_counts)
+            },
+            "stored_field_coverage":coverage,
+            "rejection_reasons":rejection,
+            "payload_shape_counts":shape_counts,
+            "audit_samples":fresh,
+            "diagnosis":diagnosis,
+            "next_action":next_action,
+            "live_routing_changed":False,
+            "note":"Audit exposes field names/types/status only; it does not return or log the access token."
         }
     except Exception as e:
         return {"status":"error","message":str(e)}
