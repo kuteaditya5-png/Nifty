@@ -12135,7 +12135,7 @@ def v1512_option_oi_validation(blocks:int=4, cost_bps:float=3.0):
             return {
                 "status":"error",
                 "version":"15.13.1",
-                "message":f"Historical OI overlaps only {len(positions)} NIFTY bars after IST alignment.",
+                "message":f"Only {len(positions)} NIFTY bars have USABLE historical OI research fields after IST alignment. Stored OI row count is not treated as usable coverage.",
                 "oi_days":len(oi_dates),
                 "nifty_days":len(nifty_dates),
                 "overlap_days":len(overlap_dates),
@@ -12294,24 +12294,49 @@ def _v1513_coverage(raw):
     nifty_set = set(nifty_dates)
     od = _v1512_load_oi()
     oi_dates = set(pd.Timestamp(x).date() for x in od.index) if not od.empty else set()
-    overlap = sorted(nifty_set & oi_dates)
-    overlap_bars = sum(bar_counts.get(d, 0) for d in overlap)
-    inside_missing = []
+
+    # v15.13.2: distinguish STORED OI rows from USABLE OI rows.
+    # A provider response can create a dated row while one or more research
+    # fields are null/zero. The old coverage screen counted those dates as
+    # validation-ready, which overstated overlap (e.g. 2,956 bars while the
+    # validator could actually use only ~275).
+    usable_dates = set()
+    field_coverage = {}
+    research_cols = ["pcr_oi","near_atm_pcr","oi_imbalance","total_put_oi","total_call_oi"]
+    if not od.empty:
+        tmp = od.copy()
+        for c in research_cols:
+            tmp[c] = pd.to_numeric(tmp[c], errors="coerce")
+            field_coverage[c] = int(tmp[c].notna().sum())
+        usable_mask = tmp[research_cols].notna().any(axis=1)
+        usable_dates = {pd.Timestamp(x).date() for x in tmp.index[usable_mask]}
+
+    stored_overlap = sorted(nifty_set & oi_dates)
+    usable_overlap = sorted(nifty_set & usable_dates)
+    stored_overlap_bars = sum(bar_counts.get(d,0) for d in stored_overlap)
+    usable_overlap_bars = sum(bar_counts.get(d,0) for d in usable_overlap)
+
+    inside_missing=[]
     if oi_dates:
-        lo, hi = min(oi_dates), max(oi_dates)
-        inside_missing = [d for d in nifty_dates if lo <= d <= hi and d not in oi_dates]
+        lo,hi=min(oi_dates),max(oi_dates)
+        inside_missing=[d for d in nifty_dates if lo<=d<=hi and d not in oi_dates]
+
     return {
-        "nifty_trading_days": len(nifty_dates),
-        "oi_days": len(oi_dates),
-        "overlap_days": len(overlap),
-        "coverage_percent": round((len(overlap) / len(nifty_dates) * 100.0), 2) if nifty_dates else 0.0,
-        "overlap_bars": int(overlap_bars),
-        "estimated_nonoverlap_h6_capacity": int(overlap_bars // 6),
-        "missing_days_inside_oi_span": len(inside_missing),
-        "oi_start": min(oi_dates).isoformat() if oi_dates else None,
-        "oi_end": max(oi_dates).isoformat() if oi_dates else None,
-        "overlap_start": overlap[0].isoformat() if overlap else None,
-        "overlap_end": overlap[-1].isoformat() if overlap else None,
+        "nifty_trading_days":len(nifty_dates),
+        "oi_days":len(oi_dates),
+        "stored_overlap_days":len(stored_overlap),
+        "stored_overlap_bars":int(stored_overlap_bars),
+        "usable_oi_days":len(usable_dates),
+        "overlap_days":len(usable_overlap),
+        "coverage_percent":round((len(usable_overlap)/len(nifty_dates)*100.0),2) if nifty_dates else 0.0,
+        "overlap_bars":int(usable_overlap_bars),
+        "estimated_nonoverlap_h6_capacity":int(usable_overlap_bars//6),
+        "missing_days_inside_oi_span":len(inside_missing),
+        "field_coverage_days":field_coverage,
+        "oi_start":min(oi_dates).isoformat() if oi_dates else None,
+        "oi_end":max(oi_dates).isoformat() if oi_dates else None,
+        "overlap_start":usable_overlap[0].isoformat() if usable_overlap else None,
+        "overlap_end":usable_overlap[-1].isoformat() if usable_overlap else None,
     }
 
 
@@ -12389,7 +12414,7 @@ def v1513_option_oi_expand(max_days:int=60):
         coverage = _v1513_coverage(raw)
         cap = coverage["estimated_nonoverlap_h6_capacity"]
         if cap >= 240 and coverage["overlap_days"] >= 45:
-            action = "Coverage is now large enough for a meaningful H6 research run. Run Independent Option OI Validation v15.12."
+            action = "USABLE OI coverage is now large enough for a meaningful H6 research run. Run Independent Option OI Validation."
         elif not todo:
             action = "No more eligible missing dates are visible through the provider expiry catalogue. Keep live routing unchanged; the provider window is the limiting factor."
         else:
@@ -12399,6 +12424,34 @@ def v1513_option_oi_expand(max_days:int=60):
             "requested_dates":len(todo),"fetched_dates":len(fetched),"rows_written":len(fetched),
             "failures":failures,"store":_v1512_store_status(),"coverage":coverage,
             "live_routing_changed":False,"next_action":action
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+
+@app.get("/v15/option-oi-diagnostic-v15132")
+def v15132_option_oi_diagnostic():
+    try:
+        raw=_v146_load_raw_history("15m",limit=50000)
+        cov=_v1513_coverage(raw)
+        od=_v1512_load_oi()
+        sample=[]
+        if not od.empty:
+            t=od.copy()
+            cols=["pcr_oi","near_atm_pcr","oi_imbalance","total_put_oi","total_call_oi"]
+            for c in cols:
+                t[c]=pd.to_numeric(t[c],errors="coerce")
+            bad=t[t[cols].isna().all(axis=1)]
+            sample=[pd.Timestamp(x).date().isoformat() for x in bad.index[:10]]
+        return {
+            "status":"success","version":"15.13.2",
+            "coverage":cov,
+            "stored_but_unusable_sample_dates":sample,
+            "diagnosis":(
+                "Stored OI dates are counted separately from dates containing usable research fields. "
+                "Validation readiness is now based only on usable OI dates/bars."
+            ),
+            "live_routing_changed":False
         }
     except Exception as e:
         return {"status":"error","message":str(e)}
