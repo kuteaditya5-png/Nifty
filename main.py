@@ -4557,7 +4557,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <button class="primary" style="width:100%;margin-top:8px" onclick="runExtendedValidation()">Extended Historical Validation v14.5</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="syncHistoryStore()">Sync Historical Store v14.6</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="historyStoreStatus()">History Store Status</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="historyQualityCheck()">Data Quality & Gap Check v14.8</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="historyQualityCheck()">Data Quality & Gap Check v15.4.3</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="recoverHistoricalData()">Historical Data Recovery v14.9</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="checkBacktestReadiness()">Backtest Readiness Gate</button>
           <input id="historyBackfillFile" type="file" accept=".csv" style="width:100%;margin-top:8px;padding:10px;border:1px solid #2b3f59;border-radius:10px;background:#0b1828;color:#dce8f8">
@@ -8626,191 +8626,127 @@ def _v148_expected_session_times():
     return times
 
 
+def _v1543_to_ist_index(index):
+    """Return a timezone-aware Asia/Kolkata DatetimeIndex for NSE session checks."""
+    idx = pd.DatetimeIndex(index)
+    if idx.tz is None:
+        # History is persisted as absolute instants. If a DB driver returns those
+        # values without tzinfo, interpret them as UTC before converting to IST.
+        return idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
+    return idx.tz_convert("Asia/Kolkata")
+
+
 def _v148_quality_report(raw, timeframe="15m"):
     if raw is None or raw.empty:
+        return {"status": "EMPTY", "stored_rows": 0, "message": "Historical store is empty."}
+
+    df = raw.copy().sort_index()
+
+    # v15.4.3: use the exact same timestamp conversion path as the timestamp
+    # diagnostic. Session date and clock-slot classification are BOTH derived
+    # only after conversion to Asia/Kolkata. Stored history is never mutated.
+    try:
+        df.index = _v1543_to_ist_index(df.index)
+    except Exception as e:
         return {
-            "status": "EMPTY",
-            "stored_rows": 0,
-            "message": "Historical store is empty."
+            "status": "error",
+            "verdict": "FAIL",
+            "stored_rows": int(len(df)),
+            "message": f"Unable to normalize historical timestamps to Asia/Kolkata: {e}",
+            "backtest_ready": False,
         }
 
-    df = raw.copy()
-    df = df.sort_index()
-
-    # v15.4.1: session-quality checks must use NSE local time.
-    # PostgreSQL/psycopg can return timestamptz values in UTC; comparing those
-    # clock times directly with 09:15-15:15 IST makes every valid NSE session
-    # look like a severe gap. Normalize only the diagnostic frame here so the
-    # stored timestamps and research/backtest series remain untouched.
-    try:
-        idx = pd.DatetimeIndex(df.index)
-        if idx.tz is None:
-            # Existing history is written as absolute timestamps; a naive value
-            # from the DB is therefore treated as UTC before converting to IST.
-            idx = idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
-        else:
-            idx = idx.tz_convert("Asia/Kolkata")
-        df.index = idx
-    except Exception:
-        # Keep the original index if normalization is impossible; downstream
-        # diagnostics will still report the observed coverage instead of crash.
-        pass
-
-    # Duplicate timestamps in the loaded frame.
     duplicate_count = int(df.index.duplicated(keep=False).sum())
+    invalid_ohlc = int(((df["High"] < df["Low"]) | (df["Open"] <= 0) | (df["High"] <= 0) | (df["Low"] <= 0) | (df["Close"] <= 0)).sum())
 
-    # Basic OHLC validity.
-    invalid_ohlc = int((
-        (df["High"] < df["Low"])
-        | (df["Open"] <= 0)
-        | (df["High"] <= 0)
-        | (df["Low"] <= 0)
-        | (df["Close"] <= 0)
-    ).sum())
-
-    # Same-session spacing diagnostics.
-    diffs = (
-        df.index.to_series()
-        .diff()
-        .dropna()
-        .dt.total_seconds()
-        .div(60.0)
-    )
-    positive = diffs[diffs > 0]
-    intraday = positive[positive <= 180]
-    median_interval = (
-        float(intraday.median())
-        if not intraday.empty
-        else (float(positive.median()) if not positive.empty else None)
-    )
-
-    # Per-day candle coverage.
     expected_slots = _v148_expected_session_times()
+    expected_set = set(expected_slots)
     expected_per_day = len(expected_slots)
 
+    # Group only after IST conversion. Outside-session observations do not count
+    # toward coverage and cannot shift a valid UTC/GMT candle into the wrong day.
     by_date = {}
     for ts in df.index:
         d = ts.date().isoformat()
-        by_date.setdefault(d, set()).add((ts.hour, ts.minute))
+        rec = by_date.setdefault(d, {"all": set(), "expected": set()})
+        slot = (int(ts.hour), int(ts.minute))
+        rec["all"].add(slot)
+        if slot in expected_set:
+            rec["expected"].add(slot)
 
-    daily = []
-    total_expected = 0
-    total_present = 0
-    severe_gap_days = 0
-    partial_days = 0
-    full_days = 0
-
+    daily=[]; total_expected=0; total_present=0
+    severe_gap_days=partial_days=full_days=0
     for d in sorted(by_date):
-        observed = by_date[d]
-        present = sum(1 for slot in expected_slots if slot in observed)
-        missing = expected_per_day - present
-        coverage = present / expected_per_day * 100.0 if expected_per_day else 0.0
-
-        if coverage >= 96:
-            label = "FULL"
-            full_days += 1
+        observed = by_date[d]["expected"]
+        present = len(observed)
+        missing_slots = sorted(expected_set.difference(observed))
+        missing = len(missing_slots)
+        coverage = (present / expected_per_day * 100.0) if expected_per_day else 0.0
+        if present == expected_per_day or coverage >= 96:
+            label="FULL"; full_days += 1
         elif coverage >= 70:
-            label = "PARTIAL"
-            partial_days += 1
+            label="PARTIAL"; partial_days += 1
         else:
-            label = "SEVERE_GAP"
-            severe_gap_days += 1
-
-        total_expected += expected_per_day
-        total_present += present
-
+            label="SEVERE_GAP"; severe_gap_days += 1
+        total_expected += expected_per_day; total_present += present
         daily.append({
-            "date": d,
-            "present": present,
-            "expected": expected_per_day,
-            "missing": missing,
-            "coverage_percent": round(coverage, 1),
-            "status": label,
+            "date": d, "present": present, "expected": expected_per_day,
+            "missing": missing, "coverage_percent": round(coverage,1), "status": label,
+            "missing_slots": [f"{h:02d}:{m:02d}" for h,m in missing_slots[:10]],
         })
 
-    overall_coverage = (
-        total_present / total_expected * 100.0
-        if total_expected else 0.0
-    )
+    overall_coverage=(total_present/total_expected*100.0) if total_expected else 0.0
+    span_days=(df.index[-1].date()-df.index[0].date()).days
+    actual_sessions=len(by_date)
 
-    # Calendar-span vs actual sessions.
-    span_days = (
-        df.index[-1].date() - df.index[0].date()
-    ).days
+    # Median interval is calculated within each IST session so overnight/weekend
+    # gaps cannot distort the 15-minute cadence diagnostic.
+    interval_values=[]
+    for _, grp in df.groupby(df.index.date):
+        ds=grp.index.to_series().diff().dropna().dt.total_seconds().div(60.0)
+        interval_values.extend(ds[(ds>0)&(ds<=180)].tolist())
+    median_interval=float(pd.Series(interval_values).median()) if interval_values else None
 
-    actual_sessions = len(by_date)
-
-    # Detect large chronological holes between stored trading sessions.
-    dates = sorted(by_date.keys())
-    session_gaps = []
+    dates=sorted(by_date.keys()); session_gaps=[]
     import datetime as _dt
-    for i in range(1, len(dates)):
-        prev = _dt.date.fromisoformat(dates[i-1])
-        curr = _dt.date.fromisoformat(dates[i])
-        gap = (curr - prev).days
-        if gap >= 4:
-            session_gaps.append({
-                "from": dates[i-1],
-                "to": dates[i],
-                "calendar_gap_days": gap,
-            })
+    for i in range(1,len(dates)):
+        prev=_dt.date.fromisoformat(dates[i-1]); curr=_dt.date.fromisoformat(dates[i]); gap=(curr-prev).days
+        if gap>=4:
+            session_gaps.append({"from":dates[i-1],"to":dates[i],"calendar_gap_days":gap})
 
-    # Outlier candles: very large body/range vs ATR-like rolling range.
-    ranges = (df["High"] - df["Low"]).astype(float)
-    rolling_med = ranges.rolling(50, min_periods=10).median()
-    abnormal_range = int(((ranges > rolling_med * 8) & rolling_med.notna()).sum())
+    ranges=(df["High"]-df["Low"]).astype(float)
+    rolling_med=ranges.rolling(50,min_periods=10).median()
+    abnormal_range=int(((ranges>rolling_med*8)&rolling_med.notna()).sum())
 
-    # Quality verdict
-    if duplicate_count > 0 or invalid_ohlc > 0:
-        verdict = "FAIL"
-    elif overall_coverage >= 95 and severe_gap_days == 0 and abnormal_range == 0:
-        verdict = "PASS"
-    elif overall_coverage >= 80 and severe_gap_days <= max(2, int(actual_sessions * 0.05)):
-        verdict = "CAUTION"
+    if duplicate_count>0 or invalid_ohlc>0:
+        verdict="FAIL"
+    elif overall_coverage>=95 and severe_gap_days==0 and abnormal_range==0:
+        verdict="PASS"
+    elif overall_coverage>=80 and severe_gap_days<=max(2,int(actual_sessions*0.05)):
+        verdict="CAUTION"
     else:
-        verdict = "FAIL"
+        verdict="FAIL"
 
+    ready=bool(verdict=="PASS" and overall_coverage>=95 and actual_sessions>=100)
     return {
-        "status": "success",
-        "verdict": verdict,
-        "timeframe": timeframe,
-        "stored_rows": len(df),
-        "stored_start": df.index[0].isoformat(),
-        "stored_end": df.index[-1].isoformat(),
-        "calendar_span_days": span_days,
-        "actual_trading_sessions": actual_sessions,
-        "expected_candles_per_session": expected_per_day,
-        "overall_coverage_percent": round(overall_coverage, 1),
-        "full_days": full_days,
-        "partial_days": partial_days,
-        "severe_gap_days": severe_gap_days,
-        "duplicate_timestamp_rows": duplicate_count,
-        "invalid_ohlc_rows": invalid_ohlc,
-        "abnormal_range_rows": abnormal_range,
-        "median_intraday_interval_minutes": (
-            round(median_interval, 2)
-            if median_interval is not None else None
-        ),
-        "large_session_gaps": session_gaps[:25],
-        "worst_days": sorted(
-            daily,
-            key=lambda x: x["coverage_percent"]
-        )[:15],
-        "recent_days": daily[-15:],
-        "backtest_ready": (
-            verdict == "PASS"
-            and overall_coverage >= 95
-            and actual_sessions >= 100
-        ),
+        "status":"success", "model_version":"15.4.3", "verdict":verdict,
+        "timeframe":timeframe, "session_timezone":"Asia/Kolkata",
+        "session_grid":"09:15-15:15 IST", "stored_rows":len(df),
+        "stored_start":df.index[0].isoformat(), "stored_end":df.index[-1].isoformat(),
+        "calendar_span_days":span_days, "actual_trading_sessions":actual_sessions,
+        "expected_candles_per_session":expected_per_day,
+        "overall_coverage_percent":round(overall_coverage,1),
+        "full_days":full_days, "partial_days":partial_days, "severe_gap_days":severe_gap_days,
+        "duplicate_timestamp_rows":duplicate_count, "invalid_ohlc_rows":invalid_ohlc,
+        "abnormal_range_rows":abnormal_range,
+        "median_intraday_interval_minutes":round(median_interval,2) if median_interval is not None else None,
+        "large_session_gaps":session_gaps[:25],
+        "worst_days":sorted(daily,key=lambda x:x["coverage_percent"])[:15],
+        "recent_days":daily[-15:], "backtest_ready":ready,
         "recommendation": (
-            "PASS: suitable for serious validation."
-            if verdict == "PASS"
-            else (
-                "CAUTION: usable for exploratory analysis, but import more history / fill gaps before promotion testing."
-                if verdict == "CAUTION"
-                else
-                "FAIL: do not trust long-horizon backtest conclusions until historical gaps/data issues are fixed."
-            )
+            "PASS: suitable for serious validation." if verdict=="PASS" else
+            "CAUTION: usable for exploratory analysis, but import more history / fill gaps before promotion testing." if verdict=="CAUTION" else
+            "FAIL: do not trust long-horizon backtest conclusions until historical gaps/data issues are fixed."
         )
     }
 
@@ -8827,10 +8763,8 @@ def v1542_session_timestamp_diagnostic():
         raw_tz = str(raw_idx.tz) if raw_idx.tz is not None else "NAIVE"
         assumption = "timezone-aware timestamps converted to Asia/Kolkata"
         if raw_idx.tz is None:
-            ist_idx = raw_idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
             assumption = "naive timestamps treated as UTC, then converted to Asia/Kolkata"
-        else:
-            ist_idx = raw_idx.tz_convert("Asia/Kolkata")
+        ist_idx = _v1543_to_ist_index(raw_idx)
         expected = _v148_expected_session_times()
         expected_set = set(expected)
         groups = {}
