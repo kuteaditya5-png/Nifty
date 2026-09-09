@@ -4606,6 +4606,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="runOptionOiValidationV1512()">Independent Option OI Validation v15.12</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="expandOptionOiV1513()">Expand + Diagnose Option OI v15.13</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="auditOptionOiV1514()">Audit Upstox OI Payload v15.14</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="reconstructOptionOiV1515()">Reconstruct Historical OI Features v15.15</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4634,6 +4635,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btOptionOiValidation1512" style="margin-top:8px">v15.12 independent option OI validation has not been run yet.</div>
   <div class="bt-note" id="btOptionOiExpand1513" style="margin-top:8px">v15.13 OI expansion/coverage diagnostic has not been run yet.</div>
   <div class="bt-note" id="btOptionOiAudit1514" style="margin-top:8px">v15.14 Upstox OI payload audit has not been run yet.</div>
+  <div class="bt-note" id="btOptionOiReconstruct1515" style="margin-top:8px">v15.15 historical OI feature reconstruction has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5375,6 +5377,19 @@ async function runOptionOiValidationV1512(){
  }catch(e){if(b)b.textContent="v15.12 option OI validation error: "+e.message}
 }
 
+
+
+async function reconstructOptionOiV1515(){
+ const b=document.getElementById("btOptionOiReconstruct1515");
+ if(b)b.textContent="v15.15 reconstructing PCR and aggregate OI imbalance from stored genuine Put/Call OI…";
+ try{
+  const r=await fetch("/v15/option-oi-reconstruct-v1515",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"OI reconstruction failed");
+  const a=d.after||{}, c=d.coverage||{};
+  if(b)b.textContent=`v15.15 OI RECONSTRUCTION · stored ${a.stored_days||0} days · PCR ${a.pcr_days||0} · imbalance ${a.imbalance_days||0} · near-ATM PCR ${a.near_atm_pcr_days||0} · reconstructed PCR ${d.rows_pcr_reconstructed||0} · reconstructed imbalance ${d.rows_imbalance_reconstructed||0} · usable overlap ${c.overlap_days||0}/${c.nifty_trading_days||0} days · overlap bars ${c.overlap_bars||0} · H6 capacity ~${c.estimated_nonoverlap_h6_capacity||0} · ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="v15.15 OI reconstruction error: "+e.message}
+}
 
 async function auditOptionOiV1514(){
  const b=document.getElementById("btOptionOiAudit1514");
@@ -12591,6 +12606,101 @@ def v1514_option_oi_payload_audit(sample_days:int=12):
             "next_action":next_action,
             "live_routing_changed":False,
             "note":"Audit exposes field names/types/status only; it does not return or log the access token."
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# v15.15 — HISTORICAL OI FEATURE RECONSTRUCTION
+# Reconstructs only mathematically derivable aggregate fields from genuine
+# stored Upstox total Put/Call OI. Near-ATM data is NEVER fabricated.
+# Diagnostic/research only; live CE/PE/WAIT routing remains unchanged.
+# ============================================================
+
+def _v1515_counts():
+    od=_v1512_load_oi()
+    if od.empty:
+        return {"stored_days":0,"pcr_days":0,"imbalance_days":0,"near_atm_pcr_days":0,
+                "put_oi_days":0,"call_oi_days":0}
+    x=od.copy()
+    cols=["pcr_oi","near_atm_pcr","oi_imbalance","total_put_oi","total_call_oi"]
+    for c in cols:
+        x[c]=pd.to_numeric(x[c],errors="coerce").replace([np.inf,-np.inf],np.nan)
+    return {
+        "stored_days":int(len(x)),
+        "pcr_days":int(x["pcr_oi"].notna().sum()),
+        "imbalance_days":int(x["oi_imbalance"].notna().sum()),
+        "near_atm_pcr_days":int(x["near_atm_pcr"].notna().sum()),
+        "put_oi_days":int(x["total_put_oi"].notna().sum()),
+        "call_oi_days":int(x["total_call_oi"].notna().sum()),
+    }
+
+@app.get("/v15/option-oi-reconstruct-v1515")
+def v1515_option_oi_reconstruct():
+    try:
+        _v1512_ensure_oi_table()
+        before=_v1515_counts()
+        if before["stored_days"]==0:
+            return {"status":"error","message":"No stored historical OI rows exist."}
+
+        # Only derive fields where the underlying genuine totals are present.
+        # PCR = Put OI / Call OI, requiring Call OI > 0.
+        # Imbalance = (Put OI - Call OI)/(Put OI + Call OI), requiring total > 0.
+        # Existing non-null values are preserved.
+        with _v146_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE nifty_option_oi_daily
+                    SET pcr_oi = total_put_oi / NULLIF(total_call_oi,0),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE pcr_oi IS NULL
+                      AND total_put_oi IS NOT NULL
+                      AND total_call_oi IS NOT NULL
+                      AND total_call_oi > 0
+                """)
+                pcr_rows=cur.rowcount
+                cur.execute("""
+                    UPDATE nifty_option_oi_daily
+                    SET oi_imbalance =
+                        (total_put_oi-total_call_oi) /
+                        NULLIF(total_put_oi+total_call_oi,0),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE oi_imbalance IS NULL
+                      AND total_put_oi IS NOT NULL
+                      AND total_call_oi IS NOT NULL
+                      AND (total_put_oi+total_call_oi) > 0
+                """)
+                imb_rows=cur.rowcount
+            conn.commit()
+
+        after=_v1515_counts()
+        raw=_v146_load_raw_history("15m",limit=50000)
+        coverage=_v1513_coverage(raw)
+
+        ready=(
+            coverage.get("overlap_bars",0)>=800 and
+            coverage.get("estimated_nonoverlap_h6_capacity",0)>=200
+        )
+        return {
+            "status":"success","version":"15.15",
+            "before":before,"after":after,
+            "rows_pcr_reconstructed":int(pcr_rows or 0),
+            "rows_imbalance_reconstructed":int(imb_rows or 0),
+            "near_atm_reconstructed":False,
+            "coverage":coverage,
+            "validation_ready":ready,
+            "next_action":(
+                "Coverage now clears the research-data floor. Run Independent Option OI Validation next."
+                if ready else
+                "Coverage still does not clear the research-data floor. Do not lower the gate; inspect remaining missing aggregate OI inputs."
+            ),
+            "method":{
+                "pcr_oi":"total_put_oi / total_call_oi",
+                "oi_imbalance":"(total_put_oi-total_call_oi)/(total_put_oi+total_call_oi)",
+                "near_atm_pcr":"unchanged; requires genuine strike-level OI"
+            },
+            "live_routing_changed":False
         }
     except Exception as e:
         return {"status":"error","message":str(e)}
