@@ -36,7 +36,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "14.8",
+        "version": "14.9",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4558,6 +4558,8 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <button class="primary" style="width:100%;margin-top:8px" onclick="syncHistoryStore()">Sync Historical Store v14.6</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="historyStoreStatus()">History Store Status</button>
           <button class="primary" style="width:100%;margin-top:8px" onclick="historyQualityCheck()">Data Quality & Gap Check v14.8</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="recoverHistoricalData()">Historical Data Recovery v14.9</button>
+          <button class="primary" style="width:100%;margin-top:8px" onclick="checkBacktestReadiness()">Backtest Readiness Gate</button>
           <input id="historyBackfillFile" type="file" accept=".csv" style="width:100%;margin-top:8px;padding:10px;border:1px solid #2b3f59;border-radius:10px;background:#0b1828;color:#dce8f8">
           <button class="primary" style="width:100%;margin-top:8px" onclick="uploadHistoryBackfill()">Import 15m CSV Backfill v14.7</button>
   </div>
@@ -4573,6 +4575,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btExtendedValidation" style="margin-top:8px">v14.5 extended historical validation has not been run yet.</div>
   <div class="bt-note" id="btHistoryStore" style="margin-top:8px">Historical store has not been checked yet.</div>
   <div class="bt-note" id="btHistoryQuality" style="margin-top:8px">Historical data quality has not been checked yet.</div>
+  <div class="bt-note" id="btRecoveryStatus" style="margin-top:8px">Historical recovery has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
     v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
@@ -5133,6 +5136,59 @@ async function syncHistoryStore(){
 }
 
 
+
+
+async function recoverHistoricalData(){
+  const box=document.getElementById("btRecoveryStatus");
+  if(box) box.textContent="Refreshing recoverable NIFTY history and recalculating gaps…";
+
+  try{
+    const r=await fetch("/v14/history/recover",{cache:"no-store"});
+    const d=await r.json();
+
+    if(!r.ok||d.status!=="success"){
+      throw new Error(d.message||"Historical recovery failed");
+    }
+
+    const q=d.quality||{};
+    const passes=(d.passes||[]).map(x=>
+      `${x.period}: fetched ${x.fetched||0}, written ${x.written||0}`
+    ).join(" · ");
+
+    if(box) box.textContent=
+      `${q.verdict||"--"} · BACKTEST READY ${q.backtest_ready?"YES":"NO"} · `
+      + `${q.stored_rows||0} candles · ${q.actual_trading_sessions||0} sessions · `
+      + `coverage ${q.overall_coverage_percent||0}% · missing weekdays ${d.missing_weekday_sessions||0} · `
+      + `gap-days ${d.intraday_gap_days||0}. ${passes}. ${d.next_action||""}`;
+
+  }catch(e){
+    if(box) box.textContent="Recovery error: "+e.message;
+  }
+}
+
+
+async function checkBacktestReadiness(){
+  const box=document.getElementById("btRecoveryStatus");
+  if(box) box.textContent="Checking backtest readiness gate…";
+
+  try{
+    const r=await fetch("/v14/history/readiness",{cache:"no-store"});
+    const d=await r.json();
+
+    if(!r.ok||d.status!=="success"){
+      throw new Error(d.message||"Readiness check failed");
+    }
+
+    if(box) box.textContent=
+      `${d.backtest_ready?"READY":"NOT READY"} · `
+      + `coverage ${d.coverage_percent}% · sessions ${d.trading_sessions} · `
+      + `stored ${d.stored_rows} candles · missing weekdays ${d.missing_weekday_sessions}. `
+      + d.message;
+
+  }catch(e){
+    if(box) box.textContent="Readiness error: "+e.message;
+  }
+}
 
 async function historyQualityCheck(){
   const box=document.getElementById("btHistoryQuality");
@@ -6522,7 +6578,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "14.8",
+            "model_version": "14.9",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7375,7 +7431,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "14.8",
+            "model_version": "14.9",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -7887,7 +7943,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "14.8",
+        "model_version": "14.9",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -7967,6 +8023,191 @@ def _v123_objective(m):
 
 
 
+
+
+
+# ============================================================
+# V14.9 HISTORICAL DATA RECOVERY + BACKTEST READINESS GATE
+# ============================================================
+
+def _v149_missing_session_dates(raw):
+    """
+    Return likely missing weekday sessions between first/last stored candle.
+    This is a heuristic calendar recovery list; exchange holidays may appear
+    as expected gaps and are tolerated by later quality scoring.
+    """
+    if raw is None or raw.empty:
+        return []
+
+    start = raw.index[0].date()
+    end = raw.index[-1].date()
+
+    stored_dates = {ts.date() for ts in raw.index}
+    current = start
+    missing = []
+
+    import datetime as _dt
+    while current <= end:
+        if current.weekday() < 5 and current not in stored_dates:
+            missing.append(current.isoformat())
+        current += _dt.timedelta(days=1)
+
+    return missing
+
+
+def _v149_missing_intraday_slots(raw):
+    """
+    Detect missing 15-minute slots inside dates that do exist in the store.
+    Returns a compact list for diagnostics.
+    """
+    if raw is None or raw.empty:
+        return []
+
+    expected = _v148_expected_session_times()
+    by_date = {}
+    for ts in raw.index:
+        by_date.setdefault(ts.date().isoformat(), set()).add((ts.hour, ts.minute))
+
+    gaps = []
+    for d in sorted(by_date):
+        observed = by_date[d]
+        missing = [f"{h:02d}:{m:02d}" for h, m in expected if (h, m) not in observed]
+        if missing:
+            gaps.append({
+                "date": d,
+                "missing_count": len(missing),
+                "missing_slots": missing[:20]
+            })
+    return gaps
+
+
+def _v149_fetch_window(period="60d", interval="15m"):
+    """
+    Fetch currently available provider window and merge into persistent store.
+    """
+    raw = yf.Ticker("^NSEI").history(period=period, interval=interval)
+    if raw is None or raw.empty:
+        return {"fetched": 0, "written": 0}
+    written = _v146_upsert_history(raw, timeframe=interval, source="yfinance_recovery")
+    return {"fetched": len(raw), "written": written}
+
+
+def _v149_recovery_attempt():
+    """
+    Recovery step:
+    - refresh current 60d window
+    - refresh 30d window as a second pass
+    - keep every older stored row
+    - report remaining gaps and readiness
+    """
+    passes = []
+    for period in ("60d", "30d"):
+        try:
+            passes.append({
+                "period": period,
+                **_v149_fetch_window(period=period, interval="15m")
+            })
+        except Exception as e:
+            passes.append({
+                "period": period,
+                "error": str(e),
+                "fetched": 0,
+                "written": 0
+            })
+
+    raw = _v146_load_raw_history("15m")
+    quality = _v148_quality_report(raw, timeframe="15m")
+    missing_dates = _v149_missing_session_dates(raw)
+    intraday_gaps = _v149_missing_intraday_slots(raw)
+
+    return {
+        "passes": passes,
+        "stored_rows": len(raw) if raw is not None else 0,
+        "quality": quality,
+        "missing_weekday_sessions": len(missing_dates),
+        "missing_session_dates_sample": missing_dates[:40],
+        "intraday_gap_days": len(intraday_gaps),
+        "intraday_gap_sample": intraday_gaps[:20],
+    }
+
+
+@app.get("/v14/history/recover")
+def v149_history_recover():
+    try:
+        result = _v149_recovery_attempt()
+        result["status"] = "success"
+        result["model_version"] = "14.9"
+        result["next_action"] = (
+            "BACKTEST READY — serious validation tools may be used."
+            if result["quality"].get("backtest_ready")
+            else
+            "Still not backtest-ready. Import older 15m CSV history to fill the remaining gap."
+        )
+        return result
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@app.get("/v14/history/readiness")
+def v149_history_readiness():
+    try:
+        raw = _v146_load_raw_history("15m")
+        quality = _v148_quality_report(raw, timeframe="15m")
+        missing_dates = _v149_missing_session_dates(raw)
+
+        gate = {
+            "backtest_ready": bool(quality.get("backtest_ready")),
+            "verdict": quality.get("verdict"),
+            "coverage_percent": quality.get("overall_coverage_percent", 0),
+            "trading_sessions": quality.get("actual_trading_sessions", 0),
+            "stored_rows": quality.get("stored_rows", 0),
+            "calendar_span_days": quality.get("calendar_span_days", 0),
+            "missing_weekday_sessions": len(missing_dates),
+            "requirements": {
+                "coverage_percent_min": 95,
+                "trading_sessions_min": 100,
+                "quality_verdict_required": "PASS"
+            }
+        }
+
+        gate["message"] = (
+            "READY: validation can be trusted enough for promotion testing."
+            if gate["backtest_ready"]
+            else
+            "NOT READY: continue backfill/recovery before trusting long-horizon backtests."
+        )
+
+        return {
+            "status": "success",
+            "model_version": "14.9",
+            **gate
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+def _v149_require_backtest_ready():
+    """
+    Guard used by serious validation endpoints.
+    """
+    raw = _v146_load_raw_history("15m")
+    quality = _v148_quality_report(raw, timeframe="15m")
+    if not quality.get("backtest_ready"):
+        raise RuntimeError(
+            "BACKTEST_READINESS_GATE_BLOCKED: historical data quality is not ready. "
+            f"Coverage={quality.get('overall_coverage_percent', 0)}%, "
+            f"sessions={quality.get('actual_trading_sessions', 0)}, "
+            f"verdict={quality.get('verdict')}. "
+            "Run Data Quality & Gap Check and import more 15m history."
+        )
+    return quality
 
 
 # ============================================================
@@ -9036,6 +9277,7 @@ def v145_extended_validation(
     folds: int = 6
 ):
     try:
+        _v149_require_backtest_ready()
         df, actual_period = _v145_download_history(
             months=months,
             interval="15m"
@@ -9053,7 +9295,7 @@ def v145_extended_validation(
 
         return {
             "status": "success",
-            "model_version": "14.8",
+            "model_version": "14.9",
             "requested_months": months,
             "actual_yfinance_period": actual_period,
             "historical_candles": len(df),
@@ -9235,6 +9477,7 @@ def v144_regime_aware_walk_forward(
       - validates on the immediately following unseen block
     """
     try:
+        _v149_require_backtest_ready()
         df = _bt_prepare_frame(period=period, interval="15m")
         if df.empty or len(df) < 300:
             return {
@@ -9343,7 +9586,7 @@ def v144_regime_aware_walk_forward(
 
         return {
             "status": "success",
-            "model_version": "14.8",
+            "model_version": "14.9",
             "rule_under_test": {
                 "TRENDING": "REVERSION",
                 "RANGE": "WAIT",
@@ -9575,7 +9818,7 @@ def v143_regime_engine_matrix(
 
         return {
             "status": "success",
-            "model_version": "14.8",
+            "model_version": "14.9",
             "period": period,
             "threshold": threshold,
             "matrix": matrix,
@@ -9813,7 +10056,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "14.8",
+            "model_version": "14.9",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
