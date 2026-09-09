@@ -4600,6 +4600,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalQualityV157()">Signal Quality Rebuild v15.7</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureWalkForwardV158()">Feature Walk-Forward v15.8</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureInteractionV1510()">Feature Interaction & Regime v15.10</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runIndependentVixV1511()">Independent VIX Validation v15.11</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4623,6 +4624,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btSignalQuality157" style="margin-top:8px">v15.7 signal quality rebuild has not been run yet.</div>
   <div class="bt-note" id="btFeatureWF158" style="margin-top:8px">v15.8 chronological feature walk-forward has not been run yet.</div>
   <div class="bt-note" id="btFeatureInteraction1510" style="margin-top:8px">v15.10 corrected feature interaction & regime discovery has not been run yet.</div>
+  <div class="bt-note" id="btIndependentVix1511" style="margin-top:8px">v15.11 independent India VIX validation has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5322,6 +5324,18 @@ async function runFeatureInteractionV1510(){
   const frag=g?`drop F${g.dropped_fold} \u2192 ${g.remaining_accuracy_percent}%/${g.remaining_avg_bps}bps ${g.result_survives?"survives":"COLLAPSES"}`:"--";
   if(b)b.textContent=`v15.10 ${d.verdict} \u00b7 ${x.independent_signals||0} independent signals (v15.9 would have counted ${u.signals||0} at ${u.accuracy_percent||0}%) \u00b7 accuracy ${x.weighted_accuracy_percent||0}% \u00b7 p=${x.p_value} \u00b7 gross ${x.weighted_avg_bps||0}bps \u00b7 NET AFTER COST ${x.net_avg_bps||0}bps \u00b7 positive folds ${x.positive_folds||0}/${x.folds||0} \u00b7 worst ${x.worst_fold_accuracy_percent||0}% \u00b7 fragility: ${frag} \u00b7 failing: ${failed} \u00b7 TRAIN-RANKED CELLS ${top||"--"} \u00b7 ${fs} \u00b7 ${d.next_action}`;
  }catch(e){if(b)b.textContent="v15.10 interaction/regime error: "+e.message}
+}
+
+async function runIndependentVixV1511(){
+ const b=document.getElementById("btIndependentVix1511");
+ if(b)b.textContent="v15.11 loading independent India VIX history and running chronological validation…";
+ try{
+  const r=await fetch("/v15/independent-vix-validation?blocks=4&cost_bps=3",{cache:"no-store"});
+  const d=await r.json(); if(!r.ok||d.status!=="success")throw new Error(d.message||"Independent VIX validation failed");
+  const x=d.summary||{}; const fs=(d.folds||[]).map(z=>`F${z.fold} ${z.accuracy_percent}%/${z.net_avg_bps} net bps n=${z.signals}`).join(" · ");
+  const failed=Object.entries(d.gate_checks||{}).filter(([,v])=>!v).map(([k])=>k).join(", ")||"none";
+  if(b)b.textContent=`v15.11 ${d.verdict} · INDIA VIX independent input · ${x.independent_signals||0} non-overlap signals · accuracy ${x.weighted_accuracy_percent||0}% · gross ${x.gross_avg_bps||0}bps · NET ${x.net_avg_bps||0}bps · p=${x.p_value} · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · failing: ${failed} · ${fs} · ${d.next_action}`;
+ }catch(e){if(b)b.textContent="v15.11 independent VIX error: "+e.message}
 }
 
 async function recoverHistoricalData(){
@@ -11621,3 +11635,78 @@ def v1510_feature_interaction_regime(blocks: int = 4, top_k: int = 4,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ============================================================
+# V15.11 INDEPENDENT INDIA VIX VALIDATION
+# Adds genuinely independent volatility information to research.
+# Daily India VIX is aligned to NIFTY 15m bars by trading date, then
+# thresholds/polarity are frozen on train and scored on later folds.
+# Research-only: DOES NOT alter live CE/PE routing.
+# ============================================================
+@app.get("/v15/independent-vix-validation")
+def v1511_independent_vix_validation(blocks:int=4, cost_bps:float=3.0):
+    try:
+        blocks=max(3,min(int(blocks),6)); cost_bps=max(0.0,float(cost_bps)); H=6
+        raw=_v146_load_raw_history("15m",limit=50000); quality=_v148_quality_report(raw,timeframe="15m")
+        if not quality.get("backtest_ready"):
+            return {"status":"error","message":"History is not backtest-ready."}
+        df=_v146_feature_frame_from_raw(raw)
+        if df is None or len(df)<1800:
+            return {"status":"error","message":"Not enough feature-ready NIFTY history."}
+        try:
+            vx=yf.Ticker("^INDIAVIX").history(period="2y",interval="1d",auto_adjust=False)
+        except TypeError:
+            vx=yf.Ticker("^INDIAVIX").history(period="2y",interval="1d")
+        if vx is None or vx.empty or "Close" not in vx.columns:
+            return {"status":"error","message":"India VIX historical data unavailable from provider."}
+        vclose=pd.to_numeric(vx["Close"],errors="coerce").dropna()
+        # Normalize provider timestamps to date keys; avoids timezone/session-hour assumptions.
+        vmap={pd.Timestamp(k).date():float(v) for k,v in vclose.items()}
+        vser=pd.Series([vmap.get(pd.Timestamp(i).date(),np.nan) for i in df.index],index=df.index,dtype=float).ffill(limit=100)
+        vf=pd.DataFrame(index=df.index)
+        vf["vix_level"]=vser
+        # Changes are computed on daily VIX first, then mapped, so intraday bars do not create fake changes.
+        daily=pd.DataFrame({"level":vclose})
+        daily["chg1"]=daily["level"].pct_change()*100.0
+        daily["chg5"]=daily["level"].pct_change(5)*100.0
+        daily["ma_gap"]=daily["level"]/daily["level"].rolling(10).mean()-1.0
+        maps={c:{pd.Timestamp(k).date():float(v) for k,v in daily[c].dropna().items()} for c in ["chg1","chg5","ma_gap"]}
+        for c,m in maps.items(): vf["vix_"+c]=pd.Series([m.get(pd.Timestamp(i).date(),np.nan) for i in df.index],index=df.index,dtype=float).ffill(limit=100)
+        close=_v157_num(df["close"]); y=(close.shift(-H)-close)/close*10000.0
+        n=len(df); initial=max(900,int(n*.45)); block_size=(n-initial)//blocks
+        if block_size<150: return {"status":"error","message":"Chronological validation blocks are too small."}
+        folds=[]; pooled=[]; used=set()
+        for i in range(blocks):
+            train_end=initial+i*block_size; val_start=train_end; val_end=n if i==blocks-1 else min(n,val_start+block_size)
+            train_label_end=max(0,train_end-H); cand=[]
+            for feature in vf.columns:
+                rule=_v158_train_rule(vf[feature].iloc[:train_label_end],y.iloc[:train_label_end])
+                if rule and rule["train_bps"]>0:
+                    score=(rule["train_accuracy"]-50)*.6+min(20,abs(rule["train_bps"]))*0.4
+                    cand.append((score,feature,rule))
+            cand.sort(reverse=True,key=lambda q:q[0]); chosen=cand[:2]
+            if not chosen: continue
+            votes={}
+            for _,feature,rule in chosen:
+                used.add(feature); xv=vf[feature].iloc[val_start:val_end]; yv=y.iloc[val_start:val_end]
+                for idx,xval in xv.items():
+                    if pd.isna(xval) or pd.isna(yv.loc[idx]): continue
+                    side=0
+                    if xval<=rule["lo"]: side=-rule["polarity"]
+                    elif xval>=rule["hi"]: side=rule["polarity"]
+                    if side: votes.setdefault(idx,[]).append((side,float(yv.loc[idx])))
+            events=[]; posmap={ts:j for j,ts in enumerate(df.index)}
+            for idx,arr in votes.items():
+                sides=[a for a,_ in arr]
+                side=1 if sum(sides)>0 else (-1 if sum(sides)<0 else 0)
+                if side: events.append((posmap[idx],side*arr[0][1]))
+            dec=_v1510_decorrelate(events,H); pooled.extend(dec); m=_v1510_eval(dec,cost_bps)
+            folds.append({"fold":i+1,"selected_features":[z[1] for z in chosen],"signals":m["signals"],"accuracy_percent":m["accuracy_percent"],"gross_avg_bps":m["avg_bps"],"net_avg_bps":m["net_avg_bps"],"p_value":m["p_value"]})
+        if not folds or not pooled: return {"status":"error","message":"India VIX did not produce enough frozen validation signals."}
+        pm=_v1510_eval(pooled,cost_bps); positive=sum(1 for f in folds if f["net_avg_bps"]>0 and f["accuracy_percent"]>50); worst=min(f["accuracy_percent"] for f in folds)
+        gate={"independent_signals_200":pm["signals"]>=200,"positive_folds_3of4":positive>=3,"accuracy_55":pm["accuracy_percent"]>=55,"worst_fold_50":worst>=50,"net_edge_after_cost":pm["net_avg_bps"]>0,"significant_p05":pm["p_value"]<0.05}
+        passed=all(gate.values())
+        return {"status":"success","version":"15.11","verdict":"INDEPENDENT EDGE PASSES" if passed else "INDEPENDENT EDGE NOT YET STABLE","source":"Yahoo Finance ^INDIAVIX daily history aligned by trading date","features_tested":list(vf.columns),"features_selected":sorted(used),"summary":{"independent_signals":pm["signals"],"weighted_accuracy_percent":pm["accuracy_percent"],"gross_avg_bps":pm["avg_bps"],"net_avg_bps":pm["net_avg_bps"],"p_value":pm["p_value"],"positive_folds":positive,"folds":len(folds),"worst_fold_accuracy_percent":worst},"folds":folds,"gate_checks":gate,"live_routing_changed":False,"next_action":"If this independent input clears the gate, combine it with the frozen technical candidate in a shadow-only engine. If not, keep live routing unchanged and add historical option-chain/derivatives inputs before promotion."}
+    except Exception as e:
+        return {"status":"error","message":str(e)}
