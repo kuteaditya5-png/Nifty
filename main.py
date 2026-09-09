@@ -10,6 +10,7 @@ import psycopg
 import re
 import math
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import statistics
 
@@ -37,7 +38,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "15.1",
+        "version": "15.12",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4601,6 +4602,8 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureWalkForwardV158()">Feature Walk-Forward v15.8</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureInteractionV1510()">Feature Interaction & Regime v15.10</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runIndependentVixV1511()">Independent VIX Validation v15.11</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="acquireOptionOiV1512()">Acquire Historical Option OI v15.12</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runOptionOiValidationV1512()">Independent Option OI Validation v15.12</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4625,6 +4628,8 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btFeatureWF158" style="margin-top:8px">v15.8 chronological feature walk-forward has not been run yet.</div>
   <div class="bt-note" id="btFeatureInteraction1510" style="margin-top:8px">v15.10 corrected feature interaction & regime discovery has not been run yet.</div>
   <div class="bt-note" id="btIndependentVix1511" style="margin-top:8px">v15.11 independent India VIX validation has not been run yet.</div>
+  <div class="bt-note" id="btOptionOiAcquire1512" style="margin-top:8px">v15.12 historical option OI has not been acquired yet.</div>
+  <div class="bt-note" id="btOptionOiValidation1512" style="margin-top:8px">v15.12 independent option OI validation has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5336,6 +5341,34 @@ async function runIndependentVixV1511(){
   const failed=Object.entries(d.gate_checks||{}).filter(([,v])=>!v).map(([k])=>k).join(", ")||"none";
   if(b)b.textContent=`v15.11 ${d.verdict} · INDIA VIX independent input · ${x.independent_signals||0} non-overlap signals · accuracy ${x.weighted_accuracy_percent||0}% · gross ${x.gross_avg_bps||0}bps · NET ${x.net_avg_bps||0}bps · p=${x.p_value} · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · failing: ${failed} · ${fs} · ${d.next_action}`;
  }catch(e){if(b)b.textContent="v15.11 independent VIX error: "+e.message}
+}
+
+
+async function acquireOptionOiV1512(){
+ const b=document.getElementById("btOptionOiAcquire1512");
+ if(b)b.textContent="v15.12 acquiring genuine historical NIFTY option OI from Upstox…";
+ try{
+  const r=await fetch("/v15/option-oi-acquire?max_days=60",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"Option OI acquisition failed");
+  const x=d.store||{};
+  const failed=(d.failures||[]).slice(0,3).map(z=>`${z.date}:${z.message}`).join(" | ");
+  if(b)b.textContent=`v15.12 OI ACQUIRE · requested ${d.requested_dates||0} dates · fetched ${d.fetched_dates||0} · stored/updated ${d.rows_written||0} · STORE ${x.days||0} days (${x.start||"--"} → ${x.end||"--"}) · ${d.next_action}${failed?` · sample failures ${failed}`:""}`;
+ }catch(e){if(b)b.textContent="v15.12 option OI acquisition error: "+e.message}
+}
+
+async function runOptionOiValidationV1512(){
+ const b=document.getElementById("btOptionOiValidation1512");
+ if(b)b.textContent="v15.12 validating historical option-chain OI independently on chronological unseen folds…";
+ try{
+  const r=await fetch("/v15/option-oi-validation?blocks=4&cost_bps=3",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"Option OI validation failed");
+  const x=d.summary||{};
+  const fs=(d.folds||[]).map(z=>`F${z.fold} ${z.accuracy_percent}%/${z.net_avg_bps} net bps n=${z.signals}`).join(" · ");
+  const failed=Object.entries(d.gate_checks||{}).filter(([,v])=>!v).map(([k])=>k).join(", ")||"none";
+  if(b)b.textContent=`v15.12 ${d.verdict} · HISTORICAL OPTION OI · ${x.independent_signals||0} independent signals · accuracy ${x.weighted_accuracy_percent||0}% · gross ${x.gross_avg_bps||0}bps · NET ${x.net_avg_bps||0}bps · p=${x.p_value} · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · OI days ${d.oi_days||0} · failing: ${failed} · ${fs} · ${d.next_action}`;
+ }catch(e){if(b)b.textContent="v15.12 option OI validation error: "+e.message}
 }
 
 async function recoverHistoricalData(){
@@ -11710,3 +11743,489 @@ def v1511_independent_vix_validation(blocks:int=4, cost_bps:float=3.0):
         return {"status":"success","version":"15.11","verdict":"INDEPENDENT EDGE PASSES" if passed else "INDEPENDENT EDGE NOT YET STABLE","source":"Yahoo Finance ^INDIAVIX daily history aligned by trading date","features_tested":list(vf.columns),"features_selected":sorted(used),"summary":{"independent_signals":pm["signals"],"weighted_accuracy_percent":pm["accuracy_percent"],"gross_avg_bps":pm["avg_bps"],"net_avg_bps":pm["net_avg_bps"],"p_value":pm["p_value"],"positive_folds":positive,"folds":len(folds),"worst_fold_accuracy_percent":worst},"folds":folds,"gate_checks":gate,"live_routing_changed":False,"next_action":"If this independent input clears the gate, combine it with the frozen technical candidate in a shadow-only engine. If not, keep live routing unchanged and add historical option-chain/derivatives inputs before promotion."}
     except Exception as e:
         return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# V15.12 INDEPENDENT HISTORICAL OPTION-OI VALIDATION
+#
+# Uses Upstox historical market OI by trading date. This is genuinely
+# independent derivatives information; no synthetic option-chain snapshots
+# are fabricated. Daily OI is aligned to NIFTY 15m bars by IST trading date.
+#
+# The acquisition endpoint persists daily aggregate + near-ATM OI features.
+# The validation endpoint freezes thresholds/polarity on earlier data and
+# scores later chronological folds with non-overlapping H6 observations.
+#
+# Research-only: DOES NOT alter live CE/PE routing.
+# ============================================================
+
+def _v1512_ensure_oi_table():
+    with _v146_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS nifty_option_oi_daily (
+                    trade_date DATE PRIMARY KEY,
+                    expiry_date DATE,
+                    spot_close DOUBLE PRECISION,
+                    total_put_oi DOUBLE PRECISION,
+                    total_call_oi DOUBLE PRECISION,
+                    pcr_oi DOUBLE PRECISION,
+                    near_atm_put_oi DOUBLE PRECISION,
+                    near_atm_call_oi DOUBLE PRECISION,
+                    near_atm_pcr DOUBLE PRECISION,
+                    oi_imbalance DOUBLE PRECISION,
+                    source VARCHAR(40) NOT NULL DEFAULT 'upstox_market_oi',
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        conn.commit()
+
+
+def _v1512_store_status():
+    _v1512_ensure_oi_table()
+    with _v146_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*), MIN(trade_date), MAX(trade_date)
+                FROM nifty_option_oi_daily
+            """)
+            n, d0, d1 = cur.fetchone()
+    return {
+        "days": int(n or 0),
+        "start": d0.isoformat() if d0 else None,
+        "end": d1.isoformat() if d1 else None,
+    }
+
+
+def _v1512_load_oi():
+    _v1512_ensure_oi_table()
+    with _v146_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT trade_date, expiry_date, spot_close,
+                       total_put_oi, total_call_oi, pcr_oi,
+                       near_atm_put_oi, near_atm_call_oi,
+                       near_atm_pcr, oi_imbalance
+                FROM nifty_option_oi_daily
+                ORDER BY trade_date
+            """)
+            rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame()
+    cols = [
+        "trade_date","expiry_date","spot_close",
+        "total_put_oi","total_call_oi","pcr_oi",
+        "near_atm_put_oi","near_atm_call_oi",
+        "near_atm_pcr","oi_imbalance"
+    ]
+    return pd.DataFrame(rows, columns=cols).set_index("trade_date")
+
+
+def _v1512_headers():
+    token = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("UPSTOX_ACCESS_TOKEN is missing.")
+    return {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+
+
+def _v1512_expiries():
+    url = "https://api.upstox.com/v2/expired-instruments/expiries"
+    r = requests.get(
+        url,
+        params={"instrument_key": "NSE_INDEX|Nifty 50"},
+        headers=_v1512_headers(),
+        timeout=12,
+    )
+    if r.status_code != 200:
+        msg = ""
+        try:
+            msg = (r.json().get("errors") or [{}])[0].get("message") or r.text[:300]
+        except Exception:
+            msg = r.text[:300]
+        raise RuntimeError(
+            f"Upstox expiries HTTP {r.status_code}: {msg}. "
+            "Historical expired-instrument access may require Upstox Plus."
+        )
+    data = r.json().get("data") or []
+    vals = []
+    for x in data:
+        try:
+            vals.append(pd.Timestamp(x).date())
+        except Exception:
+            pass
+    return sorted(set(vals))
+
+
+def _v1512_pick_expiry(day, expiries):
+    # For a historical trading day, the relevant weekly/monthly expiry is the
+    # first listed expiry on/after that date.
+    for e in expiries:
+        if e >= day:
+            return e
+    return None
+
+
+def _v1512_fetch_oi_day(day, expiry):
+    url = "https://api.upstox.com/v2/market/oi"
+    r = requests.get(
+        url,
+        params={
+            "instrument_key": "NSE_INDEX|Nifty 50",
+            "expiry": expiry.isoformat(),
+            "date": day.isoformat(),
+        },
+        headers=_v1512_headers(),
+        timeout=12,
+    )
+    if r.status_code != 200:
+        msg = ""
+        try:
+            body = r.json()
+            msg = (body.get("errors") or [{}])[0].get("message") or body.get("message") or str(body)[:250]
+        except Exception:
+            msg = r.text[:250]
+        raise RuntimeError(f"HTTP {r.status_code}: {msg}")
+
+    d = r.json().get("data") or {}
+    total_p = float(d.get("total_puts") or 0)
+    total_c = float(d.get("total_calls") or 0)
+    spot = float(d.get("spot_closing_price") or 0)
+    rows = d.get("call_put_oi_data_list") or []
+
+    near_p = 0.0
+    near_c = 0.0
+    if spot > 0 and rows:
+        ranked = sorted(
+            rows,
+            key=lambda z: abs(float(z.get("strike_price") or 0) - spot)
+        )[:5]
+        near_p = sum(float(z.get("put_oi") or 0) for z in ranked)
+        near_c = sum(float(z.get("call_oi") or 0) for z in ranked)
+
+    pcr = (total_p / total_c) if total_c > 0 else None
+    near_pcr = (near_p / near_c) if near_c > 0 else None
+    denom = total_p + total_c
+    imbalance = ((total_p - total_c) / denom) if denom > 0 else None
+
+    return (
+        day, expiry, spot, total_p, total_c,
+        pcr, near_p, near_c, near_pcr, imbalance
+    )
+
+
+@app.get("/v15/option-oi-acquire")
+def v1512_option_oi_acquire(max_days:int=60):
+    try:
+        max_days = max(5, min(int(max_days), 90))
+        _v1512_ensure_oi_table()
+
+        raw = _v146_load_raw_history("15m", limit=50000)
+        q = _v148_quality_report(raw, timeframe="15m")
+        if not q.get("backtest_ready"):
+            return {"status":"error","message":"NIFTY history is not backtest-ready."}
+
+        # Stored NIFTY trading dates, newest first. Upstox's expired expiry
+        # catalogue currently exposes a limited historical window, so we focus
+        # acquisition where genuine OI is available rather than inventing data.
+        ist = raw.copy()
+        idx = pd.DatetimeIndex(ist.index)
+        if idx.tz is None:
+            idx = idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
+        else:
+            idx = idx.tz_convert("Asia/Kolkata")
+        trade_dates = sorted(set(x.date() for x in idx), reverse=True)
+
+        expiries = _v1512_expiries()
+        if not expiries:
+            return {"status":"error","message":"Upstox returned no historical expiries."}
+
+        existing = set()
+        with _v146_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT trade_date FROM nifty_option_oi_daily")
+                existing = {r[0] for r in cur.fetchall()}
+
+        todo = []
+        for d in trade_dates:
+            if d in existing:
+                continue
+            e = _v1512_pick_expiry(d, expiries)
+            if e is not None:
+                todo.append((d,e))
+            if len(todo) >= max_days:
+                break
+
+        if not todo:
+            st = _v1512_store_status()
+            return {
+                "status":"success",
+                "version":"15.12",
+                "requested_dates":0,
+                "fetched_dates":0,
+                "rows_written":0,
+                "failures":[],
+                "store":st,
+                "next_action":"No additional eligible OI dates remain in the provider window. Run Independent Option OI Validation v15.12."
+            }
+
+        fetched = []
+        failures = []
+        # Bounded concurrency keeps the Vercel call practical while avoiding a
+        # large burst to the provider.
+        workers = min(6, len(todo))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_v1512_fetch_oi_day, d, e):(d,e) for d,e in todo}
+            for fut in as_completed(futs):
+                d,e = futs[fut]
+                try:
+                    fetched.append(fut.result())
+                except Exception as err:
+                    failures.append({"date":d.isoformat(),"expiry":e.isoformat(),"message":str(err)[:220]})
+
+        written = 0
+        if fetched:
+            with _v146_db() as conn:
+                with conn.cursor() as cur:
+                    cur.executemany("""
+                        INSERT INTO nifty_option_oi_daily(
+                            trade_date, expiry_date, spot_close,
+                            total_put_oi, total_call_oi, pcr_oi,
+                            near_atm_put_oi, near_atm_call_oi,
+                            near_atm_pcr, oi_imbalance,
+                            source, updated_at
+                        )
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'upstox_market_oi',CURRENT_TIMESTAMP)
+                        ON CONFLICT(trade_date) DO UPDATE SET
+                            expiry_date=EXCLUDED.expiry_date,
+                            spot_close=EXCLUDED.spot_close,
+                            total_put_oi=EXCLUDED.total_put_oi,
+                            total_call_oi=EXCLUDED.total_call_oi,
+                            pcr_oi=EXCLUDED.pcr_oi,
+                            near_atm_put_oi=EXCLUDED.near_atm_put_oi,
+                            near_atm_call_oi=EXCLUDED.near_atm_call_oi,
+                            near_atm_pcr=EXCLUDED.near_atm_pcr,
+                            oi_imbalance=EXCLUDED.oi_imbalance,
+                            source=EXCLUDED.source,
+                            updated_at=CURRENT_TIMESTAMP
+                    """, fetched)
+                conn.commit()
+            written = len(fetched)
+
+        st = _v1512_store_status()
+        enough = st["days"] >= 50
+        return {
+            "status":"success",
+            "version":"15.12",
+            "provider":"Upstox Market OI",
+            "requested_dates":len(todo),
+            "fetched_dates":len(fetched),
+            "rows_written":written,
+            "failures":failures,
+            "store":st,
+            "next_action":(
+                "Enough historical OI days are stored. Run Independent Option OI Validation v15.12."
+                if enough else
+                "Acquire again to extend the OI sample, then validate. No missing OI is fabricated."
+            )
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+
+@app.get("/v15/option-oi-validation")
+def v1512_option_oi_validation(blocks:int=4, cost_bps:float=3.0):
+    try:
+        blocks = max(3, min(int(blocks), 6))
+        cost_bps = max(0.0, float(cost_bps))
+        H = 6
+
+        raw = _v146_load_raw_history("15m", limit=50000)
+        q = _v148_quality_report(raw, timeframe="15m")
+        if not q.get("backtest_ready"):
+            return {"status":"error","message":"NIFTY history is not backtest-ready."}
+
+        df = _v146_feature_frame_from_raw(raw)
+        if df is None or len(df) < 1800:
+            return {"status":"error","message":"Not enough feature-ready NIFTY history."}
+
+        od = _v1512_load_oi()
+        if od.empty or len(od) < 35:
+            return {
+                "status":"error",
+                "message":f"Only {len(od)} historical option-OI days are stored. Run Acquire Historical Option OI v15.12 until at least ~50 days are available."
+            }
+
+        # Build daily independent derivatives features. Changes are computed on
+        # daily OI first, then mapped to intraday bars to avoid fake intraday
+        # changes caused by forward-filling.
+        daily = od.copy()
+        for c in ["pcr_oi","near_atm_pcr","oi_imbalance","total_put_oi","total_call_oi"]:
+            daily[c] = pd.to_numeric(daily[c], errors="coerce")
+        daily["pcr_chg1"] = daily["pcr_oi"].diff()
+        daily["near_pcr_chg1"] = daily["near_atm_pcr"].diff()
+        daily["imbalance_chg1"] = daily["oi_imbalance"].diff()
+        total = daily["total_put_oi"] + daily["total_call_oi"]
+        daily["total_oi_chg1_pct"] = total.pct_change() * 100.0
+        daily["put_call_build_spread"] = (
+            daily["total_put_oi"].pct_change() - daily["total_call_oi"].pct_change()
+        ) * 100.0
+
+        feat_cols = [
+            "pcr_oi","near_atm_pcr","oi_imbalance",
+            "pcr_chg1","near_pcr_chg1","imbalance_chg1",
+            "total_oi_chg1_pct","put_call_build_spread"
+        ]
+
+        date_maps = {
+            c:{pd.Timestamp(k).date():float(v) for k,v in daily[c].dropna().items()}
+            for c in feat_cols
+        }
+
+        vf = pd.DataFrame(index=df.index)
+        for c,m in date_maps.items():
+            # Exact trading-date map only: no forward filling across days that
+            # lack genuine option OI observations.
+            vf[c] = pd.Series(
+                [m.get(pd.Timestamp(i).date(), np.nan) for i in df.index],
+                index=df.index,
+                dtype=float
+            )
+
+        close = _v157_num(df["close"])
+        y = (close.shift(-H) - close) / close * 10000.0
+
+        valid_rows = vf.notna().any(axis=1)
+        positions = np.flatnonzero(valid_rows.to_numpy())
+        if len(positions) < 800:
+            return {
+                "status":"error",
+                "message":f"Historical OI overlaps only {len(positions)} NIFTY bars. Acquire more OI dates before validation."
+            }
+
+        # Chronological fold boundaries are based only on bars that actually
+        # have genuine OI history.
+        n = len(df)
+        first_pos = int(positions.min())
+        last_pos = int(positions.max()) + 1
+        span = last_pos - first_pos
+        initial = first_pos + max(400, int(span * .45))
+        block_size = (last_pos - initial) // blocks
+        if block_size < 100:
+            return {"status":"error","message":"Historical option-OI overlap is too short for four chronological folds."}
+
+        folds = []
+        pooled = []
+        used = set()
+
+        for i in range(blocks):
+            train_end = initial + i * block_size
+            val_start = train_end
+            val_end = last_pos if i == blocks - 1 else min(last_pos, val_start + block_size)
+            train_label_end = max(first_pos, train_end - H)
+
+            cand = []
+            for feature in feat_cols:
+                rule = _v158_train_rule(
+                    vf[feature].iloc[first_pos:train_label_end],
+                    y.iloc[first_pos:train_label_end]
+                )
+                if rule and rule["train_bps"] > 0:
+                    score = (rule["train_accuracy"] - 50) * .6 + min(20, abs(rule["train_bps"])) * .4
+                    cand.append((score, feature, rule))
+
+            cand.sort(reverse=True, key=lambda q:q[0])
+            chosen = cand[:2]
+            if not chosen:
+                continue
+
+            votes = {}
+            for _,feature,rule in chosen:
+                used.add(feature)
+                xv = vf[feature].iloc[val_start:val_end]
+                yv = y.iloc[val_start:val_end]
+                for idx,xval in xv.items():
+                    if pd.isna(xval) or pd.isna(yv.loc[idx]):
+                        continue
+                    side = 0
+                    if xval <= rule["lo"]:
+                        side = -rule["polarity"]
+                    elif xval >= rule["hi"]:
+                        side = rule["polarity"]
+                    if side:
+                        votes.setdefault(idx, []).append((side, float(yv.loc[idx])))
+
+            events = []
+            posmap = {ts:j for j,ts in enumerate(df.index)}
+            for idx,arr in votes.items():
+                sides = [a for a,_ in arr]
+                side = 1 if sum(sides) > 0 else (-1 if sum(sides) < 0 else 0)
+                if side:
+                    events.append((posmap[idx], side * arr[0][1]))
+
+            dec = _v1510_decorrelate(events, H)
+            pooled.extend(dec)
+            m = _v1510_eval(dec, cost_bps)
+            folds.append({
+                "fold":i+1,
+                "selected_features":[z[1] for z in chosen],
+                "signals":m["signals"],
+                "accuracy_percent":m["accuracy_percent"],
+                "gross_avg_bps":m["avg_bps"],
+                "net_avg_bps":m["net_avg_bps"],
+                "p_value":m["p_value"],
+            })
+
+        if not folds or not pooled:
+            return {"status":"error","message":"Option OI did not produce enough frozen validation signals."}
+
+        pm = _v1510_eval(pooled, cost_bps)
+        positive = sum(
+            1 for f in folds
+            if f["net_avg_bps"] > 0 and f["accuracy_percent"] > 50
+        )
+        worst = min(f["accuracy_percent"] for f in folds)
+
+        gate = {
+            "independent_signals_200": pm["signals"] >= 200,
+            "positive_folds_3of4": positive >= 3 and len(folds) >= 4,
+            "accuracy_55": pm["accuracy_percent"] >= 55.0,
+            "worst_fold_50": worst >= 50.0,
+            "net_edge_after_cost": pm["net_avg_bps"] > 0,
+            "significant_p05": pm["p_value"] < 0.05,
+        }
+        passed = all(gate.values())
+
+        return {
+            "status":"success",
+            "version":"15.12",
+            "verdict":"INDEPENDENT OPTION-OI EDGE PASSES" if passed else "INDEPENDENT OPTION-OI EDGE NOT YET STABLE",
+            "source":"Upstox historical Market OI by NIFTY trading date",
+            "oi_days":len(od),
+            "features_tested":feat_cols,
+            "features_selected":sorted(used),
+            "summary":{
+                "independent_signals":pm["signals"],
+                "weighted_accuracy_percent":pm["accuracy_percent"],
+                "gross_avg_bps":pm["avg_bps"],
+                "net_avg_bps":pm["net_avg_bps"],
+                "p_value":pm["p_value"],
+                "positive_folds":positive,
+                "folds":len(folds),
+                "worst_fold_accuracy_percent":round(worst,1),
+            },
+            "folds":folds,
+            "gate_checks":gate,
+            "live_routing_changed":False,
+            "next_action":(
+                "Option OI clears the independent research gate. Next combine it with the frozen technical candidate only in a paper/shadow engine."
+                if passed else
+                "Do not promote. Keep live routing unchanged. If OI sample is adequate, investigate other independent derivatives inputs such as futures basis or true historical option IV/skew rather than fitting more price filters."
+            ),
+            "limitation":"The Upstox Market OI endpoint supplies daily historical OI structure, not reconstructed intraday option-chain snapshots. The test therefore asks whether daily derivatives positioning adds independent predictive information to later NIFTY 15m returns."
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
