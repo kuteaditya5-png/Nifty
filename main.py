@@ -5382,7 +5382,7 @@ async function expandOptionOiV1513(){
   if(!r.ok||d.status!=="success")throw new Error(d.message||"v15.13 OI expansion failed");
   const x=d.coverage||{}, st=d.store||{};
   const failed=(d.failures||[]).slice(0,3).map(z=>`${z.date}:${z.message}`).join(" | ");
-  if(b)b.textContent=`v15.13 OI EXPANSION · requested ${d.requested_dates||0} · fetched ${d.fetched_dates||0} · STORE ${st.days||0} days · overlap ${x.overlap_days||0}/${x.nifty_trading_days||0} NIFTY days (${x.coverage_percent||0}%) · overlap bars ${x.overlap_bars||0} · usable H6 capacity ~${x.estimated_nonoverlap_h6_capacity||0} · missing inside OI span ${x.missing_days_inside_oi_span||0} · ${d.next_action}${failed?` · sample failures ${failed}`:""}`;
+  if(b)b.textContent=`v15.13.3 OI EXPANSION · requested ${d.requested_dates||0} · fetched ${d.fetched_dates||0} · STORE ${st.days||0} days · overlap ${x.overlap_days||0}/${x.nifty_trading_days||0} NIFTY days (${x.coverage_percent||0}%) · overlap bars ${x.overlap_bars||0} · usable H6 capacity ~${x.estimated_nonoverlap_h6_capacity||0} · missing inside OI span ${x.missing_days_inside_oi_span||0} · ${d.next_action}${failed?` · sample failures ${failed}`:""}`;
  }catch(e){if(b)b.textContent="v15.13 OI expansion error: "+e.message}
 }
 
@@ -12073,59 +12073,13 @@ def v1512_option_oi_validation(blocks:int=4, cost_bps:float=3.0):
                 "message":f"Only {len(od)} historical option-OI days are stored. Run Acquire Historical Option OI v15.12 until at least ~50 days are available."
             }
 
-        # Build daily independent derivatives features. Changes are computed on
-        # daily OI first, then mapped to intraday bars to avoid fake intraday
-        # changes caused by forward-filling.
-        daily = od.copy()
-        for c in ["pcr_oi","near_atm_pcr","oi_imbalance","total_put_oi","total_call_oi"]:
-            daily[c] = pd.to_numeric(daily[c], errors="coerce")
-        daily["pcr_chg1"] = daily["pcr_oi"].diff()
-        daily["near_pcr_chg1"] = daily["near_atm_pcr"].diff()
-        daily["imbalance_chg1"] = daily["oi_imbalance"].diff()
-        total = daily["total_put_oi"] + daily["total_call_oi"]
-        daily["total_oi_chg1_pct"] = total.pct_change() * 100.0
-        daily["put_call_build_spread"] = (
-            daily["total_put_oi"].pct_change() - daily["total_call_oi"].pct_change()
-        ) * 100.0
-
-        feat_cols = [
-            "pcr_oi","near_atm_pcr","oi_imbalance",
-            "pcr_chg1","near_pcr_chg1","imbalance_chg1",
-            "total_oi_chg1_pct","put_call_build_spread"
-        ]
-
-        date_maps = {
-            c:{pd.Timestamp(k).date():float(v) for k,v in daily[c].dropna().items()}
-            for c in feat_cols
-        }
-
-        # Normalize NIFTY feature timestamps to Asia/Kolkata BEFORE extracting
-        # the trading date. The persistent candle store can be UTC/GMT-aware;
-        # using raw .date() caused valid OI days to be mapped to the wrong
-        # calendar date and undercounted overlap.
-        df_idx = pd.DatetimeIndex(df.index)
-        if df_idx.tz is None:
-            df_idx_ist = df_idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
-        else:
-            df_idx_ist = df_idx.tz_convert("Asia/Kolkata")
-
-        trading_dates_ist = [ts.date() for ts in df_idx_ist]
-
-        vf = pd.DataFrame(index=df.index)
-        for c,m in date_maps.items():
-            # Exact IST trading-date map only: no forward filling across days
-            # that lack genuine option OI observations.
-            vf[c] = pd.Series(
-                [m.get(d, np.nan) for d in trading_dates_ist],
-                index=df.index,
-                dtype=float
-            )
-
-        close = _v157_num(df["close"])
-        y = (close.shift(-H) - close) / close * 10000.0
-
-        valid_rows = vf.notna().any(axis=1)
-        positions = np.flatnonzero(valid_rows.to_numpy())
+        # v15.13.3: exact same mapper used by expansion/diagnostic.
+        canon=_v15133_canonical_oi_overlap(raw, df)
+        daily=canon["daily"]
+        vf=canon["vf"]
+        feat_cols=canon["feat_cols"]
+        trading_dates_ist=canon["trading_dates_ist"]
+        positions=canon["positions"]
 
         oi_dates = set(pd.Timestamp(x).date() for x in daily.index)
         nifty_dates = set(trading_dates_ist)
@@ -12289,54 +12243,70 @@ def _v1513_nifty_trade_dates_and_counts(raw):
     return sorted(counts), counts
 
 
+
+def _v15133_canonical_oi_overlap(raw, feature_df=None):
+    """One exact OI mapper shared by expansion diagnostics and validation."""
+    od=_v1512_load_oi()
+    if feature_df is None:
+        feature_df=_v146_feature_frame_from_raw(raw)
+    if od.empty or feature_df is None or feature_df.empty:
+        return {"daily":pd.DataFrame(),"vf":pd.DataFrame(),"positions":np.array([],dtype=int),
+                "trading_dates_ist":[],"feat_cols":[],"stored_oi_days":0,"usable_oi_days":0,
+                "overlap_days":0,"stored_overlap_bars":0,"usable_overlap_bars":0,
+                "estimated_nonoverlap_h6_capacity":0,"field_coverage_days":{},"derived_coverage_days":{}}
+
+    daily=od.copy()
+    base_cols=["pcr_oi","near_atm_pcr","oi_imbalance","total_put_oi","total_call_oi"]
+    for c in base_cols: daily[c]=pd.to_numeric(daily[c],errors="coerce")
+    daily["pcr_chg1"]=daily["pcr_oi"].diff()
+    daily["near_pcr_chg1"]=daily["near_atm_pcr"].diff()
+    daily["imbalance_chg1"]=daily["oi_imbalance"].diff()
+    total=daily["total_put_oi"]+daily["total_call_oi"]
+    daily["total_oi_chg1_pct"]=total.pct_change()*100.0
+    daily["put_call_build_spread"]=(daily["total_put_oi"].pct_change()-daily["total_call_oi"].pct_change())*100.0
+    feat_cols=["pcr_oi","near_atm_pcr","oi_imbalance","pcr_chg1","near_pcr_chg1",
+               "imbalance_chg1","total_oi_chg1_pct","put_call_build_spread"]
+    daily[feat_cols]=daily[feat_cols].replace([np.inf,-np.inf],np.nan)
+
+    idx=pd.DatetimeIndex(feature_df.index)
+    idx_ist=idx.tz_localize("UTC").tz_convert("Asia/Kolkata") if idx.tz is None else idx.tz_convert("Asia/Kolkata")
+    dates=[x.date() for x in idx_ist]
+    maps={c:{pd.Timestamp(k).date():float(v) for k,v in daily[c].dropna().items()} for c in feat_cols}
+    vf=pd.DataFrame(index=feature_df.index)
+    for c,m in maps.items():
+        vf[c]=pd.Series([m.get(d,np.nan) for d in dates],index=feature_df.index,dtype=float)
+    valid=vf.notna().any(axis=1)
+    positions=np.flatnonzero(valid.to_numpy())
+    stored_dates={pd.Timestamp(x).date() for x in daily.index}
+    usable_mask=daily[feat_cols].notna().any(axis=1)
+    usable_dates={pd.Timestamp(x).date() for x in daily.index[usable_mask]}
+    nifty_dates=set(dates)
+    return {
+        "daily":daily,"vf":vf,"positions":positions,"trading_dates_ist":dates,"feat_cols":feat_cols,
+        "stored_oi_days":len(stored_dates),"usable_oi_days":len(usable_dates),
+        "overlap_days":len(usable_dates & nifty_dates),
+        "stored_overlap_bars":sum(d in stored_dates for d in dates),
+        "usable_overlap_bars":int(len(positions)),
+        "estimated_nonoverlap_h6_capacity":int(len(positions)//6),
+        "field_coverage_days":{c:int(daily[c].notna().sum()) for c in base_cols},
+        "derived_coverage_days":{c:int(daily[c].notna().sum()) for c in feat_cols},
+    }
+
 def _v1513_coverage(raw):
-    nifty_dates, bar_counts = _v1513_nifty_trade_dates_and_counts(raw)
-    nifty_set = set(nifty_dates)
-    od = _v1512_load_oi()
-    oi_dates = set(pd.Timestamp(x).date() for x in od.index) if not od.empty else set()
-
-    # v15.13.2: distinguish STORED OI rows from USABLE OI rows.
-    # A provider response can create a dated row while one or more research
-    # fields are null/zero. The old coverage screen counted those dates as
-    # validation-ready, which overstated overlap (e.g. 2,956 bars while the
-    # validator could actually use only ~275).
-    usable_dates = set()
-    field_coverage = {}
-    research_cols = ["pcr_oi","near_atm_pcr","oi_imbalance","total_put_oi","total_call_oi"]
-    if not od.empty:
-        tmp = od.copy()
-        for c in research_cols:
-            tmp[c] = pd.to_numeric(tmp[c], errors="coerce")
-            field_coverage[c] = int(tmp[c].notna().sum())
-        usable_mask = tmp[research_cols].notna().any(axis=1)
-        usable_dates = {pd.Timestamp(x).date() for x in tmp.index[usable_mask]}
-
-    stored_overlap = sorted(nifty_set & oi_dates)
-    usable_overlap = sorted(nifty_set & usable_dates)
-    stored_overlap_bars = sum(bar_counts.get(d,0) for d in stored_overlap)
-    usable_overlap_bars = sum(bar_counts.get(d,0) for d in usable_overlap)
-
-    inside_missing=[]
-    if oi_dates:
-        lo,hi=min(oi_dates),max(oi_dates)
-        inside_missing=[d for d in nifty_dates if lo<=d<=hi and d not in oi_dates]
-
+    nifty_dates,_=_v1513_nifty_trade_dates_and_counts(raw)
+    c=_v15133_canonical_oi_overlap(raw)
     return {
         "nifty_trading_days":len(nifty_dates),
-        "oi_days":len(oi_dates),
-        "stored_overlap_days":len(stored_overlap),
-        "stored_overlap_bars":int(stored_overlap_bars),
-        "usable_oi_days":len(usable_dates),
-        "overlap_days":len(usable_overlap),
-        "coverage_percent":round((len(usable_overlap)/len(nifty_dates)*100.0),2) if nifty_dates else 0.0,
-        "overlap_bars":int(usable_overlap_bars),
-        "estimated_nonoverlap_h6_capacity":int(usable_overlap_bars//6),
-        "missing_days_inside_oi_span":len(inside_missing),
-        "field_coverage_days":field_coverage,
-        "oi_start":min(oi_dates).isoformat() if oi_dates else None,
-        "oi_end":max(oi_dates).isoformat() if oi_dates else None,
-        "overlap_start":usable_overlap[0].isoformat() if usable_overlap else None,
-        "overlap_end":usable_overlap[-1].isoformat() if usable_overlap else None,
+        "oi_days":c["stored_oi_days"],
+        "stored_overlap_bars":int(c["stored_overlap_bars"]),
+        "usable_oi_days":c["usable_oi_days"],
+        "overlap_days":c["overlap_days"],
+        "coverage_percent":round(c["overlap_days"]/len(nifty_dates)*100.0,2) if nifty_dates else 0.0,
+        "overlap_bars":c["usable_overlap_bars"],
+        "estimated_nonoverlap_h6_capacity":c["estimated_nonoverlap_h6_capacity"],
+        "field_coverage_days":c["field_coverage_days"],
+        "derived_coverage_days":c["derived_coverage_days"],
+        "measurement":"CANONICAL_VALIDATOR_INPUT"
     }
 
 
@@ -12444,7 +12414,7 @@ def v15132_option_oi_diagnostic():
             bad=t[t[cols].isna().all(axis=1)]
             sample=[pd.Timestamp(x).date().isoformat() for x in bad.index[:10]]
         return {
-            "status":"success","version":"15.13.2",
+            "status":"success","version":"15.13.3",
             "coverage":cov,
             "stored_but_unusable_sample_dates":sample,
             "diagnosis":(
