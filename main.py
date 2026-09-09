@@ -4577,6 +4577,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFailureAttributionV156()">Failure Attribution v15.6</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalQualityV157()">Signal Quality Rebuild v15.7</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureWalkForwardV158()">Feature Walk-Forward v15.8</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureInteractionV159()">Feature Interaction & Regime v15.9</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4599,6 +4600,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btFailureAttribution" style="margin-top:8px">v15.6 failure attribution has not been run yet.</div>
   <div class="bt-note" id="btSignalQuality157" style="margin-top:8px">v15.7 signal quality rebuild has not been run yet.</div>
   <div class="bt-note" id="btFeatureWF158" style="margin-top:8px">v15.8 chronological feature walk-forward has not been run yet.</div>
+  <div class="bt-note" id="btFeatureInteraction159" style="margin-top:8px">v15.9 feature interaction & regime discovery has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5281,6 +5283,19 @@ async function runFeatureWalkForwardV158(){
   const fs=(d.folds||[]).map(z=>`F${z.fold} ${z.accuracy_percent}%/${z.avg_bps}bps n=${z.signals}`).join(" · ");
   if(b)b.textContent=`v15.8 ${d.verdict} · ${d.features_considered} features · ${x.total_signals||0} validation signals · accuracy ${x.weighted_accuracy_percent||0}% · edge ${x.weighted_avg_bps||0}bps · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · ${fs} · ${d.next_action}`;
  }catch(e){if(b)b.textContent="v15.8 feature walk-forward error: "+e.message}
+}
+
+async function runFeatureInteractionV159(){
+ const b=document.getElementById("btFeatureInteraction159");
+ if(b)b.textContent="v15.9 testing frozen feature interactions and volatility/trend regimes across chronological folds…";
+ try{
+  const r=await fetch("/v15/feature-interaction-regime?blocks=4&top_k=4",{cache:"no-store"});
+  const d=await r.json(); if(!r.ok||d.status!=="success")throw new Error(d.message||"Feature interaction/regime test failed");
+  const x=d.summary||{};
+  const fs=(d.folds||[]).map(z=>`F${z.fold} ${z.accuracy_percent}%/${z.avg_bps}bps n=${z.signals}`).join(" · ");
+  const top=(d.top_interactions||[]).slice(0,4).map(z=>`${z.name} ${z.accuracy_percent}%/${z.avg_bps}bps`).join(" | ");
+  if(b)b.textContent=`v15.9 ${d.verdict} · ${x.total_signals||0} signals · accuracy ${x.weighted_accuracy_percent||0}% · edge ${x.weighted_avg_bps||0}bps · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · TOP ${top||"--"} · ${fs} · ${d.next_action}`;
+ }catch(e){if(b)b.textContent="v15.9 interaction/regime error: "+e.message}
 }
 
 async function recoverHistoricalData(){
@@ -11183,4 +11198,96 @@ def v158_feature_walk_forward(blocks:int=4, top_k:int=4):
         verdict="REPEATABLE FEATURE EDGE" if robust else "FEATURE EDGE NOT YET STABLE"
         action=("Feature evidence survived chronological freezing. Next build a paper-only candidate ensemble and compare it against the current engine; keep live routing unchanged." if robust else "Do not promote these features. Keep live routing unchanged and test labels/horizons or additional independent features before another candidate engine.")
         return {"status":"success","model_version":"15.8","test":"chronological_feature_walk_forward","horizon_bars":6,"features_considered":len(feature_names),"folds":folds,"summary":{"folds":len(folds),"total_signals":total_signals,"weighted_accuracy_percent":round(acc,1),"weighted_avg_bps":round(avg,2),"positive_folds":positive,"worst_fold_accuracy_percent":round(worst,1)},"verdict":verdict,"next_action":action,"limitation":"Research-only price-direction validation. Feature selection, polarity and thresholds are frozen per fold; live CE/PE routing is not changed."}
+    except Exception as e: return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# V15.9 FEATURE INTERACTION & REGIME DISCOVERY
+# Chronological research-only test. All thresholds, feature rules,
+# pair selection and regime cutoffs are learned on train data only.
+# ============================================================
+def _v159_vote_series(feats, y, start, end, rules):
+    out={}
+    for feature,rule in rules.items():
+        xv=feats[feature].iloc[start:end]; yv=y.iloc[start:end]
+        for idx,xval in xv.items():
+            if pd.isna(xval) or pd.isna(yv.loc[idx]): continue
+            side=0
+            if xval<=rule["lo"]: side=-rule["polarity"]
+            elif xval>=rule["hi"]: side=rule["polarity"]
+            if side: out.setdefault(idx,{"move":float(yv.loc[idx]),"votes":{}})["votes"][feature]=side
+    return out
+
+def _v159_eval_signed(signed):
+    if not signed: return {"signals":0,"wins":0,"accuracy_percent":0.0,"avg_bps":0.0}
+    a=np.asarray(signed,dtype=float)
+    return {"signals":int(len(a)),"wins":int((a>0).sum()),"accuracy_percent":round(float((a>0).mean()*100),1),"avg_bps":round(float(a.mean()),2)}
+
+@app.get("/v15/feature-interaction-regime")
+def v159_feature_interaction_regime(blocks:int=4, top_k:int=4):
+    try:
+        blocks=max(3,min(int(blocks),6)); top_k=max(2,min(int(top_k),6))
+        raw=_v146_load_raw_history("15m",limit=50000); quality=_v148_quality_report(raw,timeframe="15m")
+        if not quality.get("backtest_ready"): return {"status":"error","message":"History is not backtest-ready."}
+        df=_v146_feature_frame_from_raw(raw)
+        if df is None or len(df)<1800: return {"status":"error","message":"Not enough feature-ready history."}
+        feats=_v157_candidate_features(df); close=_v157_num(df["close"]); y=(close.shift(-6)-close)/close*10000.0
+        n=len(df); initial=max(900,int(n*.45)); block_size=(n-initial)//blocks
+        if block_size<150: return {"status":"error","message":"Chronological validation blocks are too small."}
+        folds=[]; all_pair_rows=[]; total_wins=total_signals=0; weighted_bps=0.0
+        for i in range(blocks):
+            train_end=initial+i*block_size; val_start=train_end; val_end=n if i==blocks-1 else min(n,val_start+block_size)
+            cand=[]; rules={}
+            for feature in feats.columns:
+                rule=_v158_train_rule(feats[feature].iloc[:train_end],y.iloc[:train_end])
+                if rule and rule["train_bps"]>0:
+                    score=(rule["train_accuracy"]-50)*.6+min(20,abs(rule["train_bps"]))*0.4
+                    cand.append((score,feature,rule))
+            cand.sort(reverse=True,key=lambda q:q[0]); chosen=cand[:max(top_k,4)]
+            rules={f:r for _,f,r in chosen}
+            if len(rules)<2: continue
+            # Regime cutoffs are frozen from train only.
+            atr=feats["atr_pct"] if "atr_pct" in feats else feats["realized_vol_8"]
+            trend=feats["ema_gap"] if "ema_gap" in feats else feats["momentum_8"]
+            atr_cut=float(atr.iloc[:train_end].median()); trend_cut=float(trend.iloc[:train_end].abs().median())
+            train_votes=_v159_vote_series(feats,y,0,train_end,rules)
+            val_votes=_v159_vote_series(feats,y,val_start,val_end,rules)
+            names=list(rules); pair_scores=[]
+            for a in range(len(names)):
+                for b in range(a+1,len(names)):
+                    f1,f2=names[a],names[b]; signed=[]
+                    for idx,q in train_votes.items():
+                        v1=q["votes"].get(f1,0); v2=q["votes"].get(f2,0)
+                        if v1 and v1==v2: signed.append(v1*q["move"])
+                    m=_v159_eval_signed(signed)
+                    if m["signals"]>=60 and m["avg_bps"]>0: pair_scores.append(((m["accuracy_percent"]-50)+min(10,m["avg_bps"]),f1,f2,m))
+            pair_scores.sort(reverse=True,key=lambda z:z[0]); selected=pair_scores[:3]
+            signed=[]; pair_fold=[]
+            for _,f1,f2,tm in selected:
+                vals=[]
+                for idx,q in val_votes.items():
+                    v1=q["votes"].get(f1,0); v2=q["votes"].get(f2,0)
+                    if not(v1 and v1==v2): continue
+                    # Interaction must also agree with a frozen market regime context.
+                    av=atr.loc[idx] if idx in atr.index else np.nan; tv=trend.loc[idx] if idx in trend.index else np.nan
+                    if pd.isna(av) or pd.isna(tv): continue
+                    regime=("HIGHVOL" if av>=atr_cut else "LOWVOL")+("_TREND" if abs(tv)>=trend_cut else "_RANGE")
+                    vals.append(v1*q["move"]); all_pair_rows.append({"name":f1+"+"+f2+"@"+regime,"move":v1*q["move"]})
+                pm=_v159_eval_signed(vals); pair_fold.append({"pair":f1+"+"+f2,**pm})
+                signed.extend(vals)
+            fm=_v159_eval_signed(signed); total_signals+=fm["signals"]; total_wins+=fm["wins"]; weighted_bps+=fm["avg_bps"]*fm["signals"]
+            folds.append({"fold":i+1,"train_candles":train_end,"validation_candles":val_end-val_start,"selected_pairs":[x[1]+"+"+x[2] for x in selected],"pair_results":pair_fold,**fm})
+        if not total_signals: return {"status":"error","message":"No frozen feature interactions produced validation signals."}
+        acc=total_wins/total_signals*100; avg=weighted_bps/total_signals; positive=sum(1 for f in folds if f["accuracy_percent"]>50 and f["avg_bps"]>0); worst=min((f["accuracy_percent"] for f in folds),default=0)
+        grouped={}
+        for r in all_pair_rows: grouped.setdefault(r["name"],[]).append(r["move"])
+        top=[]
+        for name,moves in grouped.items():
+            m=_v159_eval_signed(moves)
+            if m["signals"]>=25: top.append({"name":name,**m})
+        top.sort(key=lambda z:(z["accuracy_percent"],z["avg_bps"],z["signals"]),reverse=True)
+        robust=positive>=3 and len(folds)>=4 and acc>=55.0 and avg>0 and worst>=50.0
+        verdict="INTERACTION EDGE REPEATABLE" if robust else "INTERACTION EDGE NOT YET STABLE"
+        action=("Evidence now clears the research promotion gate. Next build a paper-only shadow candidate and compare it with the current engine; keep live routing unchanged." if robust else "Do not promote. Keep live routing unchanged; inspect regime-specific failures and add genuinely independent inputs rather than more fitted filters.")
+        return {"status":"success","model_version":"15.9","test":"feature_interaction_regime_discovery","horizon_bars":6,"folds":folds,"top_interactions":top[:10],"summary":{"folds":len(folds),"total_signals":total_signals,"weighted_accuracy_percent":round(acc,1),"weighted_avg_bps":round(avg,2),"positive_folds":positive,"worst_fold_accuracy_percent":round(worst,1)},"verdict":verdict,"next_action":action,"promotion_gate":{"min_positive_folds":"3/4","min_accuracy_percent":55.0,"min_worst_fold_accuracy_percent":50.0,"positive_avg_bps":True},"limitation":"Research-only NIFTY direction test. It does not reconstruct historical option-chain, FII/DII or news snapshots and does not alter live CE/PE routing."}
     except Exception as e: return {"status":"error","message":str(e)}
