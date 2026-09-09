@@ -2603,6 +2603,24 @@ def _cached_market_snapshot(symbol, name, ttl_seconds=300):
     return value
 
 
+# Sign applied to the 20-bar price z-score inside the live statistical score.
+#
+# A positive z means price is stretched ABOVE its 20-bar mean. Through v15.9
+# this term was added with a momentum sign (+0.25), so a stretched-up tape read
+# as more bullish and a washed-out tape read as more bearish. That is the exact
+# defect FINDINGS_v13.md documented in the v12.3 backtest score, still live here
+# and at more than twice the weight. The v13 edge report found NIFTY 15m
+# mean-reverting: every momentum component had negative IC at all four horizons
+# while reversion_score was positive at all four.
+#
+# Set to -1.0 the term reads as reversion, which is the sign the edge report
+# supports. Set to +1.0 to restore pre-v15.10 behaviour exactly.
+#
+# NOTE: this changes live CE/PE output. It is the one place in this package
+# where that is true. Compare both settings in paper before trusting either.
+LIVE_ZSCORE_POLARITY = -1.0
+
+
 def calculate_statistical_features(data):
     """
     Normalized return / volatility features from completed candles only.
@@ -2642,7 +2660,7 @@ def calculate_statistical_features(data):
         score = (
             max(-1.0, min(1.0, ret_3 / 0.004)) * 0.35
             + max(-1.0, min(1.0, ret_6 / 0.006)) * 0.30
-            + max(-1.0, min(1.0, zscore / 2.0)) * 0.25
+            + max(-1.0, min(1.0, zscore / 2.0)) * 0.25 * LIVE_ZSCORE_POLARITY
             + max(-1.0, min(1.0, ret_1 / 0.0015)) * 0.10
         )
         score = max(-1.0, min(1.0, score))
@@ -2657,6 +2675,10 @@ def calculate_statistical_features(data):
             "log_return_1": round(_safe_float(log_returns.iloc[-1], 0.0), 6),
             "rolling_volatility_20": round(vol_20 * 100, 4),
             "realized_vol_annualized": round(realized_vol, 2),
+            "zscore_polarity": LIVE_ZSCORE_POLARITY,
+            "zscore_interpretation": ("REVERSION (stretched up = bearish)"
+                                      if LIVE_ZSCORE_POLARITY < 0
+                                      else "MOMENTUM (stretched up = bullish)"),
             "price_zscore_20": round(zscore, 3)
         }
     except Exception as e:
@@ -4577,7 +4599,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFailureAttributionV156()">Failure Attribution v15.6</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalQualityV157()">Signal Quality Rebuild v15.7</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureWalkForwardV158()">Feature Walk-Forward v15.8</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureInteractionV159()">Feature Interaction & Regime v15.9</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureInteractionV1510()">Feature Interaction & Regime v15.10</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4600,7 +4622,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btFailureAttribution" style="margin-top:8px">v15.6 failure attribution has not been run yet.</div>
   <div class="bt-note" id="btSignalQuality157" style="margin-top:8px">v15.7 signal quality rebuild has not been run yet.</div>
   <div class="bt-note" id="btFeatureWF158" style="margin-top:8px">v15.8 chronological feature walk-forward has not been run yet.</div>
-  <div class="bt-note" id="btFeatureInteraction159" style="margin-top:8px">v15.9 feature interaction & regime discovery has not been run yet.</div>
+  <div class="bt-note" id="btFeatureInteraction1510" style="margin-top:8px">v15.10 corrected feature interaction & regime discovery has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5285,17 +5307,21 @@ async function runFeatureWalkForwardV158(){
  }catch(e){if(b)b.textContent="v15.8 feature walk-forward error: "+e.message}
 }
 
-async function runFeatureInteractionV159(){
- const b=document.getElementById("btFeatureInteraction159");
- if(b)b.textContent="v15.9 testing frozen feature interactions and volatility/trend regimes across chronological folds…";
+async function runFeatureInteractionV1510(){
+ const b=document.getElementById("btFeatureInteraction1510");
+ if(b)b.textContent="v15.10 testing frozen feature interactions on non-overlapping chronological samples\u2026";
  try{
   const r=await fetch("/v15/feature-interaction-regime?blocks=4&top_k=4",{cache:"no-store"});
   const d=await r.json(); if(!r.ok||d.status!=="success")throw new Error(d.message||"Feature interaction/regime test failed");
-  const x=d.summary||{};
-  const fs=(d.folds||[]).map(z=>`F${z.fold} ${z.accuracy_percent}%/${z.avg_bps}bps n=${z.signals}`).join(" · ");
-  const top=(d.top_interactions||[]).slice(0,4).map(z=>`${z.name} ${z.accuracy_percent}%/${z.avg_bps}bps`).join(" | ");
-  if(b)b.textContent=`v15.9 ${d.verdict} · ${x.total_signals||0} signals · accuracy ${x.weighted_accuracy_percent||0}% · edge ${x.weighted_avg_bps||0}bps · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · TOP ${top||"--"} · ${fs} · ${d.next_action}`;
- }catch(e){if(b)b.textContent="v15.9 interaction/regime error: "+e.message}
+  const x=d.summary||{}; const u=d.uncorrected_comparison||{}; const g=d.fragility;
+  const fs=(d.folds||[]).map(z=>`F${z.fold} ${z.accuracy_percent}%/${z.avg_bps}bps n=${z.independent_signals}`).join(" \u00b7 ");
+  const failed=Object.entries(d.gate_checks||{}).filter(([,v])=>!v).map(([k])=>k).join(", ")||"none";
+  const top=(d.top_interactions||[]).slice(0,4)
+    .map(z=>`${z.name} train ${z.train_accuracy_percent}% \u2192 val ${z.validation_accuracy_percent}% (n=${z.validation_signals})`)
+    .join(" | ");
+  const frag=g?`drop F${g.dropped_fold} \u2192 ${g.remaining_accuracy_percent}%/${g.remaining_avg_bps}bps ${g.result_survives?"survives":"COLLAPSES"}`:"--";
+  if(b)b.textContent=`v15.10 ${d.verdict} \u00b7 ${x.independent_signals||0} independent signals (v15.9 would have counted ${u.signals||0} at ${u.accuracy_percent||0}%) \u00b7 accuracy ${x.weighted_accuracy_percent||0}% \u00b7 p=${x.p_value} \u00b7 gross ${x.weighted_avg_bps||0}bps \u00b7 NET AFTER COST ${x.net_avg_bps||0}bps \u00b7 positive folds ${x.positive_folds||0}/${x.folds||0} \u00b7 worst ${x.worst_fold_accuracy_percent||0}% \u00b7 fragility: ${frag} \u00b7 failing: ${failed} \u00b7 TRAIN-RANKED CELLS ${top||"--"} \u00b7 ${fs} \u00b7 ${d.next_action}`;
+ }catch(e){if(b)b.textContent="v15.10 interaction/regime error: "+e.message}
 }
 
 async function recoverHistoricalData(){
@@ -7706,6 +7732,12 @@ def _bt_prepare_frame(period="60d", interval="15m"):
         + ((rsi - 50) / 20).clip(-1, 1) * 0.12
         + ((macd - macd_signal) / close * 250).clip(-1, 1) * 0.12
         + ((stochastic_k - stochastic_d) / 20).clip(-1, 1) * 0.07
+        # DELIBERATELY UNCHANGED. These two mean-reversion measures carry a
+        # momentum sign, which is the defect FINDINGS_v13.md identified. This
+        # frame feeds ONLY the legacy /backtest/* routes, kept as the broken
+        # baseline the v13 routes are compared against. The live score was
+        # corrected in v15.10 (see LIVE_ZSCORE_POLARITY); do not "fix" it here
+        # or the v12.3-vs-v13 comparison stops meaning anything.
         + ((bb_percent_b - 0.5) / 0.5).clip(-1, 1) * 0.06
         + (zscore / 2).clip(-1, 1) * 0.10
         + (ret3 / 0.006).clip(-1, 1) * 0.07
@@ -11202,92 +11234,390 @@ def v158_feature_walk_forward(blocks:int=4, top_k:int=4):
 
 
 # ============================================================
-# V15.9 FEATURE INTERACTION & REGIME DISCOVERY
-# Chronological research-only test. All thresholds, feature rules,
-# pair selection and regime cutoffs are learned on train data only.
+# V15.10 FEATURE INTERACTION & REGIME DISCOVERY (corrected)
+#
+# Replaces the v15.9 measurement, which overstated its own evidence
+# in four ways:
+#
+#   1. Every selected pair appended its own copy of the same
+#      validation bar, so shared-feature pairs double- and
+#      triple-counted identical moves as independent "signals".
+#   2. The H6 label overlaps six bars, so consecutive signals share
+#      most of their forward window. Neither effect was corrected,
+#      and the reported n was used as if it were an independent
+#      sample size.
+#   3. top_interactions grouped VALIDATION rows by pair@regime and
+#      sorted by VALIDATION accuracy. The cells being displayed were
+#      therefore chosen by looking at the answer; the headline
+#      "77.4%" cell was the maximum of a dozen noisy small-n cells.
+#   4. The gate accepted any avg_bps > 0. On a spot-direction label
+#      that ignores the option bid-ask and theta the trade actually
+#      pays, "> 0" is not a threshold.
+#
+# It also fixes a boundary leak: rules were trained on y.iloc[:train_end],
+# whose last six labels read closes from inside the validation block.
+#
+# Feature rules, polarity, thresholds, pair ranking and regime cutoffs
+# are still learned on train data only. Live CE/PE routing is unchanged.
 # ============================================================
-def _v159_vote_series(feats, y, start, end, rules):
-    out={}
-    for feature,rule in rules.items():
-        xv=feats[feature].iloc[start:end]; yv=y.iloc[start:end]
-        for idx,xval in xv.items():
-            if pd.isna(xval) or pd.isna(yv.loc[idx]): continue
-            side=0
-            if xval<=rule["lo"]: side=-rule["polarity"]
-            elif xval>=rule["hi"]: side=rule["polarity"]
-            if side: out.setdefault(idx,{"move":float(yv.loc[idx]),"votes":{}})["votes"][feature]=side
+V1510_HORIZON = 6
+
+# Round-trip friction, expressed in basis points of NIFTY SPOT so it can
+# be compared against the spot-direction label this test measures.
+# Derivation: a ~Rs 0.75 bid-ask on each leg of a ~Rs 110 premium is
+# ~Rs 1.50 round trip; at ~0.5 delta that is ~3.0 index points; on a
+# 23,500 index that is ~1.28 bps. Brokerage, STT and impact roughly
+# double it. 3.0 bps is a deliberately generous floor -- the real cost
+# on an expiry-day option is higher, and theta is not in this number
+# at all.
+V1510_DEFAULT_COST_BPS = 3.0
+
+
+def _v1510_eval(moves, cost_bps=0.0):
+    if not moves:
+        return {"signals": 0, "wins": 0, "accuracy_percent": 0.0,
+                "avg_bps": 0.0, "net_avg_bps": 0.0, "z": 0.0, "p_value": 1.0}
+    a = np.asarray(moves, dtype=float)
+    n = int(len(a))
+    wins = int((a > 0).sum())
+    p = wins / n
+    z = (p - 0.5) / math.sqrt(0.25 / n)
+    return {
+        "signals": n,
+        "wins": wins,
+        "accuracy_percent": round(p * 100, 1),
+        "avg_bps": round(float(a.mean()), 2),
+        "net_avg_bps": round(float(a.mean()) - float(cost_bps), 2),
+        "z": round(float(z), 2),
+        "p_value": round(float(math.erfc(abs(z) / math.sqrt(2))), 4),
+    }
+
+
+def _v1510_decorrelate(events, horizon=V1510_HORIZON):
+    """events: iterable of (bar_position, signed_move).
+
+    The H6 label at bar i reads close[i+6], so two signals fewer than six
+    bars apart share most of their forward window and are not independent
+    observations. Walk forward in time and keep a signal only when its
+    window does not overlap the last one kept. What survives is a genuinely
+    non-overlapping sample; the gate is scored on this, not on the raw count.
+    """
+    kept = []
+    last = None
+    for pos, mv in sorted(events, key=lambda e: e[0]):
+        if last is None or (pos - last) >= horizon:
+            kept.append(mv)
+            last = pos
+    return kept
+
+
+def _v1510_vote_series(feats, y, start, end, rules):
+    out = {}
+    for feature, rule in rules.items():
+        xv = feats[feature].iloc[start:end]
+        yv = y.iloc[start:end]
+        for idx, xval in xv.items():
+            if pd.isna(xval) or pd.isna(yv.loc[idx]):
+                continue
+            side = 0
+            if xval <= rule["lo"]:
+                side = -rule["polarity"]
+            elif xval >= rule["hi"]:
+                side = rule["polarity"]
+            if side:
+                out.setdefault(idx, {"move": float(yv.loc[idx]), "votes": {}})["votes"][feature] = side
     return out
 
-def _v159_eval_signed(signed):
-    if not signed: return {"signals":0,"wins":0,"accuracy_percent":0.0,"avg_bps":0.0}
-    a=np.asarray(signed,dtype=float)
-    return {"signals":int(len(a)),"wins":int((a>0).sum()),"accuracy_percent":round(float((a>0).mean()*100),1),"avg_bps":round(float(a.mean()),2)}
+
+def _v1510_pair_events(votes, f1, f2, posmap, regime_fn=None):
+    """One row per bar where both features of the pair fire the same way."""
+    rows = []
+    for idx, q in votes.items():
+        v1 = q["votes"].get(f1, 0)
+        v2 = q["votes"].get(f2, 0)
+        if not (v1 and v1 == v2):
+            continue
+        pos = posmap.get(idx)
+        if pos is None:
+            continue
+        reg = regime_fn(idx) if regime_fn else None
+        if regime_fn and reg is None:
+            continue
+        rows.append({"pos": pos, "side": v1, "move": v1 * q["move"], "regime": reg})
+    return rows
+
 
 @app.get("/v15/feature-interaction-regime")
-def v159_feature_interaction_regime(blocks:int=4, top_k:int=4):
+def v1510_feature_interaction_regime(blocks: int = 4, top_k: int = 4,
+                                     cost_bps: float = V1510_DEFAULT_COST_BPS):
     try:
-        blocks=max(3,min(int(blocks),6)); top_k=max(2,min(int(top_k),6))
-        raw=_v146_load_raw_history("15m",limit=50000); quality=_v148_quality_report(raw,timeframe="15m")
-        if not quality.get("backtest_ready"): return {"status":"error","message":"History is not backtest-ready."}
-        df=_v146_feature_frame_from_raw(raw)
-        if df is None or len(df)<1800: return {"status":"error","message":"Not enough feature-ready history."}
-        feats=_v157_candidate_features(df); close=_v157_num(df["close"]); y=(close.shift(-6)-close)/close*10000.0
-        n=len(df); initial=max(900,int(n*.45)); block_size=(n-initial)//blocks
-        if block_size<150: return {"status":"error","message":"Chronological validation blocks are too small."}
-        folds=[]; all_pair_rows=[]; total_wins=total_signals=0; weighted_bps=0.0
+        blocks = max(3, min(int(blocks), 6))
+        top_k = max(2, min(int(top_k), 6))
+        cost_bps = max(0.0, float(cost_bps))
+        H = V1510_HORIZON
+
+        raw = _v146_load_raw_history("15m", limit=50000)
+        quality = _v148_quality_report(raw, timeframe="15m")
+        if not quality.get("backtest_ready"):
+            return {"status": "error", "message": "History is not backtest-ready."}
+        df = _v146_feature_frame_from_raw(raw)
+        if df is None or len(df) < 1800:
+            return {"status": "error", "message": "Not enough feature-ready history."}
+
+        feats = _v157_candidate_features(df)
+        close = _v157_num(df["close"])
+        y = (close.shift(-H) - close) / close * 10000.0
+        posmap = {ts: i for i, ts in enumerate(df.index)}
+
+        n = len(df)
+        initial = max(900, int(n * .45))
+        block_size = (n - initial) // blocks
+        if block_size < 150:
+            return {"status": "error", "message": "Chronological validation blocks are too small."}
+
+        folds = []
+        cell_rows = {}
+        raw_signals = raw_wins = 0
+        raw_weighted_bps = 0.0
+        dec_moves_all = []
+
         for i in range(blocks):
-            train_end=initial+i*block_size; val_start=train_end; val_end=n if i==blocks-1 else min(n,val_start+block_size)
-            cand=[]; rules={}
+            train_end = initial + i * block_size
+            val_start = train_end
+            val_end = n if i == blocks - 1 else min(n, val_start + block_size)
+
+            # Boundary leak fix: the last H labels inside the train slice
+            # read closes from the validation block, so they are excluded.
+            train_label_end = max(0, train_end - H)
+            if train_label_end < 400:
+                continue
+
+            cand = []
             for feature in feats.columns:
-                rule=_v158_train_rule(feats[feature].iloc[:train_end],y.iloc[:train_end])
-                if rule and rule["train_bps"]>0:
-                    score=(rule["train_accuracy"]-50)*.6+min(20,abs(rule["train_bps"]))*0.4
-                    cand.append((score,feature,rule))
-            cand.sort(reverse=True,key=lambda q:q[0]); chosen=cand[:max(top_k,4)]
-            rules={f:r for _,f,r in chosen}
-            if len(rules)<2: continue
-            # Regime cutoffs are frozen from train only.
-            atr=feats["atr_pct"] if "atr_pct" in feats else feats["realized_vol_8"]
-            trend=feats["ema_gap"] if "ema_gap" in feats else feats["momentum_8"]
-            atr_cut=float(atr.iloc[:train_end].median()); trend_cut=float(trend.iloc[:train_end].abs().median())
-            train_votes=_v159_vote_series(feats,y,0,train_end,rules)
-            val_votes=_v159_vote_series(feats,y,val_start,val_end,rules)
-            names=list(rules); pair_scores=[]
-            for a in range(len(names)):
-                for b in range(a+1,len(names)):
-                    f1,f2=names[a],names[b]; signed=[]
-                    for idx,q in train_votes.items():
-                        v1=q["votes"].get(f1,0); v2=q["votes"].get(f2,0)
-                        if v1 and v1==v2: signed.append(v1*q["move"])
-                    m=_v159_eval_signed(signed)
-                    if m["signals"]>=60 and m["avg_bps"]>0: pair_scores.append(((m["accuracy_percent"]-50)+min(10,m["avg_bps"]),f1,f2,m))
-            pair_scores.sort(reverse=True,key=lambda z:z[0]); selected=pair_scores[:3]
-            signed=[]; pair_fold=[]
-            for _,f1,f2,tm in selected:
-                vals=[]
-                for idx,q in val_votes.items():
-                    v1=q["votes"].get(f1,0); v2=q["votes"].get(f2,0)
-                    if not(v1 and v1==v2): continue
-                    # Interaction must also agree with a frozen market regime context.
-                    av=atr.loc[idx] if idx in atr.index else np.nan; tv=trend.loc[idx] if idx in trend.index else np.nan
-                    if pd.isna(av) or pd.isna(tv): continue
-                    regime=("HIGHVOL" if av>=atr_cut else "LOWVOL")+("_TREND" if abs(tv)>=trend_cut else "_RANGE")
-                    vals.append(v1*q["move"]); all_pair_rows.append({"name":f1+"+"+f2+"@"+regime,"move":v1*q["move"]})
-                pm=_v159_eval_signed(vals); pair_fold.append({"pair":f1+"+"+f2,**pm})
-                signed.extend(vals)
-            fm=_v159_eval_signed(signed); total_signals+=fm["signals"]; total_wins+=fm["wins"]; weighted_bps+=fm["avg_bps"]*fm["signals"]
-            folds.append({"fold":i+1,"train_candles":train_end,"validation_candles":val_end-val_start,"selected_pairs":[x[1]+"+"+x[2] for x in selected],"pair_results":pair_fold,**fm})
-        if not total_signals: return {"status":"error","message":"No frozen feature interactions produced validation signals."}
-        acc=total_wins/total_signals*100; avg=weighted_bps/total_signals; positive=sum(1 for f in folds if f["accuracy_percent"]>50 and f["avg_bps"]>0); worst=min((f["accuracy_percent"] for f in folds),default=0)
-        grouped={}
-        for r in all_pair_rows: grouped.setdefault(r["name"],[]).append(r["move"])
-        top=[]
-        for name,moves in grouped.items():
-            m=_v159_eval_signed(moves)
-            if m["signals"]>=25: top.append({"name":name,**m})
-        top.sort(key=lambda z:(z["accuracy_percent"],z["avg_bps"],z["signals"]),reverse=True)
-        robust=positive>=3 and len(folds)>=4 and acc>=55.0 and avg>0 and worst>=50.0
-        verdict="INTERACTION EDGE REPEATABLE" if robust else "INTERACTION EDGE NOT YET STABLE"
-        action=("Evidence now clears the research promotion gate. Next build a paper-only shadow candidate and compare it with the current engine; keep live routing unchanged." if robust else "Do not promote. Keep live routing unchanged; inspect regime-specific failures and add genuinely independent inputs rather than more fitted filters.")
-        return {"status":"success","model_version":"15.9","test":"feature_interaction_regime_discovery","horizon_bars":6,"folds":folds,"top_interactions":top[:10],"summary":{"folds":len(folds),"total_signals":total_signals,"weighted_accuracy_percent":round(acc,1),"weighted_avg_bps":round(avg,2),"positive_folds":positive,"worst_fold_accuracy_percent":round(worst,1)},"verdict":verdict,"next_action":action,"promotion_gate":{"min_positive_folds":"3/4","min_accuracy_percent":55.0,"min_worst_fold_accuracy_percent":50.0,"positive_avg_bps":True},"limitation":"Research-only NIFTY direction test. It does not reconstruct historical option-chain, FII/DII or news snapshots and does not alter live CE/PE routing."}
-    except Exception as e: return {"status":"error","message":str(e)}
+                rule = _v158_train_rule(feats[feature].iloc[:train_label_end],
+                                       y.iloc[:train_label_end])
+                if rule and rule["train_bps"] > 0:
+                    score = (rule["train_accuracy"] - 50) * .6 + min(20, abs(rule["train_bps"])) * 0.4
+                    cand.append((score, feature, rule))
+            cand.sort(reverse=True, key=lambda q: q[0])
+            chosen = cand[:max(top_k, 4)]
+            rules = {f: r for _, f, r in chosen}
+            if len(rules) < 2:
+                continue
+
+            # Regime cutoffs frozen from train only.
+            atr = feats["atr_pct"] if "atr_pct" in feats else feats["realized_vol_8"]
+            trend = feats["ema20_gap"] if "ema20_gap" in feats else feats["momentum_8"]
+            atr_cut = float(atr.iloc[:train_end].median())
+            trend_cut = float(trend.iloc[:train_end].abs().median())
+
+            def regime_of(idx, _atr=atr, _trend=trend, _ac=atr_cut, _tc=trend_cut):
+                av = _atr.loc[idx] if idx in _atr.index else np.nan
+                tv = _trend.loc[idx] if idx in _trend.index else np.nan
+                if pd.isna(av) or pd.isna(tv):
+                    return None
+                return ("HIGHVOL" if av >= _ac else "LOWVOL") + ("_TREND" if abs(tv) >= _tc else "_RANGE")
+
+            train_votes = _v1510_vote_series(feats, y, 0, train_label_end, rules)
+            val_votes = _v1510_vote_series(feats, y, val_start, val_end, rules)
+
+            names = list(rules)
+            pair_scores = []
+            for a_i in range(len(names)):
+                for b_i in range(a_i + 1, len(names)):
+                    f1, f2 = names[a_i], names[b_i]
+                    tr_rows = _v1510_pair_events(train_votes, f1, f2, posmap, regime_of)
+                    tm = _v1510_eval(_v1510_decorrelate([(r["pos"], r["move"]) for r in tr_rows], H))
+                    if tm["signals"] >= 40 and tm["avg_bps"] > 0:
+                        pair_scores.append(((tm["accuracy_percent"] - 50) + min(10, tm["avg_bps"]),
+                                            f1, f2, tm, tr_rows))
+            pair_scores.sort(reverse=True, key=lambda z: z[0])
+            selected = pair_scores[:3]
+            if not selected:
+                continue
+
+            # --- per-bar consensus: each validation bar contributes at most
+            # one signal, no matter how many selected pairs fire on it. Pairs
+            # that disagree on a bar cancel and the bar is dropped.
+            bar_side = {}
+            bar_move = {}
+            bar_regime = {}
+            pair_fold = []
+            for _, f1, f2, tm, tr_rows in selected:
+                v_rows = _v1510_pair_events(val_votes, f1, f2, posmap, regime_of)
+                v_dec = _v1510_decorrelate([(r["pos"], r["move"]) for r in v_rows], H)
+                vm = _v1510_eval(v_dec, cost_bps)
+                pair_fold.append({
+                    "pair": f1 + "+" + f2,
+                    "train_accuracy_percent": tm["accuracy_percent"],
+                    "train_signals": tm["signals"],
+                    "train_avg_bps": tm["avg_bps"],
+                    "validation": vm,
+                    "degradation_pts": round(tm["accuracy_percent"] - vm["accuracy_percent"], 1),
+                })
+                for r in v_rows:
+                    p = r["pos"]
+                    if p in bar_side and bar_side[p] != r["side"]:
+                        bar_side[p] = 0
+                    else:
+                        bar_side[p] = r["side"]
+                        bar_move[p] = r["move"]
+                        bar_regime[p] = r["regime"]
+
+                # Regime cells are PRE-REGISTERED on train and then reported
+                # on validation. v15.9 picked the cells by validation accuracy,
+                # which is selection on the outcome.
+                tr_by_reg = {}
+                for r in tr_rows:
+                    tr_by_reg.setdefault(r["regime"], []).append((r["pos"], r["move"]))
+                for reg, evs in tr_by_reg.items():
+                    tcell = _v1510_eval(_v1510_decorrelate(evs, H))
+                    if tcell["signals"] < 25 or tcell["avg_bps"] <= 0:
+                        continue
+                    key = f1 + "+" + f2 + "@" + reg
+                    slot = cell_rows.setdefault(key, {"train": [], "val": []})
+                    slot["train"].extend(evs)
+                    slot["val"].extend([(r["pos"], r["move"]) for r in v_rows if r["regime"] == reg])
+
+            consensus = [(p, bar_move[p]) for p, s in bar_side.items() if s != 0]
+            raw_moves = [m for _, m in consensus]
+            dec_moves = _v1510_decorrelate(consensus, H)
+            dec_moves_all.extend(dec_moves)
+
+            rm = _v1510_eval(raw_moves, cost_bps)
+            dm = _v1510_eval(dec_moves, cost_bps)
+            raw_signals += rm["signals"]
+            raw_wins += rm["wins"]
+            raw_weighted_bps += rm["avg_bps"] * rm["signals"]
+
+            folds.append({
+                "fold": i + 1,
+                "train_candles": train_label_end,
+                "validation_candles": val_end - val_start,
+                "selected_pairs": [x[1] + "+" + x[2] for x in selected],
+                "pair_results": pair_fold,
+                "raw_bar_signals": rm["signals"],
+                "independent_signals": dm["signals"],
+                "accuracy_percent": dm["accuracy_percent"],
+                "avg_bps": dm["avg_bps"],
+                "net_avg_bps": dm["net_avg_bps"],
+                "signals": dm["signals"],
+                "wins": dm["wins"],
+                "p_value": dm["p_value"],
+            })
+
+        if not folds or not dec_moves_all:
+            return {"status": "error", "message": "No frozen feature interactions produced independent validation signals."}
+
+        pooled = _v1510_eval(dec_moves_all, cost_bps)
+        positive = sum(1 for f in folds if f["accuracy_percent"] > 50 and f["avg_bps"] > 0)
+        worst = min(f["accuracy_percent"] for f in folds)
+
+        # Leave-one-fold-out fragility: if dropping the single best fold
+        # flips the pooled result, the edge is one fold, not an edge.
+        fragility = None
+        if len(folds) >= 3:
+            best = max(folds, key=lambda f: f["accuracy_percent"])
+            rest = [f for f in folds if f is not best]
+            rn = sum(f["signals"] for f in rest)
+            if rn:
+                racc = sum(f["wins"] for f in rest) / rn * 100
+                rbps = sum(f["avg_bps"] * f["signals"] for f in rest) / rn
+                fragility = {
+                    "dropped_fold": best["fold"],
+                    "remaining_signals": rn,
+                    "remaining_accuracy_percent": round(racc, 1),
+                    "remaining_avg_bps": round(rbps, 2),
+                    "result_survives": bool(racc >= 52.5 and rbps > 0),
+                }
+
+        cells = []
+        for name, slot in cell_rows.items():
+            tcell = _v1510_eval(_v1510_decorrelate(slot["train"], H))
+            vcell = _v1510_eval(_v1510_decorrelate(slot["val"], H), cost_bps)
+            if tcell["signals"] < 25:
+                continue
+            cells.append({
+                "name": name,
+                "selection_basis": "train",
+                "train_accuracy_percent": tcell["accuracy_percent"],
+                "train_signals": tcell["signals"],
+                "train_avg_bps": tcell["avg_bps"],
+                "validation_accuracy_percent": vcell["accuracy_percent"],
+                "validation_signals": vcell["signals"],
+                "validation_avg_bps": vcell["avg_bps"],
+                "validation_p_value": vcell["p_value"],
+                "degradation_pts": round(tcell["accuracy_percent"] - vcell["accuracy_percent"], 1),
+            })
+        # Ordered by TRAIN rank. Never re-sort this list on validation accuracy.
+        cells.sort(key=lambda z: (z["train_accuracy_percent"], z["train_avg_bps"]), reverse=True)
+
+        gate = {
+            "min_independent_signals": 200,
+            "min_positive_folds": "3/4",
+            "min_accuracy_percent": 55.0,
+            "min_worst_fold_accuracy_percent": 50.0,
+            "min_net_avg_bps": 0.0,
+            "max_p_value": 0.05,
+            "assumed_round_trip_cost_bps": cost_bps,
+        }
+        checks = {
+            "independent_signals": pooled["signals"] >= 200,
+            "positive_folds": positive >= 3 and len(folds) >= 4,
+            "accuracy": pooled["accuracy_percent"] >= 55.0,
+            "worst_fold": worst >= 50.0,
+            "net_edge_after_cost": pooled["net_avg_bps"] > 0,
+            "significant": pooled["p_value"] < 0.05,
+            "survives_fold_drop": bool(fragility and fragility["result_survives"]),
+        }
+        robust = all(checks.values())
+        verdict = "INTERACTION EDGE REPEATABLE" if robust else "INTERACTION EDGE NOT YET STABLE"
+        failed = [k for k, v in checks.items() if not v]
+        action = ("Evidence clears the corrected research gate. Next build a paper-only shadow "
+                  "candidate and compare it with the current engine; keep live routing unchanged."
+                  if robust else
+                  "Do not promote. Failing: " + ", ".join(failed) +
+                  ". Keep live routing unchanged and add genuinely independent inputs "
+                  "(option-chain OI deltas, India VIX term structure, futures basis) "
+                  "rather than more fitted price filters.")
+
+        raw_acc = (raw_wins / raw_signals * 100) if raw_signals else 0.0
+        raw_avg = (raw_weighted_bps / raw_signals) if raw_signals else 0.0
+
+        return {
+            "status": "success",
+            "model_version": "15.10",
+            "test": "feature_interaction_regime_discovery_corrected",
+            "horizon_bars": H,
+            "folds": folds,
+            "top_interactions": cells[:10],
+            "summary": {
+                "folds": len(folds),
+                "total_signals": pooled["signals"],
+                "independent_signals": pooled["signals"],
+                "weighted_accuracy_percent": pooled["accuracy_percent"],
+                "weighted_avg_bps": pooled["avg_bps"],
+                "net_avg_bps": pooled["net_avg_bps"],
+                "p_value": pooled["p_value"],
+                "positive_folds": positive,
+                "worst_fold_accuracy_percent": round(worst, 1),
+            },
+            "uncorrected_comparison": {
+                "note": "What v15.9 would have reported on the same data: one row per pair "
+                        "per bar, overlapping H6 windows uncorrected.",
+                "signals": raw_signals,
+                "accuracy_percent": round(raw_acc, 1),
+                "avg_bps": round(raw_avg, 2),
+            },
+            "fragility": fragility,
+            "gate_checks": checks,
+            "verdict": verdict,
+            "next_action": action,
+            "promotion_gate": gate,
+            "limitation": "Research-only NIFTY SPOT direction test. It does not reconstruct "
+                          "historical option-chain, FII/DII or news snapshots, does not model "
+                          "theta on the option actually traded, and does not alter live CE/PE routing. "
+                          "Clearing this gate is necessary, not sufficient.",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
