@@ -4563,11 +4563,12 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
           <input id="historyBackfillFile" type="file" accept=".csv" style="width:100%;margin-top:8px;padding:10px;border:1px solid #2b3f59;border-radius:10px;background:#0b1828;color:#dce8f8">
           <button class="primary" style="width:100%;margin-top:8px" onclick="uploadHistoryBackfill()">Import 15m CSV Backfill v14.7</button>
           <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)">
-            <div style="font-size:12px;font-weight:700;margin-bottom:8px">v15.1 HISTORICAL DATASET EXPANSION</div>
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px">v15.2 HISTORICAL DATA ACQUISITION</div>
             <input id="v150DatasetFiles" type="file" accept=".csv,text/csv" multiple style="width:100%;margin-bottom:8px">
-            <button class="primary" style="width:100%;margin-bottom:8px" onclick="buildHistoricalDataset()">Build / Merge Dataset v15.1</button>
+            <button class="primary" style="width:100%;margin-bottom:8px" onclick="buildHistoricalDataset()">Build / Merge Dataset v15.2</button>
             <button class="primary" style="width:100%;margin-bottom:8px" onclick="datasetBuilderStatus()">Dataset Builder Status</button>
             <button class="primary" style="width:100%" onclick="expandHistoricalDataset()">Expand / Plan 200 Sessions v15.1</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="acquisitionPlanV152()">Acquisition Progress v15.2</button>
           </div>
   </div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
@@ -5169,6 +5170,14 @@ async function expandHistoricalDataset(){
  if(b)b.textContent=`v15.1 EXPANSION · ${q.stored_rows||0} candles / ${q.actual_trading_sessions||0} sessions · coverage ${q.overall_coverage_percent||0}% · need ${p.sessions_to_200||0} more sessions. ${p.ready_for_200?"200-SESSION TARGET REACHED.":`BACKFILL TARGET ${p.suggested_backfill_start||"--"} → ${p.suggested_backfill_end||"--"}.`} ${ranges?"Priority gaps: "+ranges:""} ${d.next_action||""}`;
  }catch(e){if(b)b.textContent="Dataset expansion error: "+e.message}
 }
+async function acquisitionPlanV152(){
+ const b=document.getElementById("btDatasetBuilder"); if(b)b.textContent="Calculating v15.2 acquisition progress and missing ranges…";
+ try{const r=await fetch("/v15/acquisition/plan",{cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Acquisition plan failed");
+ const p=d.plan||{},q=d.quality||{},ranges=(p.priority_ranges||[]).slice(0,5).map(x=>`${x.start}→${x.end} (${x.weekdays} weekdays)`).join(" | ");
+ if(b)b.textContent=`v15.2 ACQUISITION · ${q.actual_trading_sessions||0}/${p.target_sessions||200} sessions (${p.progress_percent||0}%) · ${q.stored_rows||0} candles · need ${p.sessions_to_target||0} sessions. ${p.ready?"TARGET REACHED — run quality/readiness validation.":`NEXT OLDER RANGE ${p.suggested_older_start||"--"} → ${p.suggested_older_end||"--"}.`} ${ranges?"Priority gaps: "+ranges:""} ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="Acquisition progress error: "+e.message}
+}
+
 async function recoverHistoricalData(){
   const box=document.getElementById("btRecoveryStatus");
   if(box) box.textContent="Refreshing recoverable NIFTY history and recalculating gaps…";
@@ -8129,7 +8138,7 @@ def _v150_status():
 
 @app.get("/v15/dataset/status")
 def v150_dataset_status():
-    try: return {"status":"success","model_version":"15.1",**_v150_status()}
+    try: return {"status":"success","model_version":"15.2",**_v150_status()}
     except Exception as e: return {"status":"error","message":str(e)}
 
 @app.post("/v15/dataset/import")
@@ -8148,7 +8157,7 @@ async def v150_dataset_import(files: list[UploadFile]=File(...)):
         except Exception as e:
             results.append({"filename":name,"status":"REJECTED","message":str(e)})
     st=_v150_status(); q=st["quality"]
-    return {"status":"success","model_version":"15.1","files_received":len(files),"files_imported":sum(x.get("status")=="IMPORTED" for x in results),"files_rejected":sum(x.get("status")=="REJECTED" for x in results),"valid_candles_processed":processed,"rows_written":written,"file_results":results,**st,"next_action":"DATASET READY — proceed to walk-forward validation." if q.get("backtest_ready") else "DATASET NOT READY — import more 15m NIFTY history, prioritising missing dates."}
+    return {"status":"success","model_version":"15.2","files_received":len(files),"files_imported":sum(x.get("status")=="IMPORTED" for x in results),"files_rejected":sum(x.get("status")=="REJECTED" for x in results),"valid_candles_processed":processed,"rows_written":written,"file_results":results,**st,"next_action":"DATASET READY — proceed to walk-forward validation." if q.get("backtest_ready") else "DATASET NOT READY — import more 15m NIFTY history, prioritising missing dates."}
 
 # ============================================================
 # V15.1 HISTORICAL DATASET EXPANSION PLANNER
@@ -8211,6 +8220,41 @@ def v151_dataset_expand():
     else:
         action="Import genuine older 15-minute NIFTY CSV data for the suggested range. v15.1 will merge/deduplicate it; do not fabricate candles for unavailable dates."
     return {"status":"success","model_version":"15.1","quality":q,"sync":sync_result,"expansion_plan":plan,"next_action":action}
+
+# ============================================================
+# V15.2 HISTORICAL DATA ACQUISITION
+# ============================================================
+def _v152_acquisition_plan(raw, quality):
+    base=_v151_expansion_plan(raw, quality)
+    current=int(quality.get("actual_trading_sessions",0) or 0)
+    target=200
+    need=max(0,target-current)
+    return {
+        "target_sessions": target,
+        "current_sessions": current,
+        "sessions_to_target": need,
+        "progress_percent": round(min(100.0,current/target*100.0),1),
+        "ready": need==0,
+        "suggested_older_start": base.get("suggested_backfill_start"),
+        "suggested_older_end": base.get("suggested_backfill_end"),
+        "priority_ranges": base.get("priority_ranges",[]),
+        "required_columns": ["datetime","open","high","low","close","volume(optional)"],
+        "rules": ["NIFTY 50 index only","15-minute candles only","genuine historical observations only","IST timestamps preferred","multiple CSV files are allowed and are deduplicated automatically"]
+    }
+
+@app.get("/v15/acquisition/plan")
+def v152_acquisition_plan():
+    try:
+        raw=_v146_load_raw_history("15m")
+        q=_v148_quality_report(raw,timeframe="15m")
+        plan=_v152_acquisition_plan(raw,q)
+        if plan["ready"]:
+            action="200-session acquisition target reached. Run Data Quality & Gap Check and Backtest Readiness Gate before validation."
+        else:
+            action="Acquire genuine 15-minute NIFTY OHLC CSV data for the listed older/gap ranges, select all files together, then use Build / Merge Dataset v15.2. Recheck Acquisition Progress after every import."
+        return {"status":"success","model_version":"15.2","quality":q,"plan":plan,"next_action":action}
+    except Exception as e:
+        return {"status":"error","message":str(e)}
 
 # ============================================================
 # V14.9 HISTORICAL DATA RECOVERY + BACKTEST READINESS GATE
