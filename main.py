@@ -4607,6 +4607,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="expandOptionOiV1513()">Expand + Diagnose Option OI v15.13</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="auditOptionOiV1514()">Audit Upstox OI Payload v15.14</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="reconstructOptionOiV1515()">Reconstruct Historical OI Features v15.15</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="auditOiIntegrityV1516()">OI Value Integrity Audit v15.16</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4636,6 +4637,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btOptionOiExpand1513" style="margin-top:8px">v15.13 OI expansion/coverage diagnostic has not been run yet.</div>
   <div class="bt-note" id="btOptionOiAudit1514" style="margin-top:8px">v15.14 Upstox OI payload audit has not been run yet.</div>
   <div class="bt-note" id="btOptionOiReconstruct1515" style="margin-top:8px">v15.15 historical OI feature reconstruction has not been run yet.</div>
+  <div class="bt-note" id="btOiIntegrity1516" style="margin-top:8px">v15.16 OI value integrity audit has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5378,6 +5380,19 @@ async function runOptionOiValidationV1512(){
 }
 
 
+
+
+async function auditOiIntegrityV1516(){
+ const b=document.getElementById("btOiIntegrity1516");
+ if(b)b.textContent="v15.16 auditing NULL / zero / positive historical OI values…";
+ try{
+  const r=await fetch("/v15/option-oi-integrity-v1516",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"OI integrity audit failed");
+  const p=d.total_put_oi||{}, c=d.total_call_oi||{}, j=d.joint||{};
+  if(b)b.textContent=`v15.16 OI INTEGRITY · rows ${d.rows||0} · PUT null ${p.null||0} / zero ${p.zero||0} / positive ${p.positive||0} / min ${p.min} / median ${p.median} / max ${p.max} · CALL null ${c.null||0} / zero ${c.zero||0} / positive ${c.positive||0} / min ${c.min} / median ${c.median} / max ${c.max} · both positive ${j.both_positive||0} · both zero ${j.both_zero||0} · PCR derivable ${j.pcr_derivable||0} · imbalance derivable ${j.imbalance_derivable||0} · ${d.diagnosis||""} · ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="v15.16 OI integrity audit error: "+e.message}
+}
 
 async function reconstructOptionOiV1515(){
  const b=document.getElementById("btOptionOiReconstruct1515");
@@ -12700,6 +12715,117 @@ def v1515_option_oi_reconstruct():
                 "oi_imbalance":"(total_put_oi-total_call_oi)/(total_put_oi+total_call_oi)",
                 "near_atm_pcr":"unchanged; requires genuine strike-level OI"
             },
+            "live_routing_changed":False
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# v15.16 — HISTORICAL OI VALUE INTEGRITY AUDIT
+# Separates NULL, zero and positive totals before any reconstruction.
+# Diagnostic only. No live routing changes and no data mutation.
+# ============================================================
+
+def _v1516_stats(series):
+    x=pd.to_numeric(series,errors="coerce").replace([np.inf,-np.inf],np.nan)
+    pos=x[x>0]
+    neg=x[x<0]
+    finite=x.dropna()
+    return {
+        "null":int(x.isna().sum()),
+        "zero":int((x==0).sum()),
+        "positive":int((x>0).sum()),
+        "negative":int((x<0).sum()),
+        "min":round(float(finite.min()),4) if len(finite) else None,
+        "median":round(float(finite.median()),4) if len(finite) else None,
+        "max":round(float(finite.max()),4) if len(finite) else None,
+        "positive_median":round(float(pos.median()),4) if len(pos) else None,
+    }
+
+@app.get("/v15/option-oi-integrity-v1516")
+def v1516_option_oi_integrity():
+    try:
+        od=_v1512_load_oi()
+        if od.empty:
+            return {"status":"error","message":"No historical OI rows are stored."}
+
+        x=od.copy()
+        cols=["total_put_oi","total_call_oi","pcr_oi","oi_imbalance","near_atm_put_oi","near_atm_call_oi","near_atm_pcr"]
+        for c in cols:
+            x[c]=pd.to_numeric(x[c],errors="coerce").replace([np.inf,-np.inf],np.nan)
+
+        put=x["total_put_oi"]
+        call=x["total_call_oi"]
+        both_positive=(put>0)&(call>0)
+        both_zero=(put==0)&(call==0)
+        one_zero=((put==0)&(call>0))|((call==0)&(put>0))
+        pcr_derivable=put.notna()&call.notna()&(call>0)
+        imbalance_derivable=put.notna()&call.notna()&((put+call)>0)
+
+        samples={}
+        masks={
+            "both_zero":both_zero,
+            "both_positive":both_positive,
+            "put_positive_call_zero":(put>0)&(call==0),
+            "put_zero_call_positive":(put==0)&(call>0),
+            "pcr_missing_despite_derivable":pcr_derivable&x["pcr_oi"].isna(),
+            "imbalance_missing_despite_derivable":imbalance_derivable&x["oi_imbalance"].isna(),
+        }
+        for name,mask in masks.items():
+            rows=[]
+            for idx,row in x.loc[mask].head(8).iterrows():
+                rows.append({
+                    "date":pd.Timestamp(idx).date().isoformat(),
+                    "put":None if pd.isna(row["total_put_oi"]) else float(row["total_put_oi"]),
+                    "call":None if pd.isna(row["total_call_oi"]) else float(row["total_call_oi"]),
+                    "pcr":None if pd.isna(row["pcr_oi"]) else float(row["pcr_oi"]),
+                    "imbalance":None if pd.isna(row["oi_imbalance"]) else float(row["oi_imbalance"]),
+                })
+            samples[name]=rows
+
+        missing_pcr_derivable=int((pcr_derivable&x["pcr_oi"].isna()).sum())
+        missing_imb_derivable=int((imbalance_derivable&x["oi_imbalance"].isna()).sum())
+
+        if int(both_zero.sum()) >= max(1,int(len(x)*0.5)):
+            diagnosis=(
+                "Most stored historical rows contain zero Put and Call OI. "
+                "Those rows are dated provider responses but do not contain usable aggregate OI, "
+                "so PCR/imbalance cannot legitimately be reconstructed from them."
+            )
+            next_action="Do not lower validation gates. Next investigate provider availability/endpoint semantics or another genuine historical derivatives source."
+        elif missing_pcr_derivable>0 or missing_imb_derivable>0:
+            diagnosis=(
+                "Many rows contain positive genuine aggregate OI but derived PCR/imbalance are still missing. "
+                "This confirms a reconstruction/storage bug rather than a provider-data shortage."
+            )
+            next_action="Next build should repair only the mathematically derivable missing fields, then rerun canonical coverage."
+        else:
+            diagnosis=(
+                "Aggregate OI integrity is internally consistent. The remaining research-data shortage is in other features, "
+                "such as strike-level near-ATM OI, rather than aggregate Put/Call totals."
+            )
+            next_action="Keep near-ATM fields missing unless genuine strike-level history is available; validate only features supported by the available data."
+
+        return {
+            "status":"success","version":"15.16","rows":int(len(x)),
+            "total_put_oi":_v1516_stats(put),
+            "total_call_oi":_v1516_stats(call),
+            "joint":{
+                "both_positive":int(both_positive.sum()),
+                "both_zero":int(both_zero.sum()),
+                "one_zero_one_positive":int(one_zero.sum()),
+                "pcr_derivable":int(pcr_derivable.sum()),
+                "imbalance_derivable":int(imbalance_derivable.sum()),
+                "pcr_missing_despite_derivable":missing_pcr_derivable,
+                "imbalance_missing_despite_derivable":missing_imb_derivable,
+            },
+            "near_atm_put_oi":_v1516_stats(x["near_atm_put_oi"]),
+            "near_atm_call_oi":_v1516_stats(x["near_atm_call_oi"]),
+            "samples":samples,
+            "diagnosis":diagnosis,
+            "next_action":next_action,
+            "data_changed":False,
             "live_routing_changed":False
         }
     except Exception as e:
