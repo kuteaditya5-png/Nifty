@@ -4604,6 +4604,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="runIndependentVixV1511()">Independent VIX Validation v15.11</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="acquireOptionOiV1512()">Acquire Historical Option OI v15.12</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runOptionOiValidationV1512()">Independent Option OI Validation v15.12</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="expandOptionOiV1513()">Expand + Diagnose Option OI v15.13</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4630,6 +4631,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btIndependentVix1511" style="margin-top:8px">v15.11 independent India VIX validation has not been run yet.</div>
   <div class="bt-note" id="btOptionOiAcquire1512" style="margin-top:8px">v15.12 historical option OI has not been acquired yet.</div>
   <div class="bt-note" id="btOptionOiValidation1512" style="margin-top:8px">v15.12 independent option OI validation has not been run yet.</div>
+  <div class="bt-note" id="btOptionOiExpand1513" style="margin-top:8px">v15.13 OI expansion/coverage diagnostic has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5369,6 +5371,19 @@ async function runOptionOiValidationV1512(){
   const failed=Object.entries(d.gate_checks||{}).filter(([,v])=>!v).map(([k])=>k).join(", ")||"none";
   if(b)b.textContent=`v15.12 ${d.verdict} · HISTORICAL OPTION OI · ${x.independent_signals||0} independent signals · accuracy ${x.weighted_accuracy_percent||0}% · gross ${x.gross_avg_bps||0}bps · NET ${x.net_avg_bps||0}bps · p=${x.p_value} · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · OI days ${d.oi_days||0} · failing: ${failed} · ${fs} · ${d.next_action}`;
  }catch(e){if(b)b.textContent="v15.12 option OI validation error: "+e.message}
+}
+
+async function expandOptionOiV1513(){
+ const b=document.getElementById("btOptionOiExpand1513");
+ if(b)b.textContent="v15.13 filling missing historical OI dates and measuring exact NIFTY overlap…";
+ try{
+  const r=await fetch("/v15/option-oi-expand-v1513?max_days=60",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"v15.13 OI expansion failed");
+  const x=d.coverage||{}, st=d.store||{};
+  const failed=(d.failures||[]).slice(0,3).map(z=>`${z.date}:${z.message}`).join(" | ");
+  if(b)b.textContent=`v15.13 OI EXPANSION · requested ${d.requested_dates||0} · fetched ${d.fetched_dates||0} · STORE ${st.days||0} days · overlap ${x.overlap_days||0}/${x.nifty_trading_days||0} NIFTY days (${x.coverage_percent||0}%) · overlap bars ${x.overlap_bars||0} · usable H6 capacity ~${x.estimated_nonoverlap_h6_capacity||0} · missing inside OI span ${x.missing_days_inside_oi_span||0} · ${d.next_action}${failed?` · sample failures ${failed}`:""}`;
+ }catch(e){if(b)b.textContent="v15.13 OI expansion error: "+e.message}
 }
 
 async function recoverHistoricalData(){
@@ -12229,3 +12244,138 @@ def v1512_option_oi_validation(blocks:int=4, cost_bps:float=3.0):
     except Exception as e:
         return {"status":"error","message":str(e)}
 
+
+
+# ============================================================
+# V15.13 HISTORICAL OPTION-OI EXPANSION + COVERAGE DIAGNOSTIC
+# Fills genuine missing Upstox OI dates in bounded batches and reports the
+# exact overlap with stored NIFTY 15m history. No synthetic OI is created and
+# live CE/PE/WAIT routing remains unchanged.
+# ============================================================
+
+def _v1513_nifty_trade_dates_and_counts(raw):
+    idx = pd.DatetimeIndex(raw.index)
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC").tz_convert("Asia/Kolkata")
+    else:
+        idx = idx.tz_convert("Asia/Kolkata")
+    dates = [x.date() for x in idx]
+    counts = {}
+    for d in dates:
+        counts[d] = counts.get(d, 0) + 1
+    return sorted(counts), counts
+
+
+def _v1513_coverage(raw):
+    nifty_dates, bar_counts = _v1513_nifty_trade_dates_and_counts(raw)
+    nifty_set = set(nifty_dates)
+    od = _v1512_load_oi()
+    oi_dates = set(pd.Timestamp(x).date() for x in od.index) if not od.empty else set()
+    overlap = sorted(nifty_set & oi_dates)
+    overlap_bars = sum(bar_counts.get(d, 0) for d in overlap)
+    inside_missing = []
+    if oi_dates:
+        lo, hi = min(oi_dates), max(oi_dates)
+        inside_missing = [d for d in nifty_dates if lo <= d <= hi and d not in oi_dates]
+    return {
+        "nifty_trading_days": len(nifty_dates),
+        "oi_days": len(oi_dates),
+        "overlap_days": len(overlap),
+        "coverage_percent": round((len(overlap) / len(nifty_dates) * 100.0), 2) if nifty_dates else 0.0,
+        "overlap_bars": int(overlap_bars),
+        "estimated_nonoverlap_h6_capacity": int(overlap_bars // 6),
+        "missing_days_inside_oi_span": len(inside_missing),
+        "oi_start": min(oi_dates).isoformat() if oi_dates else None,
+        "oi_end": max(oi_dates).isoformat() if oi_dates else None,
+        "overlap_start": overlap[0].isoformat() if overlap else None,
+        "overlap_end": overlap[-1].isoformat() if overlap else None,
+    }
+
+
+@app.get("/v15/option-oi-coverage-v1513")
+def v1513_option_oi_coverage():
+    try:
+        raw = _v146_load_raw_history("15m", limit=50000)
+        return {"status":"success","version":"15.13","coverage":_v1513_coverage(raw),"store":_v1512_store_status(),"live_routing_changed":False}
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+
+@app.get("/v15/option-oi-expand-v1513")
+def v1513_option_oi_expand(max_days:int=60):
+    try:
+        max_days = max(5, min(int(max_days), 90))
+        _v1512_ensure_oi_table()
+        raw = _v146_load_raw_history("15m", limit=50000)
+        q = _v148_quality_report(raw, timeframe="15m")
+        if not q.get("backtest_ready"):
+            return {"status":"error","message":"NIFTY history is not backtest-ready."}
+        nifty_dates, _ = _v1513_nifty_trade_dates_and_counts(raw)
+        expiries = _v1512_expiries()
+        if not expiries:
+            return {"status":"error","message":"Upstox returned no historical expiries."}
+        with _v146_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT trade_date FROM nifty_option_oi_daily")
+                existing = {r[0] for r in cur.fetchall()}
+        # First fill holes inside the current OI span. Then expand outward,
+        # newest-first. This directly attacks the sparse-overlap problem seen
+        # in v15.12 instead of merely increasing a row-count threshold.
+        missing = [d for d in nifty_dates if d not in existing]
+        if existing:
+            lo, hi = min(existing), max(existing)
+            inside = [d for d in missing if lo <= d <= hi]
+            outside = [d for d in missing if d < lo or d > hi]
+            ordered = sorted(inside, reverse=True) + sorted(outside, reverse=True)
+        else:
+            ordered = sorted(missing, reverse=True)
+        todo = []
+        for d in ordered:
+            e = _v1512_pick_expiry(d, expiries)
+            if e is not None:
+                todo.append((d,e))
+            if len(todo) >= max_days:
+                break
+        fetched, failures = [], []
+        if todo:
+            workers = min(6, len(todo))
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futs = {ex.submit(_v1512_fetch_oi_day,d,e):(d,e) for d,e in todo}
+                for fut in as_completed(futs):
+                    d,e = futs[fut]
+                    try:
+                        fetched.append(fut.result())
+                    except Exception as err:
+                        failures.append({"date":d.isoformat(),"expiry":e.isoformat(),"message":str(err)[:220]})
+        if fetched:
+            with _v146_db() as conn:
+                with conn.cursor() as cur:
+                    cur.executemany("""
+                        INSERT INTO nifty_option_oi_daily(
+                            trade_date,expiry_date,spot_close,total_put_oi,total_call_oi,pcr_oi,
+                            near_atm_put_oi,near_atm_call_oi,near_atm_pcr,oi_imbalance,source,updated_at)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'upstox_market_oi',CURRENT_TIMESTAMP)
+                        ON CONFLICT(trade_date) DO UPDATE SET
+                            expiry_date=EXCLUDED.expiry_date,spot_close=EXCLUDED.spot_close,
+                            total_put_oi=EXCLUDED.total_put_oi,total_call_oi=EXCLUDED.total_call_oi,
+                            pcr_oi=EXCLUDED.pcr_oi,near_atm_put_oi=EXCLUDED.near_atm_put_oi,
+                            near_atm_call_oi=EXCLUDED.near_atm_call_oi,near_atm_pcr=EXCLUDED.near_atm_pcr,
+                            oi_imbalance=EXCLUDED.oi_imbalance,source=EXCLUDED.source,updated_at=CURRENT_TIMESTAMP
+                    """, fetched)
+                conn.commit()
+        coverage = _v1513_coverage(raw)
+        cap = coverage["estimated_nonoverlap_h6_capacity"]
+        if cap >= 240 and coverage["overlap_days"] >= 45:
+            action = "Coverage is now large enough for a meaningful H6 research run. Run Independent Option OI Validation v15.12."
+        elif not todo:
+            action = "No more eligible missing dates are visible through the provider expiry catalogue. Keep live routing unchanged; the provider window is the limiting factor."
+        else:
+            action = "Run Expand + Diagnose Option OI v15.13 again to fill the next bounded batch. Do not validate/promote until overlap capacity is adequate."
+        return {
+            "status":"success","version":"15.13","provider":"Upstox Market OI",
+            "requested_dates":len(todo),"fetched_dates":len(fetched),"rows_written":len(fetched),
+            "failures":failures,"store":_v1512_store_status(),"coverage":coverage,
+            "live_routing_changed":False,"next_action":action
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
