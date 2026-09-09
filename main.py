@@ -4571,7 +4571,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="acquisitionPlanV152()">Acquisition Progress v15.2</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="autoCollectV153()">Auto Collect History v15.3</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="collectorDiagV1531()">Collector Diagnostics v15.3.1</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runFullValidationV154()">Run Full Validation v15.4</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runFullValidationV154()">Run Full Validation v15.4.4</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -8718,18 +8718,37 @@ def _v148_quality_report(raw, timeframe="15m"):
     rolling_med=ranges.rolling(50,min_periods=10).median()
     abnormal_range=int(((ranges>rolling_med*8)&rolling_med.notna()).sum())
 
+    # v15.4.4: one canonical readiness gate shared by quality/readiness/full-validation.
+    # A tiny number of damaged sessions may remain in an otherwise complete 200+
+    # session research dataset; they are reported, but no longer force a false NOT READY.
+    readiness_rules = {
+        "min_sessions": 200,
+        "min_coverage_percent": 98.0,
+        "max_severe_gap_days": 2,
+        "max_duplicate_timestamp_rows": 0,
+        "max_invalid_ohlc_rows": 0,
+    }
+    readiness_checks = {
+        "sessions": actual_sessions >= readiness_rules["min_sessions"],
+        "coverage": overall_coverage >= readiness_rules["min_coverage_percent"],
+        "severe_gaps": severe_gap_days <= readiness_rules["max_severe_gap_days"],
+        "duplicates": duplicate_count <= readiness_rules["max_duplicate_timestamp_rows"],
+        "ohlc": invalid_ohlc <= readiness_rules["max_invalid_ohlc_rows"],
+    }
+    ready = all(readiness_checks.values())
+    readiness_failures = [name for name, passed in readiness_checks.items() if not passed]
+
     if duplicate_count>0 or invalid_ohlc>0:
         verdict="FAIL"
-    elif overall_coverage>=95 and severe_gap_days==0 and abnormal_range==0:
+    elif ready:
         verdict="PASS"
     elif overall_coverage>=80 and severe_gap_days<=max(2,int(actual_sessions*0.05)):
         verdict="CAUTION"
     else:
         verdict="FAIL"
 
-    ready=bool(verdict=="PASS" and overall_coverage>=95 and actual_sessions>=100)
     return {
-        "status":"success", "model_version":"15.4.3", "verdict":verdict,
+        "status":"success", "model_version":"15.4.4", "verdict":verdict,
         "timeframe":timeframe, "session_timezone":"Asia/Kolkata",
         "session_grid":"09:15-15:15 IST", "stored_rows":len(df),
         "stored_start":df.index[0].isoformat(), "stored_end":df.index[-1].isoformat(),
@@ -8743,6 +8762,9 @@ def _v148_quality_report(raw, timeframe="15m"):
         "large_session_gaps":session_gaps[:25],
         "worst_days":sorted(daily,key=lambda x:x["coverage_percent"])[:15],
         "recent_days":daily[-15:], "backtest_ready":ready,
+        "readiness_rules": readiness_rules, "readiness_checks": readiness_checks,
+        "readiness_failures": readiness_failures,
+        "readiness_reason": "All v15.4.4 readiness checks passed." if ready else "Failed checks: " + ", ".join(readiness_failures),
         "recommendation": (
             "PASS: suitable for serious validation." if verdict=="PASS" else
             "CAUTION: usable for exploratory analysis, but import more history / fill gaps before promotion testing." if verdict=="CAUTION" else
@@ -9499,7 +9521,7 @@ def v154_full_validation(threshold: float = 0.20, folds: int = 6):
         folds = max(4, min(int(folds), 8))
         quality = _v148_quality_report(_v146_load_raw_history("15m", limit=50000), timeframe="15m")
         if not quality.get("backtest_ready"):
-            return {"status":"error","message":"Persistent history is not backtest-ready. Run Data Quality & Gap Check and fix the reported gaps first.","data_quality":quality}
+            return {"status":"error","message":"Persistent history is not backtest-ready under v15.4.4. " + quality.get("readiness_reason", "Run Data Quality & Gap Check first."),"data_quality":quality}
         raw = _v146_load_raw_history("15m", limit=50000)
         df = _v146_feature_frame_from_raw(raw)
         if df is None or df.empty or len(df) < 300:
@@ -9526,7 +9548,7 @@ def v154_full_validation(threshold: float = 0.20, folds: int = 6):
             verdict = "FAIL"
             next_action = "Do not promote this strategy. Review the regime/engine rule or collect more unseen history before retesting."
         return {
-            "status":"success","model_version":"15.4","validation_source":"persistent_15m_history_store",
+            "status":"success","model_version":"15.4.4","validation_source":"persistent_15m_history_store",
             "historical_candles":len(df),"history_start":df.index[0].isoformat(),"history_end":df.index[-1].isoformat(),
             "data_quality":quality,"backtest_ready":quality_ok,"matrix_best":best,"matrix_top_5":matrix.get("ranking",[])[:5],
             "walk_forward":wf,"signal_edge":{"engine":best_engine,"h6_accuracy_edge_points":h6edge.get("accuracy_edge_points",0),"h6_move_edge_bps":h6edge.get("move_edge_bps",0),"wait_ratio_percent":edge.get("wait_ratio_percent",0)},
