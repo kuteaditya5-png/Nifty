@@ -4608,6 +4608,8 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="auditOptionOiV1514()">Audit Upstox OI Payload v15.14</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="reconstructOptionOiV1515()">Reconstruct Historical OI Features v15.15</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="auditOiIntegrityV1516()">OI Value Integrity Audit v15.16</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="acquireFuturesResearchV1517()">Acquire NIFTY Futures Research v15.17</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="runFuturesValidationV1517()">Independent Futures Validation v15.17</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
   </div>
@@ -4638,6 +4640,8 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btOptionOiAudit1514" style="margin-top:8px">v15.14 Upstox OI payload audit has not been run yet.</div>
   <div class="bt-note" id="btOptionOiReconstruct1515" style="margin-top:8px">v15.15 historical OI feature reconstruction has not been run yet.</div>
   <div class="bt-note" id="btOiIntegrity1516" style="margin-top:8px">v15.16 OI value integrity audit has not been run yet.</div>
+  <div class="bt-note" id="btFuturesAcquire1517" style="margin-top:8px">v15.17 historical futures research has not been acquired yet.</div>
+  <div class="bt-note" id="btFuturesValidation1517" style="margin-top:8px">v15.17 independent futures validation has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
   <div class="bt-note" id="btOptimizer" style="margin-top:8px">
@@ -5381,6 +5385,34 @@ async function runOptionOiValidationV1512(){
 
 
 
+
+
+async function acquireFuturesResearchV1517(){
+ const b=document.getElementById("btFuturesAcquire1517");
+ if(b)b.textContent="v15.17 acquiring genuine expired NIFTY futures candles + OI from Upstox…";
+ try{
+  const r=await fetch("/v15/futures-research-acquire-v1517?max_expiries=6",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"Futures acquisition failed");
+  const st=d.store||{};
+  const fs=(d.expiries||[]).map(x=>`${x.expiry}:${x.status}${x.candles!=null?`/${x.candles}`:""}`).join(" · ");
+  if(b)b.textContent=`v15.17 FUTURES ACQUIRE · expiries ${d.expiries_requested||0} · successful ${d.expiries_successful||0} · rows written ${d.rows_written||0} · STORE ${st.rows||0} rows / ${st.sessions||0} sessions · ${st.start||"--"} → ${st.end||"--"} · ${d.next_action||""} ${fs}`;
+ }catch(e){if(b)b.textContent="v15.17 futures acquisition error: "+e.message}
+}
+
+async function runFuturesValidationV1517(){
+ const b=document.getElementById("btFuturesValidation1517");
+ if(b)b.textContent="v15.17 validating futures basis/OI independently on chronological unseen folds…";
+ try{
+  const r=await fetch("/v15/futures-research-validation-v1517?blocks=4&cost_bps=3",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"Futures validation failed");
+  const x=d.summary||{};
+  const fs=(d.folds||[]).map(z=>`F${z.fold} ${z.accuracy_percent}%/${z.net_avg_bps}bps n=${z.signals}`).join(" · ");
+  const failed=Object.entries(d.gate_checks||{}).filter(([,v])=>!v).map(([k])=>k).join(", ")||"none";
+  if(b)b.textContent=`v15.17 ${d.verdict} · ${x.independent_signals||0} independent signals · accuracy ${x.weighted_accuracy_percent||0}% · gross ${x.gross_avg_bps||0}bps · NET ${x.net_avg_bps||0}bps · p=${x.p_value} · positive folds ${x.positive_folds||0}/${x.folds||0} · worst ${x.worst_fold_accuracy_percent||0}% · overlap bars ${d.overlap_bars||0} · failing ${failed} · ${fs} · ${d.next_action||""}`;
+ }catch(e){if(b)b.textContent="v15.17 futures validation error: "+e.message}
+}
 
 async function auditOiIntegrityV1516(){
  const b=document.getElementById("btOiIntegrity1516");
@@ -12827,6 +12859,353 @@ def v1516_option_oi_integrity():
             "next_action":next_action,
             "data_changed":False,
             "live_routing_changed":False
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# v15.17 — FUTURES / DERIVATIVES INDEPENDENT SIGNAL RESEARCH
+#
+# Uses genuine NIFTY expired-futures candles from Upstox Expired Instruments.
+# Historical candle[6] is Open Interest for derivatives. Research features:
+# - futures basis (future - spot)
+# - basis %
+# - basis change
+# - futures OI level/change
+# - price/OI interaction
+#
+# Research-only. Live CE/PE/WAIT routing is unchanged.
+# ============================================================
+
+def _v1517_ensure_table():
+    with _v146_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS nifty_futures_history (
+                    candle_time TIMESTAMPTZ NOT NULL,
+                    expiry_date DATE NOT NULL,
+                    instrument_key VARCHAR(120) NOT NULL,
+                    trading_symbol VARCHAR(120),
+                    open DOUBLE PRECISION,
+                    high DOUBLE PRECISION,
+                    low DOUBLE PRECISION,
+                    close DOUBLE PRECISION,
+                    volume DOUBLE PRECISION,
+                    open_interest DOUBLE PRECISION,
+                    source VARCHAR(40) NOT NULL DEFAULT 'upstox_exp_fut',
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(candle_time, expiry_date)
+                )
+            """)
+        conn.commit()
+
+def _v1517_store_status():
+    _v1517_ensure_table()
+    with _v146_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*), COUNT(DISTINCT DATE(candle_time AT TIME ZONE 'Asia/Kolkata')),
+                       MIN(candle_time), MAX(candle_time)
+                FROM nifty_futures_history
+            """)
+            n,ses,d0,d1=cur.fetchone()
+    return {
+        "rows":int(n or 0),"sessions":int(ses or 0),
+        "start":d0.isoformat() if d0 else None,
+        "end":d1.isoformat() if d1 else None
+    }
+
+def _v1517_expired_future_contract(expiry):
+    r=requests.get(
+        "https://api.upstox.com/v2/expired-instruments/future/contract",
+        params={"instrument_key":"NSE_INDEX|Nifty 50","expiry_date":expiry.isoformat()},
+        headers=_v1512_headers(),timeout=12
+    )
+    if r.status_code!=200:
+        try:
+            body=r.json()
+            msg=(body.get("errors") or [{}])[0].get("message") or body.get("message") or str(body)[:250]
+        except Exception:
+            msg=r.text[:250]
+        raise RuntimeError(f"HTTP {r.status_code}: {msg}")
+    data=r.json().get("data") or []
+    if not data:
+        raise RuntimeError("No expired NIFTY future contract returned.")
+    fut=next((x for x in data if str(x.get("instrument_type")).upper()=="FUT"),data[0])
+    key=fut.get("instrument_key")
+    if not key:
+        raise RuntimeError("Expired future response has no instrument_key.")
+    return fut
+
+def _v1517_fetch_expired_candles(contract, expiry):
+    key=contract["instrument_key"]
+    # One contract is used for the month ending at expiry. Fetch a bounded
+    # ~40-day window to avoid overlapping too far into the prior contract.
+    start=(pd.Timestamp(expiry)-pd.Timedelta(days=40)).date()
+    enc=urllib.parse.quote(str(key),safe="")
+    url=f"https://api.upstox.com/v2/expired-instruments/historical-candle/{enc}/15minute/{expiry.isoformat()}/{start.isoformat()}"
+    r=requests.get(url,headers=_v1512_headers(),timeout=20)
+    if r.status_code!=200:
+        try:
+            body=r.json()
+            msg=(body.get("errors") or [{}])[0].get("message") or body.get("message") or str(body)[:250]
+        except Exception:
+            msg=r.text[:250]
+        raise RuntimeError(f"HTTP {r.status_code}: {msg}")
+    candles=((r.json().get("data") or {}).get("candles") or [])
+    rows=[]
+    for a in candles:
+        if not isinstance(a,(list,tuple)) or len(a)<5:
+            continue
+        try:
+            ts=pd.Timestamp(a[0])
+            if ts.tzinfo is None:
+                ts=ts.tz_localize("Asia/Kolkata")
+            else:
+                ts=ts.tz_convert("Asia/Kolkata")
+            rows.append((
+                ts.to_pydatetime(),expiry,key,contract.get("trading_symbol"),
+                float(a[1]),float(a[2]),float(a[3]),float(a[4]),
+                float(a[5]) if len(a)>5 and a[5] is not None else 0.0,
+                float(a[6]) if len(a)>6 and a[6] is not None else 0.0
+            ))
+        except Exception:
+            continue
+    return rows
+
+@app.get("/v15/futures-research-acquire-v1517")
+def v1517_futures_research_acquire(max_expiries:int=6):
+    try:
+        max_expiries=max(2,min(int(max_expiries),6))
+        _v1517_ensure_table()
+        expiries=_v1512_expiries()
+        # Futures are monthly. The expiry catalogue includes weekly option
+        # expiries too, so ask the future-contract endpoint and retain only
+        # dates that actually return a FUT.
+        expiries=sorted(expiries,reverse=True)
+        results=[]; allrows=[]; selected=0
+        for e in expiries:
+            if selected>=max_expiries: break
+            try:
+                c=_v1517_expired_future_contract(e)
+                rows=_v1517_fetch_expired_candles(c,e)
+                if not rows:
+                    results.append({"expiry":e.isoformat(),"status":"EMPTY","candles":0})
+                    continue
+                allrows.extend(rows); selected+=1
+                results.append({"expiry":e.isoformat(),"status":"OK","candles":len(rows),"symbol":c.get("trading_symbol")})
+            except Exception as er:
+                # Weekly option expiry dates normally have no future contract;
+                # keep a compact diagnostic instead of failing the whole run.
+                msg=str(er)
+                if "No expired NIFTY future" not in msg:
+                    results.append({"expiry":e.isoformat(),"status":"SKIP","message":msg[:180]})
+
+        written=0
+        if allrows:
+            with _v146_db() as conn:
+                with conn.cursor() as cur:
+                    cur.executemany("""
+                        INSERT INTO nifty_futures_history(
+                            candle_time,expiry_date,instrument_key,trading_symbol,
+                            open,high,low,close,volume,open_interest,source,updated_at
+                        ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'upstox_exp_fut',CURRENT_TIMESTAMP)
+                        ON CONFLICT(candle_time,expiry_date) DO UPDATE SET
+                            instrument_key=EXCLUDED.instrument_key,
+                            trading_symbol=EXCLUDED.trading_symbol,
+                            open=EXCLUDED.open,high=EXCLUDED.high,low=EXCLUDED.low,
+                            close=EXCLUDED.close,volume=EXCLUDED.volume,
+                            open_interest=EXCLUDED.open_interest,
+                            source=EXCLUDED.source,updated_at=CURRENT_TIMESTAMP
+                    """,allrows)
+                conn.commit()
+            written=len(allrows)
+
+        st=_v1517_store_status()
+        return {
+            "status":"success","version":"15.17",
+            "expiries_requested":max_expiries,
+            "expiries_successful":sum(1 for x in results if x.get("status")=="OK"),
+            "rows_written":written,
+            "expiries":results,
+            "store":st,
+            "next_action":(
+                "Enough futures history is stored for an initial independent research run. Run Independent Futures Validation v15.17."
+                if st["rows"]>=1200 else
+                "Acquire again if additional expired monthly futures are available. Do not synthesize missing futures/OI."
+            ),
+            "live_routing_changed":False
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+def _v1517_load_futures():
+    _v1517_ensure_table()
+    with _v146_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT candle_time,expiry_date,close,volume,open_interest
+                FROM nifty_futures_history
+                ORDER BY candle_time, expiry_date
+            """)
+            rows=cur.fetchall()
+    if not rows:
+        return pd.DataFrame()
+    df=pd.DataFrame(rows,columns=["time","expiry","fut_close","fut_volume","fut_oi"])
+    df["time"]=pd.to_datetime(df["time"],utc=True).dt.tz_convert("Asia/Kolkata")
+    df["expiry"]=pd.to_datetime(df["expiry"]).dt.date
+    # When contract windows overlap, use the nearest unexpired contract for
+    # each timestamp (continuous front-month research series).
+    df["trade_date"]=df["time"].dt.date
+    df=df[df["expiry"]>=df["trade_date"]].copy()
+    df["dte"]=(pd.to_datetime(df["expiry"].astype(str))-pd.to_datetime(df["trade_date"].astype(str))).dt.days
+    df=df.sort_values(["time","dte"]).drop_duplicates("time",keep="first")
+    return df.set_index("time").sort_index()
+
+@app.get("/v15/futures-research-validation-v1517")
+def v1517_futures_research_validation(blocks:int=4,cost_bps:float=3.0):
+    try:
+        blocks=max(3,min(int(blocks),6))
+        cost_bps=max(0.0,float(cost_bps))
+        H=6
+
+        raw=_v146_load_raw_history("15m",limit=50000)
+        q=_v148_quality_report(raw,timeframe="15m")
+        if not q.get("backtest_ready"):
+            return {"status":"error","message":"NIFTY history is not backtest-ready."}
+
+        spot=_v146_feature_frame_from_raw(raw)
+        fut=_v1517_load_futures()
+        if fut.empty or len(fut)<800:
+            return {"status":"error","message":f"Only {len(fut)} usable futures candles are stored. Run Acquire NIFTY Futures Research v15.17 first."}
+
+        # Convert spot index to IST and nearest 15m timestamps.
+        si=pd.DatetimeIndex(spot.index)
+        si=si.tz_localize("UTC").tz_convert("Asia/Kolkata") if si.tz is None else si.tz_convert("Asia/Kolkata")
+        sf=spot.copy()
+        sf.index=si
+        sf=sf[~sf.index.duplicated(keep="last")].sort_index()
+
+        fi=fut.index
+        fut=fut.copy()
+        fut["fut_close"]=pd.to_numeric(fut["fut_close"],errors="coerce")
+        fut["fut_oi"]=pd.to_numeric(fut["fut_oi"],errors="coerce").replace([np.inf,-np.inf],np.nan)
+        fut["fut_volume"]=pd.to_numeric(fut["fut_volume"],errors="coerce").replace([np.inf,-np.inf],np.nan)
+
+        joined=sf[["close"]].join(fut[["fut_close","fut_oi","fut_volume","dte"]],how="inner").dropna(subset=["close","fut_close"])
+        if len(joined)<800:
+            return {"status":"error","message":f"Only {len(joined)} futures/spot bars overlap. Acquire more expired futures history before validation."}
+
+        joined["basis"]=joined["fut_close"]-joined["close"]
+        joined["basis_pct"]=joined["basis"]/joined["close"]*100.0
+        joined["basis_chg1"]=joined["basis_pct"].diff()
+        joined["oi_chg1_pct"]=joined["fut_oi"].pct_change()*100.0
+        joined["vol_chg1_pct"]=joined["fut_volume"].pct_change()*100.0
+        joined["price_chg1_pct"]=joined["fut_close"].pct_change()*100.0
+        joined["price_oi_interaction"]=np.sign(joined["price_chg1_pct"])*joined["oi_chg1_pct"].abs()
+        joined=joined.replace([np.inf,-np.inf],np.nan)
+
+        feats=["basis_pct","basis_chg1","fut_oi","oi_chg1_pct","price_oi_interaction","dte"]
+        close=pd.to_numeric(joined["close"],errors="coerce")
+        y=(close.shift(-H)-close)/close*10000.0
+
+        n=len(joined)
+        initial=max(500,int(n*.45))
+        block_size=(n-initial)//blocks
+        if block_size<120:
+            return {"status":"error","message":"Futures overlap is too short for chronological fold validation."}
+
+        folds=[]; pooled=[]; used=set()
+        for i in range(blocks):
+            train_end=initial+i*block_size
+            val_start=train_end
+            val_end=n if i==blocks-1 else min(n,val_start+block_size)
+            train_label_end=max(0,train_end-H)
+
+            cand=[]
+            for feature in feats:
+                rule=_v158_train_rule(joined[feature].iloc[:train_label_end],y.iloc[:train_label_end])
+                if rule and rule["train_bps"]>0:
+                    score=(rule["train_accuracy"]-50)*.6+min(20,abs(rule["train_bps"]))*.4
+                    cand.append((score,feature,rule))
+            cand.sort(reverse=True,key=lambda z:z[0])
+            chosen=cand[:2]
+            if not chosen:
+                continue
+
+            votes={}
+            for _,feature,rule in chosen:
+                used.add(feature)
+                xv=joined[feature].iloc[val_start:val_end]
+                yv=y.iloc[val_start:val_end]
+                for idx,xval in xv.items():
+                    yy=yv.loc[idx]
+                    if pd.isna(xval) or pd.isna(yy): continue
+                    side=0
+                    if xval<=rule["lo"]: side=-rule["polarity"]
+                    elif xval>=rule["hi"]: side=rule["polarity"]
+                    if side: votes.setdefault(idx,[]).append((side,float(yy)))
+
+            posmap={ts:j for j,ts in enumerate(joined.index)}
+            events=[]
+            for idx,arr in votes.items():
+                side_sum=sum(a for a,_ in arr)
+                side=1 if side_sum>0 else (-1 if side_sum<0 else 0)
+                if side: events.append((posmap[idx],side*arr[0][1]))
+            dec=_v1510_decorrelate(events,H)
+            pooled.extend(dec)
+            m=_v1510_eval(dec,cost_bps)
+            folds.append({
+                "fold":i+1,
+                "selected_features":[x[1] for x in chosen],
+                "signals":m["signals"],
+                "accuracy_percent":m["accuracy_percent"],
+                "gross_avg_bps":m["avg_bps"],
+                "net_avg_bps":m["net_avg_bps"],
+                "p_value":m["p_value"],
+            })
+
+        if not pooled or not folds:
+            return {"status":"error","message":"Futures features did not generate enough frozen validation events."}
+
+        pm=_v1510_eval(pooled,cost_bps)
+        positive=sum(1 for f in folds if f["net_avg_bps"]>0 and f["accuracy_percent"]>50)
+        worst=min(f["accuracy_percent"] for f in folds)
+        gate={
+            "independent_signals_200":pm["signals"]>=200,
+            "positive_folds_3of4":positive>=3 and len(folds)>=4,
+            "accuracy_55":pm["accuracy_percent"]>=55.0,
+            "worst_fold_50":worst>=50.0,
+            "net_edge_after_cost":pm["net_avg_bps"]>0,
+            "significant_p05":pm["p_value"]<0.05,
+        }
+        passed=all(gate.values())
+        return {
+            "status":"success","version":"15.17",
+            "verdict":"INDEPENDENT FUTURES EDGE PASSES" if passed else "INDEPENDENT FUTURES EDGE NOT YET STABLE",
+            "source":"Upstox expired NIFTY futures 15-minute candles including candle OI",
+            "overlap_bars":int(len(joined)),
+            "features_tested":feats,
+            "features_selected":sorted(used),
+            "summary":{
+                "independent_signals":pm["signals"],
+                "weighted_accuracy_percent":pm["accuracy_percent"],
+                "gross_avg_bps":pm["avg_bps"],
+                "net_avg_bps":pm["net_avg_bps"],
+                "p_value":pm["p_value"],
+                "positive_folds":positive,
+                "folds":len(folds),
+                "worst_fold_accuracy_percent":round(worst,1),
+            },
+            "folds":folds,
+            "gate_checks":gate,
+            "live_routing_changed":False,
+            "next_action":(
+                "Futures research clears the independent gate. Next add it only to a paper/shadow ensemble and forward-test before any live promotion."
+                if passed else
+                "Do not promote. Keep live routing unchanged. Use the fold/feature diagnostics to decide whether futures basis/OI adds robust information or should be rejected."
+            )
         }
     except Exception as e:
         return {"status":"error","message":str(e)}
