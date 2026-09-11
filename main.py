@@ -1,3 +1,4 @@
+import urllib.parse
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 import yfinance as yf
@@ -5402,7 +5403,7 @@ async function discoverMonthlyFuturesV15172(){
   if(!r.ok||d.status!=="success")throw new Error(d.message||"Monthly futures discovery failed");
   const st=d.store||{};
   const cs=(d.contracts||[]).map(x=>`${x.expiry}:${x.status}${x.candles!=null?`/${x.candles}`:""}`).join(" · ");
-  if(b)b.textContent=`v15.17.2 MONTHLY FUTURES · scanned ${d.expiries_scanned||0}/${d.expiry_count||0} · FUT contracts ${d.future_contracts_found||0} · candle series ${d.candle_series_successful||0} · rows written ${d.rows_written||0} · STORE ${st.rows||0} rows / ${st.sessions||0} sessions · ${st.start||"--"} → ${st.end||"--"} · ${d.next_action||""} · ${cs}`;
+  if(b)b.textContent=`v15.17.2.1 MONTHLY FUTURES · scanned ${d.expiries_scanned||0}/${d.expiry_count||0} · FUT contracts ${d.future_contracts_found||0} · candle series ${d.candle_series_successful||0} · rows written ${d.rows_written||0} · STORE ${st.rows||0} rows / ${st.sessions||0} sessions · ${st.start||"--"} → ${st.end||"--"} · ${d.next_action||""} · ${cs}`;
  }catch(e){if(b)b.textContent="v15.17.2 monthly futures discovery error: "+e.message}
 }
 
@@ -13599,7 +13600,7 @@ def v15172_futures_monthly_discovery(max_contracts:int=6,scan_limit:int=102):
 
         return {
             "status":"success",
-            "version":"15.17.2",
+            "version":"15.17.2.1",
             "expiry_count":len(expiries),
             "expiries_scanned":scanned,
             "future_contracts_found":len(found),
