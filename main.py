@@ -4609,6 +4609,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="reconstructOptionOiV1515()">Reconstruct Historical OI Features v15.15</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="auditOiIntegrityV1516()">OI Value Integrity Audit v15.16</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="acquireFuturesResearchV1517()">Acquire NIFTY Futures Research v15.17</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="diagnoseFuturesApiV15171()">Futures API Diagnostic v15.17.1</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFuturesValidationV1517()">Independent Futures Validation v15.17</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
@@ -4641,6 +4642,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btOptionOiReconstruct1515" style="margin-top:8px">v15.15 historical OI feature reconstruction has not been run yet.</div>
   <div class="bt-note" id="btOiIntegrity1516" style="margin-top:8px">v15.16 OI value integrity audit has not been run yet.</div>
   <div class="bt-note" id="btFuturesAcquire1517" style="margin-top:8px">v15.17 historical futures research has not been acquired yet.</div>
+  <div class="bt-note" id="btFuturesDiag15171" style="margin-top:8px">v15.17.1 futures API diagnostic has not been run yet.</div>
   <div class="bt-note" id="btFuturesValidation1517" style="margin-top:8px">v15.17 independent futures validation has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
@@ -5386,6 +5388,19 @@ async function runOptionOiValidationV1512(){
 
 
 
+
+
+async function diagnoseFuturesApiV15171(){
+ const b=document.getElementById("btFuturesDiag15171");
+ if(b)b.textContent="v15.17.1 checking Upstox expiry catalogue, FUT contract discovery and expired-candle access…";
+ try{
+  const r=await fetch("/v15/futures-api-diagnostic-v15171?sample_expiries=8",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"Futures diagnostic failed");
+  const xs=(d.samples||[]).map(x=>`${x.expiry}:${x.contract_http||"-"}/${x.contract_status||"-"}${x.instrument_type?`/${x.instrument_type}`:""}${x.candle_http?`/C${x.candle_http}`:""}`).join(" · ");
+  if(b)b.textContent=`v15.17.1 FUTURES API DIAGNOSTIC · token ${d.token_status||"--"} · expiry endpoint ${d.expiry_endpoint_http||"--"} · expiries ${d.expiry_count||0} · sampled ${d.sampled||0} · future contracts found ${d.future_contracts_found||0} · candle probes passed ${d.candle_probes_passed||0} · ${d.diagnosis||""} · ${d.next_action||""} · ${xs}`;
+ }catch(e){if(b)b.textContent="v15.17.1 futures diagnostic error: "+e.message}
+}
 
 async function acquireFuturesResearchV1517(){
  const b=document.getElementById("btFuturesAcquire1517");
@@ -13206,6 +13221,148 @@ def v1517_futures_research_validation(blocks:int=4,cost_bps:float=3.0):
                 if passed else
                 "Do not promote. Keep live routing unchanged. Use the fold/feature diagnostics to decide whether futures basis/OI adds robust information or should be rejected."
             )
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+
+def _v15171_safe_error(resp):
+    try:
+        body=resp.json()
+        errs=body.get("errors") if isinstance(body,dict) else None
+        if errs and isinstance(errs,list):
+            e=errs[0] if errs else {}
+            return {"code":e.get("errorCode") or e.get("code"),
+                    "message":e.get("message") or e.get("propertyPath"),
+                    "body_keys":sorted(body.keys())}
+        return {"message":body.get("message") if isinstance(body,dict) else str(body)[:300],
+                "body_keys":sorted(body.keys()) if isinstance(body,dict) else []}
+    except Exception:
+        return {"message":resp.text[:300]}
+
+def _v15171_probe_contract(expiry):
+    r=requests.get(
+        "https://api.upstox.com/v2/expired-instruments/future/contract",
+        params={"instrument_key":"NSE_INDEX|Nifty 50","expiry_date":expiry.isoformat()},
+        headers=_v1512_headers(),timeout=12
+    )
+    out={"expiry":expiry.isoformat(),"contract_http":r.status_code,
+         "contract_status":"PASS" if r.status_code==200 else "FAIL"}
+    if r.status_code!=200:
+        out["contract_error"]=_v15171_safe_error(r)
+        return out
+    body=r.json()
+    data=body.get("data") or []
+    out["contract_count"]=len(data) if isinstance(data,list) else 0
+    if not isinstance(data,list) or not data:
+        out["contract_status"]="EMPTY"
+        return out
+    out["returned_instrument_types"]=sorted({str(x.get("instrument_type")) for x in data if isinstance(x,dict)})
+    fut=next((x for x in data if isinstance(x,dict) and str(x.get("instrument_type","")).upper()=="FUT"),None)
+    if fut is None:
+        fut=data[0] if isinstance(data[0],dict) else None
+        out["fallback_first_record"]=True
+    if not fut:
+        out["contract_status"]="NO_DICT_RECORD"
+        return out
+    out["instrument_type"]=fut.get("instrument_type")
+    out["instrument_key"]=fut.get("instrument_key")
+    out["trading_symbol"]=fut.get("trading_symbol")
+    out["record_keys"]=sorted(fut.keys())
+    key=fut.get("instrument_key")
+    if not key:
+        out["contract_status"]="NO_INSTRUMENT_KEY"
+        return out
+    end=expiry
+    start=(pd.Timestamp(expiry)-pd.Timedelta(days=5)).date()
+    enc=urllib.parse.quote(str(key),safe="")
+    url=f"https://api.upstox.com/v2/expired-instruments/historical-candle/{enc}/15minute/{end.isoformat()}/{start.isoformat()}"
+    cr=requests.get(url,headers=_v1512_headers(),timeout=15)
+    out["candle_http"]=cr.status_code
+    if cr.status_code==200:
+        candles=((cr.json().get("data") or {}).get("candles") or [])
+        out["candle_count"]=len(candles)
+        out["candle_first_len"]=len(candles[0]) if candles else 0
+        if candles:
+            out["candle_first_timestamp"]=str(candles[0][0])
+            out["candle_has_oi"]=len(candles[0])>6
+    else:
+        out["candle_error"]=_v15171_safe_error(cr)
+    return out
+
+@app.get("/v15/futures-api-diagnostic-v15171")
+def v15171_futures_api_diagnostic(sample_expiries:int=8):
+    try:
+        sample_expiries=max(3,min(int(sample_expiries),12))
+        token=os.getenv("UPSTOX_ACCESS_TOKEN","").strip()
+        if not token:
+            return {"status":"error","message":"UPSTOX_ACCESS_TOKEN is missing."}
+
+        er=requests.get(
+            "https://api.upstox.com/v2/expired-instruments/expiries",
+            params={"instrument_key":"NSE_INDEX|Nifty 50"},
+            headers=_v1512_headers(),timeout=12
+        )
+        if er.status_code!=200:
+            return {
+                "status":"success","version":"15.17.1",
+                "token_status":"CONFIGURED",
+                "expiry_endpoint_http":er.status_code,
+                "expiry_count":0,"sampled":0,
+                "future_contracts_found":0,"candle_probes_passed":0,
+                "expiry_error":_v15171_safe_error(er),
+                "samples":[],
+                "diagnosis":"The expired-instrument expiry catalogue itself is not accessible.",
+                "next_action":"Fix token/plan/API permission before changing futures contract logic.",
+                "live_routing_changed":False
+            }
+
+        raw_exp=er.json().get("data") or []
+        expiries=[]
+        for x in raw_exp:
+            try: expiries.append(pd.Timestamp(x).date())
+            except Exception: pass
+        expiries=sorted(set(expiries),reverse=True)
+
+        samples=[]
+        for e in expiries[:sample_expiries]:
+            try:
+                samples.append(_v15171_probe_contract(e))
+            except Exception as ex:
+                samples.append({"expiry":e.isoformat(),"contract_status":"EXCEPTION","exception":str(ex)[:300]})
+
+        found=sum(1 for x in samples if x.get("instrument_key"))
+        candle_pass=sum(1 for x in samples if x.get("candle_http")==200 and x.get("candle_count",0)>0)
+
+        if samples and all(x.get("contract_http")==200 and x.get("contract_count",0)==0 for x in samples):
+            diagnosis="The future-contract endpoint returns HTTP 200 but empty data for sampled expiry dates."
+            next_action="Next fix should discover actual monthly futures expiries/contracts instead of assuming every expiry catalogue date has a FUT."
+        elif any(x.get("contract_http") in (401,403) for x in samples):
+            diagnosis="Contract discovery is blocked by authentication or expired-instrument permission."
+            next_action="Resolve provider token/Upstox Plus permission before changing parser logic."
+        elif found and candle_pass==0:
+            diagnosis="Future contracts are being discovered, but historical candle probes are not returning usable candles."
+            next_action="Use the candle HTTP/error details to correct the historical-candle URL/window or provider permission."
+        elif candle_pass>0:
+            diagnosis="At least one real expired NIFTY future and historical candle series is accessible. v15.17 bulk acquisition is selecting expiries incorrectly."
+            next_action="Next patch should acquire only expiries confirmed by this diagnostic."
+        else:
+            diagnosis="The sampled responses are mixed; inspect per-expiry statuses before changing acquisition logic."
+            next_action="Use the diagnostic samples to identify the exact endpoint/schema mismatch."
+
+        return {
+            "status":"success","version":"15.17.1",
+            "token_status":"CONFIGURED",
+            "expiry_endpoint_http":er.status_code,
+            "expiry_count":len(expiries),
+            "sampled":len(samples),
+            "future_contracts_found":found,
+            "candle_probes_passed":candle_pass,
+            "samples":samples,
+            "diagnosis":diagnosis,
+            "next_action":next_action,
+            "live_routing_changed":False,
+            "note":"Read-only diagnostic. Token value is never returned."
         }
     except Exception as e:
         return {"status":"error","message":str(e)}
