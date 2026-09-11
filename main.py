@@ -4610,6 +4610,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
             <button class="primary" style="width:100%;margin-top:8px" onclick="auditOiIntegrityV1516()">OI Value Integrity Audit v15.16</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="acquireFuturesResearchV1517()">Acquire NIFTY Futures Research v15.17</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="diagnoseFuturesApiV15171()">Futures API Diagnostic v15.17.1</button>
+            <button class="primary" style="width:100%;margin-top:8px" onclick="discoverMonthlyFuturesV15172()">Discover + Acquire Monthly Futures v15.17.2</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="runFuturesValidationV1517()">Independent Futures Validation v15.17</button>
             <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
           </div>
@@ -4643,6 +4644,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
   <div class="bt-note" id="btOiIntegrity1516" style="margin-top:8px">v15.16 OI value integrity audit has not been run yet.</div>
   <div class="bt-note" id="btFuturesAcquire1517" style="margin-top:8px">v15.17 historical futures research has not been acquired yet.</div>
   <div class="bt-note" id="btFuturesDiag15171" style="margin-top:8px">v15.17.1 futures API diagnostic has not been run yet.</div>
+  <div class="bt-note" id="btFuturesMonthly15172" style="margin-top:8px">v15.17.2 monthly futures discovery has not been run yet.</div>
   <div class="bt-note" id="btFuturesValidation1517" style="margin-top:8px">v15.17 independent futures validation has not been run yet.</div>
   <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
   <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
@@ -5389,6 +5391,20 @@ async function runOptionOiValidationV1512(){
 
 
 
+
+
+async function discoverMonthlyFuturesV15172(){
+ const b=document.getElementById("btFuturesMonthly15172");
+ if(b)b.textContent="v15.17.2 scanning expiry catalogue for actual FUT contracts and acquiring confirmed monthly futures…";
+ try{
+  const r=await fetch("/v15/futures-monthly-discovery-v15172?max_contracts=6&scan_limit=102",{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok||d.status!=="success")throw new Error(d.message||"Monthly futures discovery failed");
+  const st=d.store||{};
+  const cs=(d.contracts||[]).map(x=>`${x.expiry}:${x.status}${x.candles!=null?`/${x.candles}`:""}`).join(" · ");
+  if(b)b.textContent=`v15.17.2 MONTHLY FUTURES · scanned ${d.expiries_scanned||0}/${d.expiry_count||0} · FUT contracts ${d.future_contracts_found||0} · candle series ${d.candle_series_successful||0} · rows written ${d.rows_written||0} · STORE ${st.rows||0} rows / ${st.sessions||0} sessions · ${st.start||"--"} → ${st.end||"--"} · ${d.next_action||""} · ${cs}`;
+ }catch(e){if(b)b.textContent="v15.17.2 monthly futures discovery error: "+e.message}
+}
 
 async function diagnoseFuturesApiV15171(){
  const b=document.getElementById("btFuturesDiag15171");
@@ -13363,6 +13379,242 @@ def v15171_futures_api_diagnostic(sample_expiries:int=8):
             "next_action":next_action,
             "live_routing_changed":False,
             "note":"Read-only diagnostic. Token value is never returned."
+        }
+    except Exception as e:
+        return {"status":"error","message":str(e)}
+
+
+# ============================================================
+# v15.17.2 — MONTHLY FUTURES EXPIRY DISCOVERY + ACQUISITION
+#
+# The expired-instruments expiry catalogue mixes weekly option expiries with
+# the fewer dates that actually have an expired NIFTY FUT contract. This build
+# scans the catalogue, retains only endpoint responses containing a genuine
+# instrument_type=FUT record, then fetches candles/OI only for those contracts.
+#
+# No synthetic expiry inference. No live CE/PE/WAIT changes.
+# ============================================================
+
+def _v15172_get_future_contract_for_expiry(expiry):
+    r=requests.get(
+        "https://api.upstox.com/v2/expired-instruments/future/contract",
+        params={"instrument_key":"NSE_INDEX|Nifty 50","expiry_date":expiry.isoformat()},
+        headers=_v1512_headers(),timeout=12
+    )
+    if r.status_code!=200:
+        return None, {
+            "expiry":expiry.isoformat(),
+            "status":"HTTP_"+str(r.status_code),
+            "error":_v15171_safe_error(r)
+        }
+
+    try:
+        data=(r.json().get("data") or [])
+    except Exception:
+        return None, {
+            "expiry":expiry.isoformat(),
+            "status":"INVALID_JSON",
+            "error":{"message":r.text[:250]}
+        }
+
+    if not isinstance(data,list) or not data:
+        return None, {"expiry":expiry.isoformat(),"status":"EMPTY"}
+
+    fut=next(
+        (x for x in data if isinstance(x,dict) and str(x.get("instrument_type","")).upper()=="FUT"),
+        None
+    )
+    if not fut:
+        return None, {
+            "expiry":expiry.isoformat(),
+            "status":"NO_FUT",
+            "returned_types":sorted({str(x.get("instrument_type")) for x in data if isinstance(x,dict)})
+        }
+
+    key=fut.get("instrument_key")
+    if not key:
+        return None, {
+            "expiry":expiry.isoformat(),
+            "status":"FUT_NO_KEY",
+            "record_keys":sorted(fut.keys())
+        }
+
+    return fut, {
+        "expiry":expiry.isoformat(),
+        "status":"FUT_FOUND",
+        "instrument_key":key,
+        "trading_symbol":fut.get("trading_symbol"),
+        "instrument_type":fut.get("instrument_type")
+    }
+
+
+def _v15172_fetch_contract_candles(contract, expiry):
+    key=contract["instrument_key"]
+
+    # Use a monthly contract window ending on expiry. Up to 45 calendar days
+    # comfortably covers the previous monthly cycle while staying bounded.
+    start=(pd.Timestamp(expiry)-pd.Timedelta(days=45)).date()
+    end=expiry
+    enc=urllib.parse.quote(str(key),safe="")
+    url=f"https://api.upstox.com/v2/expired-instruments/historical-candle/{enc}/15minute/{end.isoformat()}/{start.isoformat()}"
+
+    r=requests.get(url,headers=_v1512_headers(),timeout=20)
+    if r.status_code!=200:
+        return [], {
+            "expiry":expiry.isoformat(),
+            "status":"CANDLE_HTTP_"+str(r.status_code),
+            "error":_v15171_safe_error(r)
+        }
+
+    try:
+        candles=((r.json().get("data") or {}).get("candles") or [])
+    except Exception as e:
+        return [], {
+            "expiry":expiry.isoformat(),
+            "status":"CANDLE_INVALID_JSON",
+            "error":{"message":str(e)[:220]}
+        }
+
+    rows=[]
+    oi_positive=0
+    for a in candles:
+        if not isinstance(a,(list,tuple)) or len(a)<5:
+            continue
+        try:
+            ts=pd.Timestamp(a[0])
+            if ts.tzinfo is None:
+                ts=ts.tz_localize("Asia/Kolkata")
+            else:
+                ts=ts.tz_convert("Asia/Kolkata")
+
+            volume=float(a[5]) if len(a)>5 and a[5] is not None else 0.0
+            oi=float(a[6]) if len(a)>6 and a[6] is not None else 0.0
+            if oi>0:
+                oi_positive+=1
+
+            rows.append((
+                ts.to_pydatetime(),
+                expiry,
+                key,
+                contract.get("trading_symbol"),
+                float(a[1]),float(a[2]),float(a[3]),float(a[4]),
+                volume,oi
+            ))
+        except Exception:
+            continue
+
+    return rows, {
+        "expiry":expiry.isoformat(),
+        "status":"OK",
+        "candles":len(rows),
+        "oi_positive_candles":oi_positive,
+        "trading_symbol":contract.get("trading_symbol")
+    }
+
+
+@app.get("/v15/futures-monthly-discovery-v15172")
+def v15172_futures_monthly_discovery(max_contracts:int=6,scan_limit:int=102):
+    try:
+        max_contracts=max(2,min(int(max_contracts),12))
+        scan_limit=max(12,min(int(scan_limit),150))
+        _v1517_ensure_table()
+
+        # Get full provider expiry catalogue.
+        er=requests.get(
+            "https://api.upstox.com/v2/expired-instruments/expiries",
+            params={"instrument_key":"NSE_INDEX|Nifty 50"},
+            headers=_v1512_headers(),timeout=12
+        )
+        if er.status_code!=200:
+            return {
+                "status":"error",
+                "message":"Expired-instrument expiry catalogue failed.",
+                "http_status":er.status_code,
+                "error":_v15171_safe_error(er)
+            }
+
+        raw_exp=er.json().get("data") or []
+        expiries=[]
+        for x in raw_exp:
+            try:
+                expiries.append(pd.Timestamp(x).date())
+            except Exception:
+                pass
+        expiries=sorted(set(expiries),reverse=True)
+
+        scanned=0
+        found=[]
+        diagnostics=[]
+
+        # Scan newest to oldest and retain only genuine FUT records.
+        for expiry in expiries[:scan_limit]:
+            scanned+=1
+            fut,diag=_v15172_get_future_contract_for_expiry(expiry)
+            diagnostics.append(diag)
+            if fut:
+                found.append((expiry,fut))
+                if len(found)>=max_contracts:
+                    break
+
+        contracts=[]
+        allrows=[]
+        success=0
+
+        for expiry,fut in found:
+            rows,diag=_v15172_fetch_contract_candles(fut,expiry)
+            contracts.append(diag)
+            if rows:
+                allrows.extend(rows)
+                success+=1
+
+        written=0
+        if allrows:
+            with _v146_db() as conn:
+                with conn.cursor() as cur:
+                    cur.executemany("""
+                        INSERT INTO nifty_futures_history(
+                            candle_time,expiry_date,instrument_key,trading_symbol,
+                            open,high,low,close,volume,open_interest,source,updated_at
+                        ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'upstox_exp_fut',CURRENT_TIMESTAMP)
+                        ON CONFLICT(candle_time,expiry_date) DO UPDATE SET
+                            instrument_key=EXCLUDED.instrument_key,
+                            trading_symbol=EXCLUDED.trading_symbol,
+                            open=EXCLUDED.open,high=EXCLUDED.high,low=EXCLUDED.low,
+                            close=EXCLUDED.close,volume=EXCLUDED.volume,
+                            open_interest=EXCLUDED.open_interest,
+                            source=EXCLUDED.source,updated_at=CURRENT_TIMESTAMP
+                    """,allrows)
+                conn.commit()
+            written=len(allrows)
+
+        st=_v1517_store_status()
+
+        # Summarize why expiries were rejected without flooding UI.
+        reject_counts={}
+        for d in diagnostics:
+            status=d.get("status","UNKNOWN")
+            reject_counts[status]=reject_counts.get(status,0)+1
+
+        ready=st["rows"]>=1200 and st["sessions"]>=45
+
+        return {
+            "status":"success",
+            "version":"15.17.2",
+            "expiry_count":len(expiries),
+            "expiries_scanned":scanned,
+            "future_contracts_found":len(found),
+            "candle_series_successful":success,
+            "rows_written":written,
+            "contracts":contracts,
+            "discovery_status_counts":reject_counts,
+            "store":st,
+            "validation_ready":ready,
+            "next_action":(
+                "Confirmed monthly futures history is large enough for an initial research run. Run Independent Futures Validation v15.17."
+                if ready else
+                "Run this acquisition again to collect more confirmed monthly FUT contracts if available. Do not synthesize skipped expiries."
+            ),
+            "live_routing_changed":False
         }
     except Exception as e:
         return {"status":"error","message":str(e)}
