@@ -16,3 +16,6 @@ setup_v1521(app)
 
 from v1522 import setup_v1522
 setup_v1522(app)
+
+from v1523 import setup_v1523
+setup_v1523(app)
