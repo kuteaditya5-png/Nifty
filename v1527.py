@@ -1,6 +1,7 @@
 import os,sqlite3,json,urllib.request,urllib.parse
 from pathlib import Path
 from datetime import date,timedelta
+from v1526 import _fetch_chunk as _proven_fetch
 DB=Path(os.getenv("NIFTY_HISTORY_DB","/tmp/nifty_v1527.sqlite"))
 INST="NSE_INDEX|Nifty 50"
 def _con():
@@ -22,7 +23,7 @@ def setup_v1527(app):
   con=_con();rec=add=0;details=[]
   for a,b in list(reversed(chunks))[:max(1,min(max_chunks,36))]:
    try:
-    rows=_fetch(a.isoformat(),b.isoformat(),token);rec+=len(rows);before=con.total_changes
+    _,rr=_proven_fetch(INST,a,b,token);rows=[[r["timestamp"],r["open"],r["high"],r["low"],r["close"],r.get("volume",0),r.get("oi",0)] for r in rr];rec+=len(rows);before=con.total_changes
     for x in rows:
      if len(x)>=5:con.execute("INSERT OR REPLACE INTO nifty15 VALUES(?,?,?,?,?,?,?,?)",(INST,str(x[0]),x[1],x[2],x[3],x[4],x[5] if len(x)>5 else 0,x[6] if len(x)>6 else 0))
     con.commit();n=con.total_changes-before;add+=n;details.append({"from":str(a),"to":str(b),"received":len(rows),"writes":n,"ok":True})
