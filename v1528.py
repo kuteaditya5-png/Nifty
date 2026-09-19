@@ -2,9 +2,9 @@ import os, json, urllib.request, urllib.parse
 from datetime import date,timedelta
 import pandas as pd
 try:
-    import psycopg2
+    import psycopg
 except Exception:
-    psycopg2=None
+    psycopg=None
 from v1526 import _fetch_chunk as _proven_fetch
 
 VERSION="15.28"
@@ -14,8 +14,8 @@ TARGET=12261
 def _conn():
     url=os.getenv("DATABASE_URL","").strip()
     if not url: raise RuntimeError("DATABASE_URL is not configured")
-    if psycopg2 is None: raise RuntimeError("psycopg2 is unavailable")
-    return psycopg2.connect(url,sslmode="require")
+    if psycopg is None: raise RuntimeError("psycopg is unavailable")
+    return psycopg.connect(url, sslmode="require")
 
 def _ensure():
     con=_conn()
