@@ -49,3 +49,6 @@ setup_v15291(app)
 
 from v15292 import setup_v15292
 setup_v15292(app)
+
+from v15293 import setup_v15293
+setup_v15293(app)
