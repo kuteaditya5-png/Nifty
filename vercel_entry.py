@@ -61,3 +61,6 @@ setup_v1530(app)
 
 from v160 import setup_v160
 setup_v160(app)
+
+from v161 import setup_v161
+setup_v161(app)
