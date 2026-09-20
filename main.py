@@ -4558,7 +4558,7 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
 <body>
 <div class="sidebar-nav">
   <button class="active" onclick="showMainDashboard(this)"><span class="nav-icon">⌂</span>Dashboard</button>
-  <button onclick="window.location.href='/intraday-setup'"><span class="nav-icon">⚡</span>Intraday</button>
+  <button onclick="location.href='/intraday-setup'"><span class="nav-icon">⚡</span>Intraday</button>
   <button onclick="toggleBacktestPanel(this)"><span class="nav-icon">↺</span>Backtest</button>
 </div>
 
