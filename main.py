@@ -4505,6 +4505,41 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
  .bt-actions{grid-template-columns:1fr}
 }
 </style>
+
+<style id="futuristic-v17-preview">
+:root{--neo:#27e7ff;--violet:#8a5cff;--neo2:#19f6b3;--glass:rgba(7,19,39,.72)}
+body{background:
+radial-gradient(circle at 50% 16%,rgba(39,91,255,.18),transparent 30%),
+radial-gradient(circle at 75% 18%,rgba(139,64,255,.14),transparent 26%),
+linear-gradient(180deg,#020817 0%,#050d1d 55%,#020713 100%) fixed!important}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.18;background-image:linear-gradient(rgba(75,144,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(75,144,255,.07) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,black,transparent 72%)}
+.shell{max-width:1500px!important;padding-top:20px!important}
+.card{background:linear-gradient(145deg,rgba(10,25,49,.86),rgba(4,12,28,.88))!important;border:1px solid rgba(79,137,255,.26)!important;box-shadow:0 18px 50px rgba(0,0,0,.24),inset 0 1px rgba(255,255,255,.035);backdrop-filter:blur(16px)}
+.topbar{padding:8px 4px 14px;border-bottom:1px solid rgba(81,126,220,.16)}
+.brand{letter-spacing:1px!important;text-shadow:0 0 24px rgba(39,231,255,.2)}.brand span{color:var(--neo)!important}
+.tag{color:#7086aa!important}.pill,button{background:rgba(8,20,41,.78)!important;border-color:rgba(92,137,221,.27)!important}
+button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,255,.12)}
+.primary{background:linear-gradient(135deg,#3268ff,#7647ff)!important;color:white!important}
+.topgrid{grid-template-columns:1.15fr 1.5fr .9fr!important;gap:14px!important}
+.prediction-card{position:relative;overflow:hidden;min-height:190px!important;text-align:center;padding:22px!important}
+.prediction-card:before{content:"";position:absolute;width:250px;height:250px;border-radius:50%;left:50%;top:50%;transform:translate(-50%,-50%);border:2px solid rgba(48,208,255,.3);box-shadow:0 0 32px rgba(42,120,255,.2),inset 0 0 32px rgba(125,67,255,.12);background:radial-gradient(circle,rgba(24,82,185,.16),rgba(64,40,144,.06) 55%,transparent 57%)}
+.prediction-card:after{content:"";position:absolute;width:205px;height:205px;border-radius:50%;left:50%;top:50%;transform:translate(-50%,-50%);border:1px solid rgba(139,92,255,.45);box-shadow:0 0 30px rgba(139,92,255,.13)}
+.prediction-card>*{position:relative;z-index:2}.prediction-card .signalrow{height:120px;justify-content:center!important;margin-top:4px!important}
+.prediction-card .signalwrap{flex-direction:column;gap:0!important}.prediction-card .arrow{font-size:28px!important}.prediction-card .signal{font-size:38px!important;text-shadow:0 0 22px currentColor}
+.prediction-card .signal-sub{font-size:12px!important;color:#8ca1c3}.prediction-card .conf{position:absolute;right:10px;bottom:3px}.prediction-card .conf b{font-size:18px!important}
+.trade-card{min-height:190px!important}.tradeboxes{grid-template-columns:repeat(2,1fr)!important}.tradebox{background:rgba(5,15,34,.78)!important;border-radius:13px!important}
+.market-card{min-height:190px!important}.market-price{font-size:36px!important;text-shadow:0 0 20px rgba(39,231,255,.15)}
+.main-layout{grid-template-columns:minmax(0,1fr) 320px!important;gap:14px!important}
+.chart-card{box-shadow:0 0 0 1px rgba(55,131,255,.06),0 22px 60px rgba(0,0,0,.28)!important}
+.chart-wrap{background:radial-gradient(circle at 50% 50%,rgba(22,66,133,.12),transparent 60%)}
+.sidecard{background:linear-gradient(160deg,rgba(8,23,46,.9),rgba(5,13,29,.9))!important}
+.eyebrow,.side-title{letter-spacing:.1em!important}.side-title{color:#dceaff}.insight-row,.sumrow{border-color:rgba(72,117,187,.18)!important}
+.sidebar-nav{background:rgba(3,10,23,.9)!important;border-color:rgba(72,123,216,.22)!important;box-shadow:0 12px 35px rgba(0,0,0,.25)}
+.sidebar-nav button.active{background:linear-gradient(135deg,rgba(40,101,255,.9),rgba(102,55,219,.9))!important;box-shadow:0 0 20px rgba(67,97,255,.25)}
+.market-open{color:var(--neo2)!important}.statusdot{background:var(--neo2)!important;box-shadow:0 0 12px var(--neo2)}
+@media(max-width:900px){.topgrid{grid-template-columns:1fr!important}.main-layout{grid-template-columns:1fr!important}.prediction-card{min-height:210px!important}.prediction-card .conf{right:18px}.tradeboxes{grid-template-columns:repeat(2,1fr)!important}}
+@media(max-width:560px){.shell{width:94%!important}.brand{font-size:26px!important}.actions{gap:6px!important}.actions button,.actions .pill{padding:8px!important}.prediction-card:before{width:220px;height:220px}.prediction-card:after{width:180px;height:180px}.tradeboxes{grid-template-columns:1fr 1fr!important}}
+</style>
 </head>
 <body>
 <div class="sidebar-nav">
@@ -4689,7 +4724,7 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
     <div>
       <div class="brandline"><div class="brand">NIFTY <span>AI</span></div><div class="tag">Smarter signals. Better validation.</div></div>
     </div>
-    <div class="actions">
+    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v16.1</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
       <span class="market-open"><span class="statusdot"></span><span id="marketState">Market data</span></span>
       <span class="pill" id="lastUpdated">Loading...</span>
       <button class="iconbtn" onclick="loadAll()">↻ Refresh</button>
