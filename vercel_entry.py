@@ -76,3 +76,6 @@ setup_v172(app)
 
 from v173 import setup_v173
 setup_v173(app)
+
+from v180 import setup_v180
+setup_v180(app)
