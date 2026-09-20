@@ -4540,6 +4540,20 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
 @media(max-width:900px){.topgrid{grid-template-columns:1fr!important}.main-layout{grid-template-columns:1fr!important}.prediction-card{min-height:210px!important}.prediction-card .conf{right:18px}.tradeboxes{grid-template-columns:repeat(2,1fr)!important}}
 @media(max-width:560px){.shell{width:94%!important}.brand{font-size:26px!important}.actions{gap:6px!important}.actions button,.actions .pill{padding:8px!important}.prediction-card:before{width:220px;height:220px}.prediction-card:after{width:180px;height:180px}.tradeboxes{grid-template-columns:1fr 1fr!important}}
 </style>
+
+<style id="manual-option-paper-css">
+.manual-option-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(290px,.65fr);gap:14px;margin:14px 0}
+.manual-chain,.manual-ticket{border:1px solid rgba(73,132,226,.24);border-radius:14px;background:rgba(4,14,31,.68);padding:14px}
+.manual-chain-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}.manual-chain-head b{margin-right:auto}
+.option-table{min-width:720px}.option-table th{text-align:center}.option-table td{text-align:center;padding:9px 7px}
+.optpick{width:100%;padding:7px 8px!important;border-radius:8px!important;font-weight:800}.optpick.ce{color:#43d9ff!important}.optpick.pe{color:#ff76a8!important}
+.atm-row{background:rgba(92,94,255,.08)}.strike-cell{font-weight:900;color:#e7efff}
+.manual-contract{font-size:22px;font-weight:900;margin:12px 0;color:#75ddff}
+.ticket-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.ticket-grid label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#7f96b8}
+.ticket-grid input{display:block;width:100%;margin-top:5px;background:#07152b;color:#eef6ff;border:1px solid rgba(79,137,255,.3);border-radius:9px;padding:10px}
+.ticket-note{font-size:11px;line-height:1.45;color:#8ba2c3;margin:11px 0}.manual-buy{width:100%}
+@media(max-width:900px){.manual-option-grid{grid-template-columns:1fr}.option-table{min-width:650px}}
+</style>
 </head>
 <body>
 <div class="sidebar-nav">
@@ -4819,7 +4833,26 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
   </div>
 
   <div class="card section-card">
-    <div class="section-head"><div><div class="section-title">Paper Trading</div><div class="section-sub">Each user has an independent virtual portfolio.</div></div><div class="actions"><button id="paperBuyBtn" onclick="paperBuy()">Paper Buy Current Signal</button><button onclick="paperReset()">Reset</button></div></div>
+    <div class="section-head"><div><div class="section-title">Manual Option Paper Trading</div><div class="section-sub">Choose any NIFTY CE or PE. AI signal is context only and never blocks a paper trade.</div></div><div class="actions"><button onclick="loadManualOptionChain()">↻ Option Chain</button><button onclick="paperReset()">Reset</button></div></div>
+    <div class="manual-option-grid">
+      <div class="manual-chain">
+        <div class="manual-chain-head"><b>Option Chain</b><span id="manualExpiry" class="pill">Expiry --</span><span id="manualSpot" class="pill">NIFTY --</span></div>
+        <div class="table-wrap"><table class="option-table"><thead><tr><th>CE LTP</th><th>CE OI</th><th>CE ΔOI</th><th>Strike</th><th>PE ΔOI</th><th>PE OI</th><th>PE LTP</th></tr></thead><tbody id="manualOptionRows"><tr><td colspan="7">Loading option chain...</td></tr></tbody></table></div>
+      </div>
+      <div class="manual-ticket">
+        <div class="eyebrow">Selected Paper Contract</div>
+        <div class="manual-contract" id="manualContract">Select a CE or PE from the chain</div>
+        <div class="ticket-grid">
+          <label>Premium<input id="manualPremium" type="number" step="0.05" readonly></label>
+          <label>Quantity<input id="manualQty" type="number" value="75" min="1" step="1"></label>
+          <label>Stop Loss<input id="manualSL" type="number" step="0.05"></label>
+          <label>Target 1<input id="manualT1" type="number" step="0.05"></label>
+          <label>Target 2<input id="manualT2" type="number" step="0.05"></label>
+        </div>
+        <div class="ticket-note" id="manualRiskNote">Select a contract to calculate premium-based suggested risk levels.</div>
+        <button class="primary manual-buy" onclick="paperBuySelected()">Paper Buy Selected Option</button>
+      </div>
+    </div>
     <div class="metrics">
       <div class="metric"><span class="label">Equity</span><b id="paperEquity">₹--</b></div>
       <div class="metric"><span class="label">Cash</span><b id="paperCash">₹--</b></div>
@@ -5006,6 +5039,51 @@ async function loadPaper(){
     if(s.status==="success"){const x=s.summary;setText("paperEquity","₹"+Number(x.equity).toFixed(2));setText("paperCash","₹"+Number(x.cash_balance).toFixed(2));setText("paperOpenPnl","₹"+Number(x.open_pnl).toFixed(2));setText("paperRealized","₹"+Number(x.realized_pnl).toFixed(2));setText("paperWinRate",Number(x.win_rate).toFixed(1)+"%");setText("paperOpenCount",x.open_positions)}
     el("paperHistory").innerHTML=(h.trades||[]).map(t=>`<tr><td>${new Date(t.opened_at).toLocaleString()}</td><td>${t.signal}</td><td>${t.strike_price} ${t.option_type}${t.expiry?`<div style="font-size:9px;color:#7188a3">${t.expiry}</div>`:""}</td><td>${t.entry_price}</td><td>${t.status==="OPEN"?(t.current_price??t.entry_price):(t.exit_price??"--")}</td><td>₹${Number(t.pnl).toFixed(2)}</td><td>${t.status}${t.exit_reason?` / ${t.exit_reason}`:""}</td><td>${t.status==="OPEN"?`<button onclick="paperExit(${t.trade_id},${t.current_price||t.entry_price})">Exit</button>`:""}</td></tr>`).join("")||'<tr><td colspan="8">No paper trades yet.</td></tr>';
   }catch(e){console.warn("Paper:",e)}
+}
+
+let selectedManualOption=null;
+let manualChainData=null;
+function manualNum(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):"--"}
+async function loadManualOptionChain(){
+  const body=el("manualOptionRows");if(body)body.innerHTML='<tr><td colspan="7">Loading live option chain...</td></tr>';
+  try{
+    const r=await fetch("/option-chain",{cache:"no-store"}),d=await r.json();
+    if(!r.ok||d.status!=="success")throw new Error(d.message||"Option chain unavailable");
+    manualChainData=d;
+    setText("manualExpiry","Expiry "+(d.expiry||"--"));setText("manualSpot","NIFTY "+manualNum(d.spot));
+    const rows=d.nearby_strikes||[],atm=Number(d.atm_strike||d.spot||0);
+    body.innerHTML=rows.map(x=>{
+      const strike=Number(x.strike),atmClass=Math.abs(strike-atm)<1?"atm-row":"";
+      return `<tr class="${atmClass}">
+        <td><button class="optpick ce" onclick="selectManualOption('CE',${strike},${Number(x.call_ltp||0)},${Number(x.call_iv||0)})">₹${manualNum(x.call_ltp)}</button></td>
+        <td>${manualNum(x.call_oi,0)}</td><td>${manualNum(x.call_change_oi,0)}</td>
+        <td class="strike-cell">${manualNum(strike,0)}</td>
+        <td>${manualNum(x.put_change_oi,0)}</td><td>${manualNum(x.put_oi,0)}</td>
+        <td><button class="optpick pe" onclick="selectManualOption('PE',${strike},${Number(x.put_ltp||0)},${Number(x.put_iv||0)})">₹${manualNum(x.put_ltp)}</button></td>
+      </tr>`}).join("")||'<tr><td colspan="7">No nearby option contracts returned.</td></tr>';
+  }catch(e){if(body)body.innerHTML=`<tr><td colspan="7">${e.message}</td></tr>`}
+}
+function selectManualOption(type,strike,premium,iv){
+  if(!premium||premium<=0)return alert("Premium unavailable for this contract.");
+  const ivRisk=String(manualChainData?.iv_risk||"").toUpperCase();
+  let stopPct=18;if(ivRisk==="HIGH")stopPct=21;if(ivRisk==="VERY HIGH")stopPct=24;
+  // Premium-risk plan: 1R and 2R targets from the selected option premium.
+  const risk=premium*stopPct/100,sl=Math.max(.05,premium-risk),t1=premium+risk,t2=premium+2*risk;
+  selectedManualOption={type,strike,premium,iv,stopPct};
+  setText("manualContract",`NIFTY ${strike} ${type} · ₹${manualNum(premium)}${iv?` · IV ${manualNum(iv)}%`:""}`);
+  el("manualPremium").value=premium.toFixed(2);el("manualSL").value=sl.toFixed(2);el("manualT1").value=t1.toFixed(2);el("manualT2").value=t2.toFixed(2);
+  setText("manualRiskNote",`Suggested premium risk: ${stopPct}% stop · Target 1 = 1R · Target 2 = 2R. You can edit SL/targets before paper buying. AI currently says ${String(latestPrediction?.fno_setup||"WAIT").toUpperCase()}, but it does not block this manual paper trade.`);
+}
+async function paperBuySelected(){
+  if(!selectedManualOption)return alert("Select a CE or PE contract from the option chain first.");
+  const qty=Math.max(1,Number(el("manualQty").value||75)),entry=Number(el("manualPremium").value),sl=Number(el("manualSL").value),t1=Number(el("manualT1").value),t2=Number(el("manualT2").value);
+  if(!entry||!sl||!t1||!t2)return alert("Entry, stop loss and targets are required.");
+  if(!(sl<entry&&t1>entry&&t2>=t1))return alert("For a BUY paper trade: Stop Loss must be below entry and targets must be above entry.");
+  const d=latestPrediction||{},body={signal:"MANUAL BUY",option_type:selectedManualOption.type,strike_price:selectedManualOption.strike,nifty_price:d.price,entry_price:entry,stop_loss:sl,target1:t1,target2:t2,confidence:null,quantity:qty,expiry:manualChainData?.expiry};
+  const r=await fetch("/api/paper/open",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),x=await r.json();
+  if(!r.ok||x.status==="error")return alert(x.message||"Unable to open paper trade.");
+  alert(`Paper trade opened: NIFTY ${selectedManualOption.strike} ${selectedManualOption.type}`);
+  await loadPaper();
 }
 async function paperBuy(){
   const d=latestPrediction||await (await fetch("/prediction?include_alerts=true",{cache:"no-store"})).json(),setup=String(d.fno_setup||"WAIT").toUpperCase(),a=d.fno_alerts||{};let typ,trade;
@@ -5859,6 +5937,7 @@ async function runRollingWF(){
 }
 
 async function loadAll(){
+  loadManualOptionChain().catch(()=>{});
   const box=el("errorBox");box.style.display="none";
   try{const p=await loadPrediction();await Promise.all([loadChart(p),loadPaper(),loadAccuracy()]);setText("lastUpdated",new Date().toLocaleString());setText("marketState","Market data live")}
   catch(e){box.textContent=e.message;box.style.display="block";setText("lastUpdated","Update failed")}
