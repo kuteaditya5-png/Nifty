@@ -6,7 +6,7 @@ import pandas as pd
 import requests
 from fastapi.responses import HTMLResponse
 
-VERSION = "18.7.5"
+VERSION = "18.7.6"
 IST = ZoneInfo("Asia/Kolkata")
 NIFTY_KEY = "NSE_INDEX|Nifty 50"
 
@@ -402,7 +402,7 @@ def setup_v180(app):
 <div class="muted" id="btperiod" style="margin-bottom:10px">Period: --</div><div class="paperGrid"><div class="stat">Starting Capital<b>₹50,000</b></div><div class="stat">Ending Capital<b id="btend">--</b></div><div class="stat">Net P&L<b id="btn">--</b></div><div class="stat">Return<b id="btret">--</b></div><div class="stat">Trades<b id="btt">--</b></div><div class="stat">Win Rate<b id="btw">--</b></div><div class="stat">T1 Hit<b id="btt1">--</b></div><div class="stat">T2 Hit<b id="btt2">--</b></div><div class="stat">SL Hit<b id="btsl">--</b></div><div class="stat">Max Drawdown<b id="btdd">--</b></div></div><div class="muted" id="btnote" style="margin-top:8px"></div>
 <div style="margin-top:12px"><b>Filtered V2 – Filter Diagnostics</b><div id="btdiag" class="paperGrid" style="margin-top:8px"></div><div id="btzero" class="muted" style="margin-top:6px"></div></div>
 <div style="margin-top:12px"><b>Baseline vs Filtered V2</b><table class="table"><thead><tr><th>Strategy</th><th>Trades</th><th>Win Rate</th><th>Net P&L</th><th>Return</th><th>Profit Factor</th><th>Max DD</th></tr></thead><tbody id="btcompare"></tbody></table></div><table class="table"><thead><tr><th>Side</th><th>Entry</th><th>SL</th><th>T1</th><th>T2</th><th>T1 Hit</th><th>T2 Hit</th><th>SL Hit</th><th>Exit</th><th>P&L</th><th>Balance</th></tr></thead><tbody id="bth"></tbody></table></div>
-<div class="footer">V18.7.5 • Paper trading only • EMA crossover uses completed 5-minute candles • Backtest reports NIFTY underlying points, not option-premium P&amp;L.</div></div>
+<div class="footer">V18.7.6 • Paper trading only • API errors ≠ NO TRADE • EMA crossover uses completed 5-minute candles • Backtest reports NIFTY underlying points, not option-premium P&amp;L.</div></div>
 <script>
 const $=x=>document.getElementById(x);let pc,vc,rc,lastSignal=null,lastFno=null;
 function paperState(){try{return JSON.parse(localStorage.getItem('nifty_v187_paper'))||{cash:50000,pos:null,trades:[],lastCross:null}}catch(e){return{cash:50000,pos:null,trades:[],lastCross:null}}}
@@ -438,4 +438,23 @@ function customBT(){let f=$('btFrom').value,t=$('btTo').value;if(!f||!t){$('btno
 function clearBT(){['btend','btn','btret','btt','btw','btt1','btt2','btsl','btdd'].forEach(id=>$(id).textContent='--');$('bth').innerHTML='';$('btcompare').innerHTML='';$('btdiag').innerHTML='';$('btzero').textContent='';$('btperiod').textContent='Period: --'}
 async function backtest(fromDate=null,toDate=null){let started=Date.now(),timer;try{clearBT();$('btRun').disabled=true;timer=setInterval(()=>{$('btstatus').textContent='⏳ Backtest Running... '+((Date.now()-started)/1000).toFixed(0)+'s'},1000);$('btstatus').textContent='⏳ Loading NIFTY candles...';let url='/api/v18/backtest?days=45';if(fromDate&&toDate)url='/api/v18/backtest?from_date='+encodeURIComponent(fromDate)+'&to_date='+encodeURIComponent(toDate);let r=await fetch(url,{cache:'no-store'}),d=await r.json();if(d.status!=='success')throw Error(d.message);let money=x=>'₹'+Number(x).toLocaleString('en-IN',{maximumFractionDigits:2}),f=d.filtered||d;$('btperiod').textContent='Period: '+d.actual_from+' → '+d.actual_to+' • '+d.trading_days+' trading day'+(d.trading_days===1?'':'s');$('btend').textContent=money(f.ending_capital);$('btn').textContent=money(f.net_pnl);$('btret').textContent=f.return_percent+'%';$('btt').textContent=f.trades;$('btw').textContent=f.win_rate+'%';$('btt1').textContent=f.target1_hits;$('btt2').textContent=f.target2_hits;$('btsl').textContent=f.stop_loss_hits;$('btdd').textContent=money(f.max_drawdown)+' ('+f.max_drawdown_percent+'%)';$('btnote').textContent=d.note+' • VWAP source: '+(d.vwap_source||'unknown');let dg=d.diagnostics||{};let dl=[['Candles',dg.candles_loaded],['Morning',dg.morning_window],['EMA',dg.ema_state],['15m Trend',dg.trend_15m],['VWAP',dg.vwap_side],['ADX',dg.adx],['RSI',dg.rsi_band],['Volume',dg.volume],['Breakout',dg.breakout],['VWAP Dist.',dg.vwap_distance],['Entries',dg.final_entries]];$('btdiag').innerHTML=dl.map(z=>'<div class="stat">'+z[0]+'<b>'+(z[1]??0)+'</b></div>').join('');$('btzero').textContent=f.trades===0?'NO QUALIFYING SETUPS — use the diagnostics above to see which filter removed candidates.':'';let rows=[['Baseline',d.baseline],['Filtered V2',d.filtered]];$('btcompare').innerHTML=rows.map(z=>'<tr><td>'+z[0]+'</td><td>'+z[1].trades+'</td><td>'+z[1].win_rate+'%</td><td>'+money(z[1].net_pnl)+'</td><td>'+z[1].return_percent+'%</td><td>'+(z[1].profit_factor??'--')+'</td><td>'+money(z[1].max_drawdown)+'</td></tr>').join('');$('bth').innerHTML=f.history.slice(-30).reverse().map(t=>'<tr><td>'+t.side+'</td><td>'+t.entry+'</td><td>'+t.stop_loss+'</td><td>'+t.target1+'</td><td>'+t.target2+'</td><td>'+(t.target1_hit?'✓':'✕')+'</td><td>'+(t.target2_hit?'✓':'✕')+'</td><td>'+(t.stop_loss_hit?'✓':'✕')+'</td><td>'+t.exit+'</td><td class="'+(t.pnl>0?'green':'red')+'">'+money(t.pnl)+'</td><td>'+money(t.balance)+'</td></tr>').join('');$('btstatus').textContent='✅ Backtest Completed in '+((Date.now()-started)/1000).toFixed(1)+'s'}catch(e){clearBT();$('btnote').textContent='Backtest error: '+e.message;$('btstatus').textContent='❌ Backtest Failed after '+((Date.now()-started)/1000).toFixed(1)+'s'}finally{clearInterval(timer);$('btRun').disabled=false}}
 load();optionChain();backtest();setInterval(()=>{load();optionChain()},30000);
+
+function v1876GuardStoredPaperPosition(){
+  try{
+    const keys=['niftyPaperPosition','paperPosition','v18PaperPosition','nifty_paper_position'];
+    for(const k of keys){
+      const raw=localStorage.getItem(k); if(!raw) continue;
+      let p; try{p=JSON.parse(raw)}catch(_){continue}
+      const stamp=p.time||p.timestamp||p.created_at||p.entry_time||p.date;
+      if(!stamp) continue;
+      const d=new Date(stamp), now=new Date();
+      if(!isNaN(d.getTime()) && d.toDateString()!==now.toDateString()){
+        p.stale=true; p.status='STALE — previous session';
+        localStorage.setItem(k,JSON.stringify(p));
+      }
+    }
+  }catch(_){}
+}
+v1876GuardStoredPaperPosition();
+
 </script></body></html>""")
