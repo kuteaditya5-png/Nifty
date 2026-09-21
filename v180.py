@@ -6,7 +6,7 @@ import pandas as pd
 import requests
 from fastapi.responses import HTMLResponse
 
-VERSION = "18.4"
+VERSION = "18.5"
 IST = ZoneInfo("Asia/Kolkata")
 NIFTY_KEY = "NSE_INDEX|Nifty 50"
 
@@ -125,10 +125,19 @@ def _calc(inputs):
     elif sig=="BUY PE":
         sl=float(max(c.high,x.iloc[-4:-1].high.max())); risk=max(sl-entry,.05); t1=entry-2*risk; t2=entry-3*risk
 
+    # Align futures confirmation data onto spot timestamps for charting.
+    fa=f[["ts","close","vwap","volume","volavg"]].rename(columns={"close":"fut_close"})
+    xa=pd.merge_asof(x.sort_values("ts"),fa.sort_values("ts"),on="ts",direction="backward",tolerance=pd.Timedelta(minutes=5))
+    xa["cross_up"]=(xa.ema20>xa.ema50)&(xa.ema20.shift(1)<=xa.ema50.shift(1))
+    xa["cross_down"]=(xa.ema20<xa.ema50)&(xa.ema20.shift(1)>=xa.ema50.shift(1))
     candles=[]
-    for _,r in x.tail(60).iterrows():
-        candles.append({"t":r.ts.strftime("%H:%M"),"o":round(float(r.open),2),"h":round(float(r.high),2),"l":round(float(r.low),2),"c":round(float(r.close),2),
-                        "e20":round(float(r.ema20),2),"e50":round(float(r.ema50),2)})
+    for _,r in xa.tail(90).iterrows():
+        def safe(v, digits=2):
+            return None if pd.isna(v) or not np.isfinite(float(v)) else round(float(v),digits)
+        candles.append({"ts":r.ts.isoformat(),"t":r.ts.strftime("%H:%M"),"o":safe(r.open),"h":safe(r.high),"l":safe(r.low),"c":safe(r.close),
+                        "e20":safe(r.ema20),"e50":safe(r.ema50),"rsi":safe(r.rsi14),"fvwap":safe(r.vwap),
+                        "fut":safe(r.fut_close),"vol":safe(r.volume,0),"vavg":safe(r.volavg,0),
+                        "cross_up":bool(r.cross_up),"cross_down":bool(r.cross_down)})
     return {"status":"success","version":VERSION,"data_source":spot.attrs.get("data_source","UPSTOX"),
             "signal":sig,"setup_state":setup_state,"bull_score":bull_score,"bear_score":bear_score,"market_window_active":window,
             "last_completed_candle":c.ts.isoformat(),"price":round(entry,2),"ema20":round(float(c.ema20),2),"ema50":round(float(c.ema50),2),
@@ -138,21 +147,84 @@ def _calc(inputs):
             "target1":round(t1,2) if t1 is not None else None,"target2":round(t2,2) if t2 is not None else None,
             "checks":checks,"candles":candles,"execution_enabled":False}
 
+def _historical_spot(days=45):
+    token=os.getenv("UPSTOX_ACCESS_TOKEN")
+    if not token: raise RuntimeError("UPSTOX_ACCESS_TOKEN is not configured in Vercel")
+    now=datetime.now(IST); to_date=now.date(); from_date=to_date-pd.Timedelta(days=days)
+    key=requests.utils.quote(NIFTY_KEY,safe="")
+    url=f"https://api.upstox.com/v3/historical-candle/{key}/minutes/5/{to_date.isoformat()}/{from_date.isoformat()}"
+    rows=_request_candles(url,token)
+    if not rows: raise RuntimeError("No historical NIFTY candles returned for backtest")
+    return _rows_to_df(rows)
+
+def _ema_cross_backtest(days=45):
+    x=_historical_spot(days)
+    x["ema20"]=x.close.ewm(span=20,adjust=False).mean(); x["ema50"]=x.close.ewm(span=50,adjust=False).mean()
+    x["up"]=(x.ema20>x.ema50)&(x.ema20.shift(1)<=x.ema50.shift(1))
+    x["dn"]=(x.ema20<x.ema50)&(x.ema20.shift(1)>=x.ema50.shift(1))
+    trades=[]; pos=None
+    for _,r in x.iterrows():
+        direction="CE" if r.up else ("PE" if r.dn else None)
+        if not direction: continue
+        if pos:
+            pnl=(float(r.close)-pos["entry"]) if pos["side"]=="CE" else (pos["entry"]-float(r.close))
+            trades.append({"side":pos["side"],"entry_time":pos["time"],"exit_time":r.ts.isoformat(),"entry":round(pos["entry"],2),
+                           "exit":round(float(r.close),2),"points":round(pnl,2),"exit_reason":"OPPOSITE EMA CROSS"})
+        pos={"side":direction,"entry":float(r.close),"time":r.ts.isoformat()}
+    if pos:
+        r=x.iloc[-1]; pnl=(float(r.close)-pos["entry"]) if pos["side"]=="CE" else (pos["entry"]-float(r.close))
+        trades.append({"side":pos["side"],"entry_time":pos["time"],"exit_time":r.ts.isoformat(),"entry":round(pos["entry"],2),
+                       "exit":round(float(r.close),2),"points":round(pnl,2),"exit_reason":"END OF TEST"})
+    wins=sum(t["points"]>0 for t in trades); losses=sum(t["points"]<=0 for t in trades)
+    gross_win=sum(max(t["points"],0) for t in trades); gross_loss=abs(sum(min(t["points"],0) for t in trades))
+    equity=0; peak=0; maxdd=0
+    for t in trades:
+        equity+=t["points"]; peak=max(peak,equity); maxdd=max(maxdd,peak-equity)
+    return {"status":"success","version":VERSION,"strategy":"EMA20/EMA50 CROSS - NIFTY UNDERLYING POINTS",
+            "period_days":days,"trades":len(trades),"wins":wins,"losses":losses,
+            "win_rate":round((wins/len(trades)*100) if trades else 0,2),"net_points":round(sum(t["points"] for t in trades),2),
+            "profit_factor":round(gross_win/gross_loss,2) if gross_loss else None,"max_drawdown_points":round(maxdd,2),
+            "note":"Research backtest on NIFTY underlying points. It is not option-premium P&L and excludes brokerage, taxes, spread and slippage.",
+            "history":trades[-100:]}
+
 def setup_v180(app):
     @app.get("/api/v18/intraday-signal")
     def signal():
         try:return _calc(_fetch())
         except Exception as e:return {"status":"error","version":VERSION,"error_type":type(e).__name__,"message":str(e),"execution_enabled":False}
 
+    @app.get("/api/v18/backtest")
+    def backtest(days:int=45):
+        try:return _ema_cross_backtest(max(10,min(days,90)))
+        except Exception as e:return {"status":"error","version":VERSION,"error_type":type(e).__name__,"message":str(e)}
+
     @app.get("/api/v18/status")
     def status():
-        return {"status":"success","version":VERSION,"mode":"PAPER_SIGNAL_ONLY","instrument":NIFTY_KEY,"confirmation_source":"CURRENT_MONTH_NIFTY_FUTURES","timeframe":"5m","execution_enabled":False}
+        return {"status":"success","version":VERSION,"mode":"PAPER_TRADING_EMA_CROSS","instrument":NIFTY_KEY,"confirmation_source":"CURRENT_MONTH_NIFTY_FUTURES","timeframe":"5m","execution_enabled":False}
 
     @app.get("/intraday-setup",response_class=HTMLResponse)
     def page():
-        return HTMLResponse(r'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>NIFTY Intraday Setup</title><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>
-*{box-sizing:border-box}body{margin:0;background:#07111e;color:#dbe7f3;font-family:Arial,sans-serif}.head{height:70px;border-bottom:1px solid #203247;display:flex;align-items:center;padding:0 28px}.brand{font-size:25px;font-weight:900}.brand b{color:#21d4e8}.live{margin-left:auto;color:#35df87}.sidebar{position:fixed;left:12px;top:92px;width:82px;display:flex;flex-direction:column;gap:8px;z-index:10}.sidebar button{width:82px;min-height:64px;border:1px solid #203650;border-radius:12px;background:#091625;color:#c9d6e4;font-weight:700}.sidebar .active{background:linear-gradient(135deg,#2865ff,#6637db);color:#fff}.ico{display:block;font-size:19px;margin-bottom:5px}.wrap{padding:18px 18px 18px 108px}.market{display:flex;gap:28px;align-items:end;margin-bottom:12px}.price{font-size:29px;font-weight:900}.muted{color:#8fa3b8}.badge{padding:5px 9px;border:1px solid #29405a;border-radius:8px;font-size:12px}.grid{display:grid;grid-template-columns:minmax(0,3fr) 1.2fr;gap:12px}.panel{background:#0b1726;border:1px solid #203247;border-radius:10px}.chart{padding:12px;height:650px}.side{display:flex;flex-direction:column;gap:10px}.signal,.conditions{padding:16px}.sig{font-size:29px;font-weight:900;margin:8px 0}.green,.ok{color:#31e087}.red,.bad{color:#ff5964}.row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #1b2b3d}.footer{font-size:12px;color:#7e92a8;margin-top:10px}@media(max-width:850px){.head{height:58px;padding:0 15px}.sidebar{left:5px;top:auto;bottom:8px;width:calc(100vw - 10px);flex-direction:row;background:#071423;padding:6px;border:1px solid #203650;border-radius:14px}.sidebar button{width:auto;flex:1;min-height:48px}.wrap{padding:12px 10px 78px}.grid{grid-template-columns:1fr}.chart{height:430px}.market{flex-wrap:wrap}.brand{font-size:21px}}
-</style></head><body><div class="head"><div class="brand">NIFTY <b>AI</b></div><div class="live">● Live</div></div><div class="sidebar"><button onclick="location.href='/dashboard'"><span class="ico">⌂</span>Dashboard</button><button class="active"><span class="ico">⚡</span>Intraday</button><button onclick="location.href='/dashboard#backtest'"><span class="ico">↺</span>Backtest</button></div><div class="wrap"><div class="market"><div><div class="muted">NIFTY 50</div><div class="price" id="price">--</div></div><div class="muted">5-minute • EMA 20/50 • VWAP • RSI 14 • Volume</div><div class="badge" id="source">Loading data…</div></div><div class="grid"><div class="panel chart"><canvas id="chart"></canvas></div><div class="side"><div class="panel signal"><div class="muted">LIVE SIGNAL</div><div class="sig" id="sig">LOADING</div><div class="row"><span>Entry</span><b id="entry">--</b></div><div class="row"><span>Stop Loss</span><b class="red" id="sl">--</b></div><div class="row"><span>Target 1 (2R)</span><b class="green" id="t1">--</b></div><div class="row"><span>Target 2 (3R)</span><b class="green" id="t2">--</b></div><div class="row"><span>RSI 14</span><b id="rsi">--</b></div><div class="row"><span>VWAP</span><b id="vwap">--</b></div><div class="row"><span>Last candle</span><b id="last">--</b></div></div><div class="panel conditions"><b>Setup Conditions</b><div id="checks"></div></div></div></div><div class="footer">V18.4 • Paper signal only • No automatic order placement • Historical fallback is display/analysis only and never creates a live trade signal.</div></div><script>
-let chart;const $=id=>document.getElementById(id);async function load(){try{let r=await fetch('/api/v18/intraday-signal',{cache:'no-store'});let d=await r.json();if(d.status!=='success'){ $('sig').textContent='DATA ERROR';$('sig').className='sig red';$('checks').innerHTML='<div class="red">'+(d.message||'Unknown data error')+'</div>';$('source').textContent='Upstox error';return}$('price').textContent=Number(d.price).toFixed(2);$('source').textContent=d.data_source==='UPSTOX_HISTORICAL_FALLBACK'?'Latest completed session':'Current trading day';$('sig').textContent=d.setup_state||d.signal;$('sig').className='sig '+(d.signal==='BUY CE'||d.setup_state==='BULLISH SETUP FORMING'?'green':d.signal==='BUY PE'||d.setup_state==='BEARISH SETUP FORMING'?'red':'muted');$('entry').textContent=d.entry??'--';$('sl').textContent=d.stop_loss??'--';$('t1').textContent=d.target1??'--';$('t2').textContent=d.target2??'--';$('rsi').textContent=d.rsi14;$('vwap').textContent=d.vwap;$('last').textContent=new Date(d.last_completed_candle).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'});$('checks').innerHTML=Object.entries(d.checks).map(([k,v])=>'<div class="row"><span>'+k+'</span><b class="'+(v?'ok':'bad')+'">'+(v?'✓':'✕')+'</b></div>').join('');let c=d.candles,data={labels:c.map(x=>x.t),datasets:[{label:'Close',data:c.map(x=>x.c),borderWidth:2,pointRadius:0},{label:'EMA 20',data:c.map(x=>x.e20),borderWidth:1,pointRadius:0},{label:'EMA 50',data:c.map(x=>x.e50),borderWidth:1,pointRadius:0}]};if(chart)chart.destroy();chart=new Chart($('chart'),{type:'line',data,options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{labels:{color:'#c9d6e4'}}},scales:{x:{ticks:{color:'#8398ad',maxTicksLimit:12},grid:{color:'#142337'}},y:{ticks:{color:'#8398ad'},grid:{color:'#142337'}}}}})}catch(e){$('sig').textContent='DATA ERROR';$('checks').innerHTML='<div class="red">'+e.message+'</div>'}}load();setInterval(load,30000);
-</script></body></html>''')
-        
+        return HTMLResponse(r"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NIFTY Intraday V18.5</title><script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>*{box-sizing:border-box}body{margin:0;background:#07111e;color:#dbe7f3;font-family:Arial,sans-serif}.head{height:66px;border-bottom:1px solid #203247;display:flex;align-items:center;padding:0 26px}.brand{font-size:24px;font-weight:900}.brand b{color:#21d4e8}.live{margin-left:auto;color:#35df87}.sideNav{position:fixed;left:10px;top:88px;width:84px;display:flex;flex-direction:column;gap:8px}.sideNav button{min-height:62px;border:1px solid #203650;border-radius:12px;background:#091625;color:#c9d6e4;font-weight:700}.sideNav .active{background:linear-gradient(135deg,#2865ff,#6637db);color:white}.wrap{padding:16px 16px 30px 108px}.market{display:flex;gap:22px;align-items:end;flex-wrap:wrap;margin-bottom:12px}.price{font-size:28px;font-weight:900}.muted{color:#8fa3b8}.badge{padding:5px 9px;border:1px solid #29405a;border-radius:8px}.grid{display:grid;grid-template-columns:minmax(0,3fr) 1.15fr;gap:12px}.panel{background:#0b1726;border:1px solid #203247;border-radius:10px}.chartPanel{padding:10px;height:440px}.smallChart{padding:8px;height:180px;margin-top:10px}.right{display:flex;flex-direction:column;gap:10px}.box{padding:14px}.sig{font-size:27px;font-weight:900;margin:7px 0}.green,.ok{color:#31e087}.red,.bad{color:#ff5964}.yellow{color:#ffd166}.row{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid #1b2b3d}.paper{margin-top:12px;padding:14px}.paperGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stat{background:#091522;border:1px solid #1d3045;border-radius:8px;padding:10px}.stat b{display:block;font-size:18px;margin-top:4px}.table{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}.table td,.table th{padding:7px;border-bottom:1px solid #1b2b3d;text-align:left}.footer{font-size:12px;color:#7e92a8;margin-top:10px}@media(max-width:900px){.sideNav{position:static;width:auto;flex-direction:row;margin:8px}.sideNav button{flex:1}.wrap{padding:8px}.grid{grid-template-columns:1fr}.chartPanel{height:360px}.paperGrid{grid-template-columns:repeat(2,1fr)}}</style></head>
+<body><div class="head"><div class="brand">NIFTY <b>AI</b></div><div class="live">● Paper engine</div></div>
+<div class="sideNav"><button onclick="location.href='/dashboard'">⌂<br>Dashboard</button><button class="active">⚡<br>Intraday</button><button onclick="document.getElementById('bt').scrollIntoView()">↺<br>Backtest</button></div>
+<div class="wrap"><div class="market"><div><div class="muted">NIFTY 50</div><div class="price" id="price">--</div></div><div class="muted">5m • EMA20/50 • Futures VWAP/Volume • RSI14 • EMA Cross Paper Trading</div><div class="badge" id="source">Loading…</div></div>
+<div class="grid"><div><div class="panel chartPanel"><canvas id="priceChart"></canvas></div><div class="panel smallChart"><canvas id="volChart"></canvas></div><div class="panel smallChart"><canvas id="rsiChart"></canvas></div></div>
+<div class="right"><div class="panel box"><div class="muted">LIVE SETUP</div><div class="sig" id="sig">LOADING</div><div class="row"><span>EMA20</span><b id="e20">--</b></div><div class="row"><span>EMA50</span><b id="e50">--</b></div><div class="row"><span>Futures VWAP</span><b id="vwap">--</b></div><div class="row"><span>Futures price</span><b id="fut">--</b></div><div class="row"><span>RSI14</span><b id="rsi">--</b></div><div class="row"><span>Bull / Bear score</span><b id="score">--</b></div><div class="row"><span>Last candle</span><b id="last">--</b></div></div>
+<div class="panel box"><b>Setup conditions</b><div id="checks"></div></div>
+<div class="panel box"><b>EMA crossover paper position</b><div class="row"><span>Position</span><b id="ppos">NONE</b></div><div class="row"><span>Entry</span><b id="pentry">--</b></div><div class="row"><span>Live points</span><b id="ppnl">0.00</b></div><div class="muted" style="font-size:11px;margin-top:7px">Automatic paper reversal only. No broker order is sent.</div></div></div></div>
+<div class="panel paper" id="bt"><b>EMA20/EMA50 crossover backtest</b><div class="paperGrid"><div class="stat">Trades<b id="btt">--</b></div><div class="stat">Win rate<b id="btw">--</b></div><div class="stat">Net points<b id="btn">--</b></div><div class="stat">Max drawdown<b id="btdd">--</b></div></div><div class="muted" id="btnote" style="margin-top:8px"></div><table class="table"><thead><tr><th>Side</th><th>Entry</th><th>Exit</th><th>Points</th><th>Reason</th></tr></thead><tbody id="bth"></tbody></table></div>
+<div class="footer">V18.5 • Paper trading only • EMA crossover uses completed 5-minute candles • Backtest reports NIFTY underlying points, not option-premium P&amp;L.</div></div>
+<script>
+const $=x=>document.getElementById(x);let pc,vc,rc;
+function paperState(){try{return JSON.parse(localStorage.getItem('nifty_v185_paper'))||{pos:null,trades:[],lastCross:null}}catch(e){return{pos:null,trades:[],lastCross:null}}}
+function savePaper(s){localStorage.setItem('nifty_v185_paper',JSON.stringify(s))}
+function runPaper(d){let s=paperState(), cs=[...d.candles].reverse().find(x=>x.cross_up||x.cross_down);if(cs&&cs.ts!==s.lastCross){let side=cs.cross_up?'CE':'PE';if(s.pos&&s.pos.side!==side){let pts=s.pos.side==='CE'?cs.c-s.pos.entry:s.pos.entry-cs.c;s.trades.push({...s.pos,exit:cs.c,exitTime:cs.ts,points:pts});s.pos=null}if(!s.pos){s.pos={side,entry:cs.c,entryTime:cs.ts};}s.lastCross=cs.ts;savePaper(s)}let pos=s.pos;$('ppos').textContent=pos?('BUY '+pos.side):'NONE';$('pentry').textContent=pos?pos.entry.toFixed(2):'--';let pnl=pos?(pos.side==='CE'?d.price-pos.entry:pos.entry-d.price):0;$('ppnl').textContent=pnl.toFixed(2);$('ppnl').className=pnl>0?'green':pnl<0?'red':''}
+function mkChart(el,type,data,opts){return new Chart(el,{type,data,options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},plugins:{legend:{labels:{color:'#c9d6e4'}}},scales:{x:{ticks:{color:'#8398ad',maxTicksLimit:12},grid:{color:'#142337'}},y:{ticks:{color:'#8398ad'},grid:{color:'#142337'}}},...opts}})}
+async function load(){try{let r=await fetch('/api/v18/intraday-signal',{cache:'no-store'}),d=await r.json();if(d.status!=='success')throw Error(d.message||'Data error');
+$('price').textContent=Number(d.price).toFixed(2);$('source').textContent=d.futures_symbol||d.data_source;$('sig').textContent=d.setup_state||d.signal;$('sig').className='sig '+((d.signal==='BUY CE'||d.setup_state==='BULLISH SETUP FORMING')?'green':(d.signal==='BUY PE'||d.setup_state==='BEARISH SETUP FORMING')?'red':'muted');
+$('e20').textContent=d.ema20;$('e50').textContent=d.ema50;$('vwap').textContent=d.vwap;$('fut').textContent=d.futures_price;$('rsi').textContent=d.rsi14;$('score').textContent=d.bull_score+' / '+d.bear_score;$('last').textContent=new Date(d.last_completed_candle).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'});
+$('checks').innerHTML=Object.entries(d.checks).map(([k,v])=>'<div class="row"><span>'+k+'</span><b class="'+(v?'ok':'bad')+'">'+(v?'✓':'✕')+'</b></div>').join('');
+let c=d.candles,L=c.map(x=>x.t);if(pc)pc.destroy();if(vc)vc.destroy();if(rc)rc.destroy();
+pc=mkChart($('priceChart'),'line',{labels:L,datasets:[{label:'Close',data:c.map(x=>x.c),borderWidth:2,pointRadius:c.map(x=>x.cross_up||x.cross_down?5:0),pointStyle:c.map(x=>x.cross_up?'triangle':x.cross_down?'rectRot':'circle')},{label:'EMA 20',data:c.map(x=>x.e20),borderWidth:1,pointRadius:0},{label:'EMA 50',data:c.map(x=>x.e50),borderWidth:1,p
