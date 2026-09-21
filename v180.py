@@ -6,7 +6,7 @@ import pandas as pd
 import requests
 from fastapi.responses import HTMLResponse
 
-VERSION = "18.7.6"
+VERSION = "18.8.0"
 IST = ZoneInfo("Asia/Kolkata")
 NIFTY_KEY = "NSE_INDEX|Nifty 50"
 
@@ -296,7 +296,7 @@ def _filtered_v2_backtest(x):
                 if sl: daily[d]["sl"]+=1
                 trades.append({"time":str(pos["time"]),"side":side,"entry":round(pos["entry"],2),"stop_loss":round(stop,2),
                     "target1":round(t1,2),"target2":round(t2,2),"target1_hit":bool(h1),"target2_hit":bool(h2),
-                    "stop_loss_hit":bool(sl),"exit":round(exitp,2),"pnl":round(pnl,2),"balance":round(capital,2),"reason":reason})
+                    "stop_loss_hit":bool(sl),"exit":round(exitp,2),"exit_time":str(r.ts),"pnl":round(pnl,2),"balance":round(capital,2),"reason":reason})
                 pos=None
             continue
         if not (time(9,25)<=tm<=time(11,15)): continue
@@ -338,14 +338,156 @@ def _filtered_v2_backtest(x):
         "target1_hits":sum(t["target1_hit"] for t in trades),"target2_hits":sum(t["target2_hit"] for t in trades),
         "stop_loss_hits":sum(t["stop_loss_hit"] for t in trades),"history":trades[-100:],"diagnostics":diag}
 
+def _upstox_json(url, token):
+    r=requests.get(url,headers={"Accept":"application/json","Authorization":f"Bearer {token}"},timeout=15)
+    if r.status_code!=200:
+        raise RuntimeError(f"Upstox HTTP {r.status_code}: {r.text[:180]}")
+    j=r.json()
+    if j.get("status")!="success": raise RuntimeError(str(j))
+    return j.get("data")
+
+def _option_expiries(token):
+    key=requests.utils.quote(NIFTY_KEY,safe="")
+    data=_upstox_json(f"https://api.upstox.com/v2/expired-instruments/expiries?instrument_key={key}",token)
+    return sorted(pd.Timestamp(z).date() for z in (data or []))
+
+def _current_option_contracts(token):
+    key=requests.utils.quote(NIFTY_KEY,safe="")
+    return _upstox_json(f"https://api.upstox.com/v2/option/contract?instrument_key={key}",token) or []
+
+def _expired_option_contracts(token, expiry):
+    key=requests.utils.quote(NIFTY_KEY,safe="")
+    return _upstox_json(f"https://api.upstox.com/v2/expired-instruments/option/contract?instrument_key={key}&expiry_date={expiry.isoformat()}",token) or []
+
+def _pick_option_contract(token, trade_date, spot, side, current_contracts, expired_expiries):
+    typ="CE" if side=="CE" else "PE"
+    # Prefer the nearest available expiry on/after the trade date.
+    current=[]
+    for c in current_contracts:
+        try:
+            ex=pd.Timestamp(c.get("expiry")).date()
+            if ex>=trade_date: current.append((ex,c))
+        except Exception: pass
+    candidates=current
+    expired=False
+    if not candidates:
+        exps=[e for e in expired_expiries if e>=trade_date]
+        if not exps: return None,False
+        ex=min(exps); candidates=[(ex,c) for c in _expired_option_contracts(token,ex)]; expired=True
+    expiry=min(z[0] for z in candidates)
+    cs=[c for ex,c in candidates if ex==expiry and str(c.get("instrument_type","")).upper()==typ]
+    if not cs: return None,expired
+    # ATM by nearest listed strike, avoiding assumptions about strike step.
+    c=min(cs,key=lambda z:abs(float(z.get("strike_price",1e12))-float(spot)))
+    return c,expired
+
+def _option_candles(token, contract, expired, trade_date):
+    ik=contract.get("instrument_key")
+    if not ik: raise RuntimeError("Option contract has no instrument_key")
+    enc=requests.utils.quote(str(ik),safe="")
+    d=trade_date.isoformat()
+    today=datetime.now(IST).date()
+    if expired:
+        url=f"https://api.upstox.com/v2/expired-instruments/historical-candle/{enc}/5minute/{d}/{d}"
+    elif trade_date==today:
+        url=f"https://api.upstox.com/v3/historical-candle/intraday/{enc}/minutes/5"
+    else:
+        url=f"https://api.upstox.com/v3/historical-candle/{enc}/minutes/5/{d}/{d}"
+    data=_upstox_json(url,token)
+    rows=(data or {}).get("candles",[]) if isinstance(data,dict) else []
+    if not rows: return pd.DataFrame()
+    q=_rows_to_df(rows)
+    return q[q.ts.dt.date==trade_date].sort_values("ts").reset_index(drop=True)
+
+def _real_option_backtest(filtered):
+    """Re-price Filtered V2 trades with actual Upstox option OHLC. No order placement."""
+    token=os.getenv("UPSTOX_ACCESS_TOKEN")
+    if not token: return {"status":"unavailable","message":"UPSTOX_ACCESS_TOKEN missing","history":[]}
+    if not filtered.get("history"): return {"status":"success","starting_capital":50000.0,"ending_capital":50000.0,
+        "net_pnl":0.0,"return_percent":0.0,"trades":0,"wins":0,"losses":0,"win_rate":0.0,
+        "target1_hits":0,"target2_hits":0,"stop_loss_hits":0,"max_drawdown":0.0,"max_drawdown_percent":0.0,"history":[]}
+    try:
+        current=_current_option_contracts(token)
+        expired_exps=_option_expiries(token)
+    except Exception as e:
+        return {"status":"unavailable","message":f"Option contract lookup failed: {e}","history":[]}
+    capital=50000.0; peak=capital; maxdd=0.0; out=[]; skipped=[]
+    for t in filtered["history"]:
+        try:
+            et=pd.Timestamp(t["time"])
+            if et.tzinfo is None: et=et.tz_localize(IST)
+            else: et=et.tz_convert(IST)
+            xt=pd.Timestamp(t.get("exit_time",t["time"]))
+            if xt.tzinfo is None: xt=xt.tz_localize(IST)
+            else: xt=xt.tz_convert(IST)
+            d=et.date(); spot=float(t["entry"]); side=t["side"]
+            contract,expired=_pick_option_contract(token,d,spot,side,current,expired_exps)
+            if not contract: raise RuntimeError("No matching option contract")
+            q=_option_candles(token,contract,expired,d)
+            q=q[(q.ts>=et)&(q.ts<=xt)]
+            if q.empty: raise RuntimeError("No option candles for trade window")
+            entry=float(q.iloc[0].open)
+            lot=int(contract.get("lot_size") or contract.get("minimum_lot") or 1)
+            if entry<=0 or lot<=0: raise RuntimeError("Invalid premium/lot size")
+            # Risk model: premium SL capped at 25%; risk <=1% of current capital.
+            stop=round(entry*0.75,2); risk_per_unit=entry-stop
+            risk_budget=capital*0.01
+            lots_by_risk=int(risk_budget//(risk_per_unit*lot)) if risk_per_unit>0 else 0
+            lots_by_cash=int(capital//(entry*lot))
+            lots=max(0,min(lots_by_risk,lots_by_cash))
+            if lots<1: raise RuntimeError(f"₹{capital:.0f} cannot take 1 lot within 1% risk")
+            qty=lots*lot; risk=entry-stop; t1=entry+1.2*risk; t2=entry+2*risk
+            remaining=qty; realized=0.0; t1hit=False; t2hit=False; slhit=False; exitpremium=float(q.iloc[-1].close); reason="TIME/SIGNAL EXIT"
+            for _,bar in q.iterrows():
+                # Conservative same-candle handling: SL before target.
+                if float(bar.low)<=stop:
+                    realized+=(stop-entry)*remaining; exitpremium=stop; slhit=True; reason="OPTION SL"; remaining=0; break
+                if (not t1hit) and float(bar.high)>=t1:
+                    book=qty//2
+                    # keep quantity lot-compatible when possible
+                    book=(book//lot)*lot
+                    if book<=0: book=0
+                    if book:
+                        realized+=(t1-entry)*book; remaining-=book
+                    t1hit=True
+                    stop=entry  # balance to cost
+                if t1hit and float(bar.high)>=t2:
+                    realized+=(t2-entry)*remaining; exitpremium=t2; t2hit=True; reason="OPTION T2"; remaining=0; break
+            if remaining:
+                realized+=(exitpremium-entry)*remaining
+            # Explicit estimated execution drag, not a broker tax calculator.
+            est_cost=max(0.0, entry*qty*0.001 + exitpremium*qty*0.001)
+            pnl=realized-est_cost; capital+=pnl; peak=max(peak,capital); maxdd=max(maxdd,peak-capital)
+            out.append({"time":str(et),"exit_time":str(xt),"side":side,
+                "contract":contract.get("trading_symbol"),"expiry":str(contract.get("expiry")),
+                "strike":contract.get("strike_price"),"lot_size":lot,"lots":lots,"qty":qty,
+                "entry":round(entry,2),"stop_loss":round(entry*0.75,2),"target1":round(t1,2),"target2":round(t2,2),
+                "target1_hit":t1hit,"target2_hit":t2hit,"stop_loss_hit":slhit,
+                "exit":round(exitpremium,2),"estimated_cost":round(est_cost,2),"pnl":round(pnl,2),
+                "balance":round(capital,2),"reason":reason})
+        except Exception as e:
+            skipped.append({"time":t.get("time"),"side":t.get("side"),"reason":str(e)})
+    wins=sum(z["pnl"]>0 for z in out); gw=sum(max(z["pnl"],0) for z in out); gl=abs(sum(min(z["pnl"],0) for z in out))
+    return {"status":"success" if out else "unavailable","message":None if out else "No trades could be priced with option candles",
+        "starting_capital":50000.0,"ending_capital":round(capital,2),"net_pnl":round(capital-50000,2),
+        "return_percent":round((capital/50000-1)*100,2),"trades":len(out),"wins":wins,"losses":len(out)-wins,
+        "win_rate":round(100*wins/len(out),2) if out else 0,"profit_factor":round(gw/gl,2) if gl else None,
+        "target1_hits":sum(z["target1_hit"] for z in out),"target2_hits":sum(z["target2_hit"] for z in out),
+        "stop_loss_hits":sum(z["stop_loss_hit"] for z in out),"max_drawdown":round(maxdd,2),
+        "max_drawdown_percent":round(100*maxdd/peak,2) if peak else 0,"history":out,"skipped":skipped,
+        "pnl_source":"ACTUAL OPTION 5M OHLC","cost_model":"0.10% entry + 0.10% exit turnover estimate; not exact statutory charges"}
+
 def _ema_cross_backtest(days=45, from_date=None, to_date=None):
     x=_bt_indicators(_historical_spot(days,from_date,to_date))
     actual_from=x.ts.min().date().isoformat(); actual_to=x.ts.max().date().isoformat(); trading_days=int(x.ts.dt.date.nunique())
     baseline=_baseline_crossbacktest(x); filtered=_filtered_v2_backtest(x)
-    result=dict(filtered)
+    option_bt=_real_option_backtest(filtered)
+    primary=option_bt if option_bt.get("status")=="success" and option_bt.get("trades",0)>0 else filtered
+    result=dict(primary)
     result.update({"status":"success","version":VERSION,"strategy":"FILTERED V2","actual_from":actual_from,"actual_to":actual_to,
-        "trading_days":trading_days,"baseline":baseline,"filtered":filtered,"vwap_source":x.attrs.get("vwap_source","unknown"),
-        "diagnostics":filtered.get("diagnostics",{}),"note":"Filtered V2: 15m trend + EMA state + VWAP + ADX>20 + RSI band + volume-confirmed 3-bar breakout, max 0.4% from VWAP, 1% risk/trade, max 2 trades/day, -2% daily stop. Results currently use NIFTY underlying OHLC as the signal/risk proxy; historical option-premium OHLC is still required for true option ₹ P&L."})
+         "trading_days":trading_days,"baseline":baseline,"filtered":filtered,"option_backtest":option_bt,
+        "pnl_mode":"ACTUAL OPTION OHLC" if primary is option_bt else "UNDERLYING PROXY","vwap_source":x.attrs.get("vwap_source","unknown"),
+         "diagnostics":filtered.get("diagnostics",{}),"note":("Real option-premium P&L using Upstox 5-minute option OHLC when available; otherwise underlying proxy. " + "Filtered V2: 15m trend + EMA state + VWAP + ADX>20 + RSI band + volume-confirmed 3-bar breakout, max 0.4% from VWAP, 1% risk/trade, max 2 trades/day, -2% daily stop. Results currently use NIFTY underlying OHLC as the signal/risk proxy; option selection is ATM nearest listed strike; premium SL 25%, T1 1.2R, T2 2R, 1% capital risk/trade.")})
     return result
 
 def setup_v180(app):
@@ -402,7 +544,7 @@ def setup_v180(app):
 <div class="muted" id="btperiod" style="margin-bottom:10px">Period: --</div><div class="paperGrid"><div class="stat">Starting Capital<b>₹50,000</b></div><div class="stat">Ending Capital<b id="btend">--</b></div><div class="stat">Net P&L<b id="btn">--</b></div><div class="stat">Return<b id="btret">--</b></div><div class="stat">Trades<b id="btt">--</b></div><div class="stat">Win Rate<b id="btw">--</b></div><div class="stat">T1 Hit<b id="btt1">--</b></div><div class="stat">T2 Hit<b id="btt2">--</b></div><div class="stat">SL Hit<b id="btsl">--</b></div><div class="stat">Max Drawdown<b id="btdd">--</b></div></div><div class="muted" id="btnote" style="margin-top:8px"></div>
 <div style="margin-top:12px"><b>Filtered V2 – Filter Diagnostics</b><div id="btdiag" class="paperGrid" style="margin-top:8px"></div><div id="btzero" class="muted" style="margin-top:6px"></div></div>
 <div style="margin-top:12px"><b>Baseline vs Filtered V2</b><table class="table"><thead><tr><th>Strategy</th><th>Trades</th><th>Win Rate</th><th>Net P&L</th><th>Return</th><th>Profit Factor</th><th>Max DD</th></tr></thead><tbody id="btcompare"></tbody></table></div><table class="table"><thead><tr><th>Side</th><th>Entry</th><th>SL</th><th>T1</th><th>T2</th><th>T1 Hit</th><th>T2 Hit</th><th>SL Hit</th><th>Exit</th><th>P&L</th><th>Balance</th></tr></thead><tbody id="bth"></tbody></table></div>
-<div class="footer">V18.7.6 • Paper trading only • API errors ≠ NO TRADE • EMA crossover uses completed 5-minute candles • Backtest reports NIFTY underlying points, not option-premium P&amp;L.</div></div>
+<div class="footer">V18.8.0 • Paper trading only • actual option OHLC backtest • no order placement • EMA crossover uses completed 5-minute candles • Backtest reports NIFTY underlying points, not option-premium P&amp;L.</div></div>
 <script>
 const $=x=>document.getElementById(x);let pc,vc,rc,lastSignal=null,lastFno=null;
 function paperState(){try{return JSON.parse(localStorage.getItem('nifty_v187_paper'))||{cash:50000,pos:null,trades:[],lastCross:null}}catch(e){return{cash:50000,pos:null,trades:[],lastCross:null}}}
@@ -436,7 +578,7 @@ function isoLocal(d){let y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'
 function quickBT(n){let now=new Date(),to=isoLocal(now),from;if(n===0)from=to;else{let d=new Date(now);d.setDate(d.getDate()-(n-1));from=isoLocal(d)}$('btFrom').value=from;$('btTo').value=to;backtest(from,to)}
 function customBT(){let f=$('btFrom').value,t=$('btTo').value;if(!f||!t){$('btnote').textContent='Select both From and To dates.';return}let diff=(new Date(t)-new Date(f))/86400000;if(diff<0||diff>89){$('btnote').textContent=diff<0?'From date cannot be after To date.':'Maximum selectable calendar range is 90 days.';return}backtest(f,t)}
 function clearBT(){['btend','btn','btret','btt','btw','btt1','btt2','btsl','btdd'].forEach(id=>$(id).textContent='--');$('bth').innerHTML='';$('btcompare').innerHTML='';$('btdiag').innerHTML='';$('btzero').textContent='';$('btperiod').textContent='Period: --'}
-async function backtest(fromDate=null,toDate=null){let started=Date.now(),timer;try{clearBT();$('btRun').disabled=true;timer=setInterval(()=>{$('btstatus').textContent='⏳ Backtest Running... '+((Date.now()-started)/1000).toFixed(0)+'s'},1000);$('btstatus').textContent='⏳ Loading NIFTY candles...';let url='/api/v18/backtest?days=45';if(fromDate&&toDate)url='/api/v18/backtest?from_date='+encodeURIComponent(fromDate)+'&to_date='+encodeURIComponent(toDate);let r=await fetch(url,{cache:'no-store'}),d=await r.json();if(d.status!=='success')throw Error(d.message);let money=x=>'₹'+Number(x).toLocaleString('en-IN',{maximumFractionDigits:2}),f=d.filtered||d;$('btperiod').textContent='Period: '+d.actual_from+' → '+d.actual_to+' • '+d.trading_days+' trading day'+(d.trading_days===1?'':'s');$('btend').textContent=money(f.ending_capital);$('btn').textContent=money(f.net_pnl);$('btret').textContent=f.return_percent+'%';$('btt').textContent=f.trades;$('btw').textContent=f.win_rate+'%';$('btt1').textContent=f.target1_hits;$('btt2').textContent=f.target2_hits;$('btsl').textContent=f.stop_loss_hits;$('btdd').textContent=money(f.max_drawdown)+' ('+f.max_drawdown_percent+'%)';$('btnote').textContent=d.note+' • VWAP source: '+(d.vwap_source||'unknown');let dg=d.diagnostics||{};let dl=[['Candles',dg.candles_loaded],['Morning',dg.morning_window],['EMA',dg.ema_state],['15m Trend',dg.trend_15m],['VWAP',dg.vwap_side],['ADX',dg.adx],['RSI',dg.rsi_band],['Volume',dg.volume],['Breakout',dg.breakout],['VWAP Dist.',dg.vwap_distance],['Entries',dg.final_entries]];$('btdiag').innerHTML=dl.map(z=>'<div class="stat">'+z[0]+'<b>'+(z[1]??0)+'</b></div>').join('');$('btzero').textContent=f.trades===0?'NO QUALIFYING SETUPS — use the diagnostics above to see which filter removed candidates.':'';let rows=[['Baseline',d.baseline],['Filtered V2',d.filtered]];$('btcompare').innerHTML=rows.map(z=>'<tr><td>'+z[0]+'</td><td>'+z[1].trades+'</td><td>'+z[1].win_rate+'%</td><td>'+money(z[1].net_pnl)+'</td><td>'+z[1].return_percent+'%</td><td>'+(z[1].profit_factor??'--')+'</td><td>'+money(z[1].max_drawdown)+'</td></tr>').join('');$('bth').innerHTML=f.history.slice(-30).reverse().map(t=>'<tr><td>'+t.side+'</td><td>'+t.entry+'</td><td>'+t.stop_loss+'</td><td>'+t.target1+'</td><td>'+t.target2+'</td><td>'+(t.target1_hit?'✓':'✕')+'</td><td>'+(t.target2_hit?'✓':'✕')+'</td><td>'+(t.stop_loss_hit?'✓':'✕')+'</td><td>'+t.exit+'</td><td class="'+(t.pnl>0?'green':'red')+'">'+money(t.pnl)+'</td><td>'+money(t.balance)+'</td></tr>').join('');$('btstatus').textContent='✅ Backtest Completed in '+((Date.now()-started)/1000).toFixed(1)+'s'}catch(e){clearBT();$('btnote').textContent='Backtest error: '+e.message;$('btstatus').textContent='❌ Backtest Failed after '+((Date.now()-started)/1000).toFixed(1)+'s'}finally{clearInterval(timer);$('btRun').disabled=false}}
+async function backtest(fromDate=null,toDate=null){let started=Date.now(),timer;try{clearBT();$('btRun').disabled=true;timer=setInterval(()=>{$('btstatus').textContent='⏳ Backtest Running... '+((Date.now()-started)/1000).toFixed(0)+'s'},1000);$('btstatus').textContent='⏳ Loading NIFTY candles...';let url='/api/v18/backtest?days=45';if(fromDate&&toDate)url='/api/v18/backtest?from_date='+encodeURIComponent(fromDate)+'&to_date='+encodeURIComponent(toDate);let r=await fetch(url,{cache:'no-store'}),d=await r.json();if(d.status!=='success')throw Error(d.message);let money=x=>'₹'+Number(x).toLocaleString('en-IN',{maximumFractionDigits:2}),f=d.filtered||d;$('btperiod').textContent='Period: '+d.actual_from+' → '+d.actual_to+' • '+d.trading_days+' trading day'+(d.trading_days===1?'':'s');$('btend').textContent=money(f.ending_capital);$('btn').textContent=money(f.net_pnl);$('btret').textContent=f.return_percent+'%';$('btt').textContent=f.trades;$('btw').textContent=f.win_rate+'%';$('btt1').textContent=f.target1_hits;$('btt2').textContent=f.target2_hits;$('btsl').textContent=f.stop_loss_hits;$('btdd').textContent=money(f.max_drawdown)+' ('+f.max_drawdown_percent+'%)';$('btnote').textContent='P&L MODE: '+(d.pnl_mode||'UNKNOWN')+' • '+d.note+' • VWAP source: '+(d.vwap_source||'unknown');let dg=d.diagnostics||{};let dl=[['Candles',dg.candles_loaded],['Morning',dg.morning_window],['EMA',dg.ema_state],['15m Trend',dg.trend_15m],['VWAP',dg.vwap_side],['ADX',dg.adx],['RSI',dg.rsi_band],['Volume',dg.volume],['Breakout',dg.breakout],['VWAP Dist.',dg.vwap_distance],['Entries',dg.final_entries]];$('btdiag').innerHTML=dl.map(z=>'<div class="stat">'+z[0]+'<b>'+(z[1]??0)+'</b></div>').join('');$('btzero').textContent=f.trades===0?'NO QUALIFYING SETUPS — use the diagnostics above to see which filter removed candidates.':'';let rows=[['Baseline',d.baseline],['Filtered V2',d.filtered]];$('btcompare').innerHTML=rows.map(z=>'<tr><td>'+z[0]+'</td><td>'+z[1].trades+'</td><td>'+z[1].win_rate+'%</td><td>'+money(z[1].net_pnl)+'</td><td>'+z[1].return_percent+'%</td><td>'+(z[1].profit_factor??'--')+'</td><td>'+money(z[1].max_drawdown)+'</td></tr>').join('');$('bth').innerHTML=f.history.slice(-30).reverse().map(t=>'<tr><td>'+t.side+(t.contract?'<br><span class="muted">'+t.contract+' • '+t.qty+' qty</span>':'')+'</td><td>'+t.entry+'</td><td>'+t.stop_loss+'</td><td>'+t.target1+'</td><td>'+t.target2+'</td><td>'+(t.target1_hit?'✓':'✕')+'</td><td>'+(t.target2_hit?'✓':'✕')+'</td><td>'+(t.stop_loss_hit?'✓':'✕')+'</td><td>'+t.exit+'</td><td class="'+(t.pnl>0?'green':'red')+'">'+money(t.pnl)+'</td><td>'+money(t.balance)+'</td></tr>').join('');$('btstatus').textContent='✅ Backtest Completed in '+((Date.now()-started)/1000).toFixed(1)+'s'}catch(e){clearBT();$('btnote').textContent='Backtest error: '+e.message;$('btstatus').textContent='❌ Backtest Failed after '+((Date.now()-started)/1000).toFixed(1)+'s'}finally{clearInterval(timer);$('btRun').disabled=false}}
 load();optionChain();backtest();setInterval(()=>{load();optionChain()},30000);
 
 function v1876GuardStoredPaperPosition(){
