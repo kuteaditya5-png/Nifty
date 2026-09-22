@@ -4784,17 +4784,14 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
           <button data-i="15m" onclick="changeInterval('15m')">15m</button>
         </div>
         <div class="toggles">
-          <label class="toggle"><input type="checkbox" id="zoneToggle" checked onchange="toggleZone()"> Prediction Zone</label>
           <label class="toggle"><input type="checkbox" id="emaToggle" checked onchange="toggleEma()"> EMA</label>
         </div>
       </div>
       <div class="chart-meta"><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
       <div class="chart-wrap" id="chartWrap">
-        <div class="prediction-zone-bg wait" id="predictionZoneBg"></div>
-        <div class="zone-label" id="predictionZoneLabel">AI PREDICTION ZONE<br><span style="font-weight:500">(estimated future candles)</span></div>
         <div id="niftyChart"></div>
       </div>
-      <div class="chart-note">Frozen shaded candles are the model forecast captured at the prediction timestamp. They do not repaint on refresh; new actual candles can be compared against the original forecast.</div>
+      <div class="chart-note">Intraday NIFTY levels are drawn from the active CE/PE setup: Entry, Stop Loss, Target 1 and Target 2. WAIT shows no artificial trade levels.</div>
     </div>
 
     <div class="side">
@@ -4961,45 +4958,8 @@ function initChart(){
   candleSeries=chart.addCandlestickSeries({upColor:"#23c9aa",downColor:"#ef5965",borderUpColor:"#23c9aa",borderDownColor:"#ef5965",wickUpColor:"#23c9aa",wickDownColor:"#ef5965"});
   ema20Series=chart.addLineSeries({color:"#4187ff",lineWidth:1});
   ema50Series=chart.addLineSeries({color:"#976bf4",lineWidth:1});
-  predictionSeries=chart.addCandlestickSeries({
-    upColor:"rgba(61,222,174,.72)",downColor:"rgba(255,101,117,.72)",
-    borderUpColor:"rgba(84,245,196,.9)",borderDownColor:"rgba(255,130,142,.9)",
-    wickUpColor:"rgba(84,245,196,.82)",wickDownColor:"rgba(255,130,142,.82)"
-  });
   window.addEventListener("resize",()=>chart.applyOptions({width:c.clientWidth}));
 }
-function intervalSeconds(){return currentInterval==="1m"?60:currentInterval==="15m"?900:300}
-function buildForecast(data,prediction){
-  const rows=data.candles||[];if(rows.length<3)return [];
-  const last=rows[rows.length-1],recent=rows.slice(-16);
-  const avgRange=recent.reduce((a,r)=>a+Math.max(.01,Number(r.high)-Number(r.low)),0)/recent.length;
-  const setup=String(prediction?.fno_setup||"WAIT").toUpperCase();
-  const model=String(prediction?.prediction||"").toUpperCase();
-  const score=Number(prediction?.combined_score||0);
-  const picked=pickTrade(prediction||{}),conf=confidenceValue(prediction||{},picked.trade||{});
-  let direction=0;
-  if(setup.includes("CE"))direction=1;else if(setup.includes("PE"))direction=-1;else if(model.includes("BULL"))direction=.28;else if(model.includes("BEAR"))direction=-.28;
-  const strength=Math.max(.22,Math.min(1,Math.abs(score)*1.15+conf/180));
-  const step=avgRange*(setup==="WAIT"?.16:.28+.18*strength);
-  const secs=intervalSeconds();let prev=Number(last.close),out=[];
-  const pattern=[.72,.35,.92,.48,.84,.58,.95,.62];
-  for(let i=1;i<=8;i++){
-    const wave=(i%2===0?-1:1)*step*.18;
-    const drift=direction*step*pattern[i-1];
-    const open=prev,close=open+drift+wave*(setup==="WAIT"?1:.35);
-    const wick=Math.max(avgRange*.12,step*.28);
-    out.push({time:Number(last.time)+secs*i,open,high:Math.max(open,close)+wick,low:Math.min(open,close)-wick,close});
-    prev=close;
-  }
-  return out;
-}
-function updateZone(prediction){
-  const setup=String(prediction?.fno_setup||"WAIT").toUpperCase(),bg=el("predictionZoneBg"),label=el("predictionZoneLabel");
-  bg.className="prediction-zone-bg "+(setup.includes("CE")?"ce":setup.includes("PE")?"pe":"wait");
-  const stamp=prediction?.signal_generated_at?new Date(prediction.signal_generated_at).toLocaleTimeString():"--";
-  label.innerHTML=`FROZEN AI PREDICTION<br><span style="font-weight:500">${setup} · locked at ${stamp}</span>`;
-}
-function toggleZone(){const on=el("zoneToggle").checked;el("predictionZoneBg").style.display=on?"block":"none";el("predictionZoneLabel").style.display=on?"block":"none";predictionSeries.applyOptions({visible:on})}
 function toggleEma(){const on=el("emaToggle").checked;ema20Series.applyOptions({visible:on});ema50Series.applyOptions({visible:on})}
 
 async function loadChart(prediction){
@@ -5007,27 +4967,29 @@ async function loadChart(prediction){
   const r=await fetch("/chart-data?interval="+encodeURIComponent(currentInterval),{cache:"no-store"}),d=await r.json();
   if(!r.ok||d.status!=="success")throw new Error(d.message||"Chart unavailable");
   latestChartData=d;candleSeries.setData(d.candles||[]);ema20Series.setData(d.ema20||[]);ema50Series.setData(d.ema50||[]);
-  // Freeze the forecast for this exact completed-candle prediction.
-  // Refreshing live data must never repaint the original predicted path.
-  const predictionStamp=String(prediction?.signal_generated_at||"unknown");
-  const freezeKey=`nifty_ai_frozen_prediction_${currentInterval}_${predictionStamp}`;
-  let forecast=null;
-  try{
-    const saved=localStorage.getItem(freezeKey);
-    if(saved) forecast=JSON.parse(saved);
-  }catch(e){}
-  if(!Array.isArray(forecast)||!forecast.length){
-    forecast=buildForecast(d,prediction);
-    try{localStorage.setItem(freezeKey,JSON.stringify(forecast));}catch(e){}
-  }
-  predictionSeries.setData(forecast);updateZone(prediction);
-  const setup=String(prediction?.fno_setup||"WAIT").toUpperCase(),bars=d.candles||[];
-  if(bars.length){
-    const marker={time:bars[bars.length-1].time,position:setup.includes("PE")?"aboveBar":"belowBar",color:signalColor(setup),shape:setup.includes("CE")?"arrowUp":setup.includes("PE")?"arrowDown":"circle",text:`Prediction Start · ${setup}`};
-    if(typeof candleSeries.setMarkers==="function")candleSeries.setMarkers([marker]);
-  }
-  const last=bars[bars.length-1]||{};setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
+  renderTradeLevels(prediction);
+  const bars=d.candles||[],last=bars[bars.length-1]||{};
+  if(typeof candleSeries.setMarkers==="function")candleSeries.setMarkers([]);
+  setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
   setText("chartIntervalLabel",currentInterval);chart.timeScale().fitContent();
+}
+function renderTradeLevels(data){
+  if(!candleSeries)return;
+  (window.tradePriceLines||[]).forEach(x=>{try{candleSeries.removePriceLine(x)}catch(e){}});window.tradePriceLines=[];
+  const setup=String(data?.fno_setup||"WAIT").toUpperCase();
+  if(!setup.includes("CE")&&!setup.includes("PE"))return;
+  const oc=data?.signals?.option_chain||{},entry=Number(data?.price);
+  const ce=setup.includes("CE");
+  const sl=Number(ce?(oc.immediate_support??oc.support):(oc.immediate_resistance??oc.resistance));
+  const t1=Number(ce?(oc.immediate_resistance??oc.resistance):(oc.immediate_support??oc.support));
+  const t2=Number(ce?(oc.major_resistance??oc.resistance):(oc.major_support??oc.support));
+  const levels=[
+    {title:"ENTRY",price:entry,color:"#4da3ff"},
+    {title:"TARGET 1",price:t1,color:"#35d07f"},
+    {title:"TARGET 2",price:t2,color:"#35d07f"},
+    {title:"STOP LOSS",price:sl,color:"#ff5b64"}
+  ].filter(x=>Number.isFinite(x.price)&&x.price>0);
+  levels.forEach(x=>{try{window.tradePriceLines.push(candleSeries.createPriceLine({price:x.price,color:x.color,lineWidth:2,lineStyle:2,axisLabelVisible:true,title:`${x.title} ${fmt(x.price,2)}`}))}catch(e){}});
 }
 
 async function loadPrediction(){
