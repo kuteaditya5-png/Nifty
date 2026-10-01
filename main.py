@@ -4578,12 +4578,7 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
     <div class="backtest-field"><label>Starting Capital</label><input id="btCapital" type="number" value="100000" min="10000" step="10000"></div>
     <div class="backtest-field"><label>Backtest Period</label><select id="btPeriod"><option value="30d">Last 30 Days</option><option value="60d" selected>Last 60 Days</option></select></div>
   </div>
-  <div class="auto-grid" style="margin-top:12px">
-    <div class="auto-box"><span class="eyebrow">Strategy</span><b>Current Auto Trade</b><div class="section-sub">CE / PE / WAIT</div></div>
-    <div class="auto-box"><span class="eyebrow">Paper Quantity</span><b id="btAutoQty">--</b><div class="section-sub">Current account setting</div></div>
-    <div class="auto-box"><span class="eyebrow">Min Confidence</span><b id="btAutoConfidence">--%</b><div class="section-sub">Current account setting</div></div>
-  </div>
-  <div class="bt-actions" style="margin-top:12px"><button class="primary" onclick="runBacktest()">Run Auto Trade Backtest</button></div>
+  <div class="bt-actions" style="margin-top:12px"><button class="primary" onclick="runBacktest()">Run Backtest</button></div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
   <div class="bt-note" id="btDiagnostics" style="margin-top:8px">Historical option-chain values are not fabricated when point-in-time option data is unavailable.</div>
   <div class="backtest-results">
@@ -5020,7 +5015,6 @@ function showMainDashboard(btn){
 }
 function toggleBacktestPanel(btn){
   const panel=el("backtestPanel");
-  fetch("/api/paper/summary",{cache:"no-store"}).then(r=>r.json()).then(x=>{const p=x.summary||{};setText("btAutoQty",p.quantity||"--");setText("btAutoConfidence",Number(p.min_confidence||0).toFixed(0)+"%")}).catch(()=>{});
   const open=!panel.classList.contains("open");
   document.querySelectorAll(".sidebar-nav button").forEach(b=>b.classList.remove("active"));
   if(open){
@@ -5057,8 +5051,6 @@ async function runBacktest(){
   const capital=Number(el("btCapital")?.value||100000),period=el("btPeriod")?.value||"60d";
   setText("btStatus","Running Auto Trade replay…");
   try{
-    let paper={};try{const pr=await fetch("/api/paper/summary",{cache:"no-store"}),pj=await pr.json();paper=pj.summary||{}}catch(_){}
-    setText("btAutoQty",paper.quantity||"--");setText("btAutoConfidence",Number(paper.min_confidence||0).toFixed(0)+"%");
     const qs=new URLSearchParams({starting_capital:String(capital),period,threshold:"0.30",risk_per_trade:"0.02",reward_risk:"0.7",compounding:"false",fee_per_trade:"40",slippage_points:"2",mode:"reversion_only",max_hold:"6",stop_atr_mult:"2.0"});
     const r=await fetch("/v13/backtest?"+qs.toString(),{cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Backtest failed");
     const finalCapital=Number(d.final_capital||capital),net=finalCapital-capital,trades=Number(d.total_trades||0),wins=Math.round(trades*Number(d.win_rate||0)/100),losses=Math.max(0,trades-wins);
