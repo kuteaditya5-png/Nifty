@@ -18,7 +18,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_ALGORITHM = "HS256"
 SESSION_COOKIE = "nifty_ai_session"
-SESSION_DAYS = 30
+SESSION_DAYS = 1
 
 
 PUBLIC_PATHS = {
@@ -170,9 +170,9 @@ def _create_token(user_id: int, mobile: str) -> str:
     if not JWT_SECRET or len(JWT_SECRET) < 24:
         raise RuntimeError("JWT_SECRET must be configured with at least 24 characters.")
     now=datetime.now(timezone.utc)
-    payload={"sub":str(user_id),"mobile":mobile,"iat":int(now.timestamp()),"exp":int(now.timestamp())+SESSION_DAYS*86400}
+    ist=timezone(timedelta(hours=5,minutes=30))
+    payload={"sub":str(user_id),"mobile":mobile,"login_day":now.astimezone(ist).date().isoformat(),"iat":int(now.timestamp()),"exp":int(now.timestamp())+36*3600}
     return jwt.encode(payload,JWT_SECRET,algorithm=JWT_ALGORITHM)
-
 
 def _current_user(request: Request):
     token=request.cookies.get(SESSION_COOKIE)
@@ -180,9 +180,19 @@ def _current_user(request: Request):
         return None
     try:
         payload=jwt.decode(token,JWT_SECRET,algorithms=[JWT_ALGORITHM])
+        ist=timezone(timedelta(hours=5,minutes=30))
+        if payload.get("login_day") != datetime.now(timezone.utc).astimezone(ist).date().isoformat():
+            return None
         return {"user_id":int(payload["sub"]),"mobile_number":payload.get("mobile")}
     except Exception:
         return None
+
+
+def _login_page() -> HTMLResponse:
+    return HTMLResponse(r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NIFTY AI Login</title>
+<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 50% 0,#102c50,#071525 38%,#030a12);font-family:Inter,system-ui,Arial;color:#eef6ff}.card{width:min(430px,92vw);padding:28px;border:1px solid #1d3b5e;border-radius:20px;background:#071525f5;box-shadow:0 24px 80px #0008}.brand{text-align:center;margin-bottom:24px}.brand b{font-size:25px;letter-spacing:2px}.brand span{color:#46cfff}.brand small{display:block;color:#7f98b8;margin-top:5px}.tabs{display:grid;grid-template-columns:1fr 1fr;background:#06111e;border:1px solid #18324f;border-radius:11px;padding:4px;margin-bottom:20px}.tabs button{border:0;border-radius:8px;padding:10px;background:transparent;color:#8299b7;font-weight:800}.tabs button.active{background:#176be5;color:#fff}label{display:block;color:#91a8c5;font-size:11px;text-transform:uppercase;margin:13px 0 6px}input{width:100%;padding:13px;border-radius:10px;border:1px solid #284766;background:#07182a;color:#fff;font-size:15px}.primary{width:100%;margin-top:20px;padding:13px;border:0;border-radius:10px;background:linear-gradient(135deg,#1684ff,#3156d8);color:#fff;font-weight:900}.msg{min-height:20px;margin-top:14px;text-align:center;font-size:12px;color:#ff7c8d}.hint{color:#738ba9;text-align:center;font-size:11px;margin-top:15px}.hidden{display:none}</style></head>
+<body><div class="card"><div class="brand"><b>NIFTY <span>AI</span> TRADING</b><small>SECURE DAILY LOGIN</small></div><div class="tabs"><button id="lt" class="active" onclick="mode('login')">Login</button><button id="rt" onclick="mode('register')">New User</button></div><form onsubmit="go(event)"><label>Phone Number</label><input id="m" inputmode="tel" autocomplete="tel" placeholder="9876543210" required><label>Password</label><input id="p" type="password" minlength="6" required><div id="cw" class="hidden"><label>Confirm Password</label><input id="c" type="password" minlength="6"></div><button class="primary" id="b">Login</button><div class="msg" id="msg"></div></form><div class="hint">Login stays active for today only (IST). Login again on the next day.</div></div>
+<script>let md="login";function mode(x){md=x;lt.classList.toggle("active",x==="login");rt.classList.toggle("active",x==="register");cw.classList.toggle("hidden",x!=="register");c.required=x==="register";b.textContent=x==="register"?"Create Account":"Login";msg.textContent=""}async function go(e){e.preventDefault();b.disabled=true;msg.textContent="";let d={mobile_number:m.value,password:p.value};if(md==="register")d.confirm_password=c.value;try{let r=await fetch(md==="register"?"/auth/register":"/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)}),x=await r.json();if(!r.ok||x.status==="error")throw Error(x.message||"Login failed");location.href="/dashboard"}catch(e){msg.textContent=e.message}finally{b.disabled=false}}</script></body></html>""")
 
 
 def _ensure_paper_account(user_id: int):
@@ -251,7 +261,7 @@ def setup_auth(app, fno_alert_provider=None):
                 conn.commit()
             _ensure_paper_account(uid)
             response=JSONResponse({"status":"success","message":"Account created."})
-            response.set_cookie(SESSION_COOKIE,_create_token(uid,mobile),max_age=SESSION_DAYS*86400,httponly=True,secure=True,samesite="lax",path="/")
+            response.set_cookie(SESSION_COOKIE,_create_token(uid,mobile),max_age=36*3600,httponly=True,secure=True,samesite="lax",path="/")
             return response
         except Exception as e:
             return JSONResponse({"status":"error","message":str(e)},status_code=400)
@@ -271,7 +281,7 @@ def setup_auth(app, fno_alert_provider=None):
                 conn.commit()
             _ensure_paper_account(uid)
             response=JSONResponse({"status":"success","message":"Login successful."})
-            response.set_cookie(SESSION_COOKIE,_create_token(uid,mobile),max_age=SESSION_DAYS*86400,httponly=True,secure=True,samesite="lax",path="/")
+            response.set_cookie(SESSION_COOKIE,_create_token(uid,mobile),max_age=36*3600,httponly=True,secure=True,samesite="lax",path="/")
             return response
         except Exception as e:
             return JSONResponse({"status":"error","message":str(e)},status_code=400)
