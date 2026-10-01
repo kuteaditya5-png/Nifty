@@ -4553,19 +4553,39 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
 .ticket-grid input{display:block;width:100%;margin-top:5px;background:#07152b;color:#eef6ff;border:1px solid rgba(79,137,255,.3);border-radius:9px;padding:10px}
 .ticket-note{font-size:11px;line-height:1.45;color:#8ba2c3;margin:11px 0}.manual-buy{width:100%}
 @media(max-width:900px){.manual-option-grid{grid-template-columns:1fr}.option-table{min-width:650px}}
-
-/* v16.2 focused trading UI: legacy panels remain in code but are removed from the live dashboard. */
-.sidebar-nav{display:none!important}
-.main-layout{grid-template-columns:minmax(0,1fr)!important}
-.main-layout>.side{display:none!important}
-.shell{width:min(1420px,96%)!important}
-.topgrid{grid-template-columns:1fr 1.55fr .8fr!important}
-.signal-change{margin-top:7px;font-size:11px;color:#7f96b8}.signal-change b{color:#dce8f8}
-.focus-strip{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.focus-chip{padding:7px 10px;border:1px solid rgba(79,137,255,.25);border-radius:999px;background:rgba(6,17,35,.72);font-size:10px;color:#8fa8ca}.focus-chip strong{color:#eaf3ff}
-@media(max-width:900px){.topgrid{grid-template-columns:1fr!important}.prediction-card,.trade-card,.market-card{min-height:auto!important}}
 </style>
-</head>
+
+<style id="reference-dashboard-v18">
+.sidebar-nav{display:none!important}
+.ref-ui{max-width:1540px!important;width:97%!important;padding-top:12px!important}
+.ref-topbar{display:grid;grid-template-columns:auto 1fr auto;gap:22px;align-items:center;padding:10px 8px 16px;border-bottom:1px solid #18304c;margin-bottom:14px}
+.ref-brand{display:flex;align-items:center;gap:13px;white-space:nowrap}.ref-brand .bars{font-size:31px;letter-spacing:-7px;color:#3185ff;transform:skewY(-10deg);margin-right:7px}.ref-brand b{font-size:22px;letter-spacing:2px}.ref-brand b span{color:#45cfff}.ref-brand small{display:block;color:#8297b5;font-size:9px;letter-spacing:1px;margin-top:3px}
+.ref-nav{display:flex;justify-content:center;gap:8px}.ref-nav button{border:0!important;background:transparent!important;font-size:13px;padding:11px 14px}.ref-nav button.active{background:linear-gradient(135deg,#1671e9,#2456cf)!important;box-shadow:0 0 22px rgba(30,113,255,.24)}
+.ref-live{display:flex;align-items:center;gap:10px;font-size:11px;color:#a9bbd2;white-space:nowrap}.ref-live #marketState{color:#33dda4}.ref-live button{padding:6px 9px}
+.ref-topgrid{grid-template-columns:1.05fr 1.55fr 1.05fr!important}.prediction-card,.trade-card,.market-card{min-height:230px!important}
+.prediction-card .signalrow{height:160px!important}.prediction-card:before{width:270px!important;height:270px!important}.prediction-card:after{width:220px!important;height:220px!important}.prediction-card .signal{font-size:44px!important}
+.market-name{font-size:16px;font-weight:800;margin-top:8px}.market-price{font-size:40px!important}
+.ref-main{display:grid;grid-template-columns:minmax(0,2.25fr) minmax(330px,.9fr);gap:12px;margin-top:12px}.ref-right{display:flex;flex-direction:column;gap:12px}.ref-main .chart-wrap{height:585px}
+.option-chain-card{padding:12px!important}.ref-chain-wrap{max-height:335px;margin-top:8px!important}.ref-option-table{min-width:0!important}.ref-option-table th,.ref-option-table td{padding:7px 5px;text-align:center;font-size:10px}.ref-option-table th:nth-child(1){color:#47e6ad}.ref-option-table th:nth-child(5){color:#ff7f91}.ref-option-table .optpick{width:100%;padding:7px 4px!important;font-weight:800}.ref-option-table .atm-row{background:rgba(44,114,255,.12)}
+.ref-bottom{display:grid;grid-template-columns:1fr 1.55fr 1.15fr;gap:12px;margin-top:12px}.selected-card,.nifty-level-card,.paper-ticket{min-height:210px}.selected-card .side-title{color:#52baff}.nifty-level-card .side-title{color:#ffd064}.nifty-level-card .side-title span{font-weight:500;font-size:10px}.nifty-level{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #1b304a;font-size:12px}.nifty-level b{color:#34dfa6}.nifty-level:nth-of-type(2) b{color:#ff6575}
+.paper-ticket .ticket-grid{grid-template-columns:1fr 1fr}.compact-paper{margin-top:12px}
+.tradebox .eyebrow{text-transform:none!important}.tradebox.entry{border-color:#286ec7!important}.tradebox.stop{border-color:#8d2c3a!important}.tradebox.target{border-color:#16724e!important}
+@media(max-width:1100px){.ref-topbar{grid-template-columns:1fr}.ref-nav{justify-content:flex-start;overflow:auto}.ref-live{justify-content:flex-start}.ref-main{grid-template-columns:1fr}.ref-right{display:grid;grid-template-columns:1fr 1fr}.ref-bottom{grid-template-columns:1fr 1fr}.paper-ticket{grid-column:1/-1}}
+@media(max-width:720px){.ref-ui{width:96%!important}.ref-brand b{font-size:18px}.ref-nav{gap:2px}.ref-nav button{padding:8px 9px;font-size:11px}.ref-topgrid{grid-template-columns:1fr!important}.ref-right,.ref-bottom{grid-template-columns:1fr}.ref-main .chart-wrap{height:460px}.toggles{flex-wrap:wrap}.prediction-card,.trade-card,.market-card{min-height:190px!important}.paper-ticket{grid-column:auto}}
+</style>
+<style id="paper-analytics-v19">
+.paper-controls,.auto-paper-bar{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin:12px 0;padding:12px;border:1px solid #203954;border-radius:12px;background:#08182a}
+.paper-controls label,.auto-paper-bar label{font-size:10px;color:#8ea3c1;text-transform:uppercase}.paper-controls input,.auto-paper-bar input{display:block;margin-top:5px;padding:8px;border:1px solid #29415f;border-radius:8px;background:#061321;color:#eef5ff}
+.auto-paper-bar{align-items:center}.auto-note{font-size:10px;color:#8fa6c5;flex:1;min-width:250px}.trade-analytics{display:grid;grid-template-columns:repeat(6,1fr);gap:9px;margin:10px 0 14px}
+.trade-analytics .metric{min-height:75px}.trade-analytics b{font-size:16px!important}
+@media(max-width:1000px){.trade-analytics{grid-template-columns:repeat(3,1fr)}}@media(max-width:600px){.trade-analytics{grid-template-columns:repeat(2,1fr)}.paper-controls>*{flex:1 1 42%}.auto-paper-bar{align-items:flex-start}}
+</style></head>
 <body>
+<div class="sidebar-nav">
+  <button class="active" onclick="showMainDashboard(this)"><span class="nav-icon">⌂</span>Dashboard</button>
+  <button onclick="toggleBacktestPanel(this)"><span class="nav-icon">↺</span>Backtest</button>
+</div>
+
 <div class="backtest-panel" id="backtestPanel">
   <div class="section-head">
     <div>
@@ -4738,49 +4758,48 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
     Proxy mode: uses historical NIFTY candles and v12.3 signal-quality optimizer logic. It does not pretend historical option premiums are available. This is for strategy validation before full F&O historical data is added.
   </div>
 </div>
-<div class="shell">
-  <div class="topbar">
-    <div>
-      <div class="brandline"><div class="brand">NIFTY <span>AI</span></div><div class="tag">Smarter signals. Better validation.</div></div>
+<div class="shell ref-ui">
+  <div class="ref-topbar">
+    <div class="ref-brand"><span class="bars">▮▮▮</span><div><b>NIFTY <span>AI</span> TRADING</b><small>DATA DRIVEN. DISCIPLINED. OBJECTIVE.</small></div></div>
+    <div class="ref-nav">
+      <button class="active" onclick="window.scrollTo({top:0,behavior:'smooth'})">Dashboard</button>
+      <button onclick="document.getElementById('optionChainPanel').scrollIntoView({behavior:'smooth'})">Option Chain</button>
+      <button onclick="document.getElementById('selectedOptionPanel').scrollIntoView({behavior:'smooth'})">Paper Trading</button>
+      <button onclick="toggleBacktestPanel(this)">Backtest</button>
+      <button onclick="document.getElementById('accuracySample').scrollIntoView({behavior:'smooth'})">Validation</button>
     </div>
-    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v16.2</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
-      <span class="market-open"><span class="statusdot"></span><span id="marketState">Market data</span></span>
-      <span class="pill" id="lastUpdated">Loading...</span>
-      <button class="iconbtn" onclick="loadAll()">↻ Refresh</button>
-      <button onclick="enableNotifications()">🔔 Alerts</button>
-      <button onclick="logout()">👤 Logout</button>
-    </div>
+    <div class="ref-live"><span class="statusdot"></span><span id="marketState">Live Market</span><span id="lastUpdated">Loading...</span><button onclick="loadAll()">↻</button></div>
   </div>
 
   <div class="error" id="errorBox"></div>
 
-  <div class="topgrid">
+  <div class="topgrid ref-topgrid">
     <div class="card prediction-card">
-      <div class="eyebrow">Current Prediction</div>
+      <div class="eyebrow">CURRENT SIGNAL</div>
       <div class="signalrow">
         <div class="signalwrap"><div class="arrow" id="signalArrow">→</div><div><div class="signal" id="signal">--</div><div class="signal-sub" id="signalStrike">NIFTY --</div></div></div>
-        <div class="conf"><span>Confidence</span><b id="confidence">--%</b><span id="signalTime">Signal time: --</span><div class="signal-change">Last change: <b id="signalChangedAt">--</b></div></div>
+        <div class="conf"><span>Confidence</span><b id="confidence">--%</b><span id="signalTime">Signal time: --</span></div>
       </div>
     </div>
 
     <div class="card trade-card">
-      <div class="eyebrow" id="tradePlanTitle">Intraday Trading Setup</div>
-      <div class="section-sub" id="intradaySetupSub" style="margin:3px 0 10px">Live CE/PE/WAIT setup generated by the main prediction engine.</div><div class="focus-strip"><span class="focus-chip">Decision <strong id="focusDecision">WAIT</strong></span><span class="focus-chip">Contract <strong id="focusContract">--</strong></span><span class="focus-chip">Action <strong id="focusAction">NO TRADE</strong></span></div>
+      <div class="eyebrow" id="tradePlanTitle">INTRADAY TRADING SETUP</div>
+      <div class="section-sub" id="intradaySetupSub">Select any CE/PE to update this setup and chart levels.</div>
       <div class="tradeboxes">
-        <div class="tradebox entry"><div class="eyebrow">Entry</div><div class="v" id="entry">--</div></div>
-        <div class="tradebox stop"><div class="eyebrow">Stop Loss</div><div class="v" id="stop">--</div></div>
-        <div class="tradebox target"><div class="eyebrow">Target 1</div><div class="v" id="target1">--</div></div>
-        <div class="tradebox target"><div class="eyebrow">Target 2</div><div class="v" id="target2">--</div></div>
+        <div class="tradebox entry"><div class="eyebrow">ENTRY (Premium)</div><div class="v" id="entry">--</div></div>
+        <div class="tradebox stop"><div class="eyebrow">STOP LOSS (Premium)</div><div class="v" id="stop">--</div></div>
+        <div class="tradebox target"><div class="eyebrow">TARGET 1 (Premium)</div><div class="v" id="target1">--</div></div>
+        <div class="tradebox target"><div class="eyebrow">TARGET 2 (Premium)</div><div class="v" id="target2">--</div></div>
       </div>
     </div>
 
     <div class="card market-card">
-      <div class="eyebrow">Market Status</div><div style="font-weight:800;margin-top:8px">NIFTY</div>
+      <div class="eyebrow">MARKET STATUS</div><div class="market-name">NIFTY</div>
       <div class="market-price" id="price">--</div><div class="market-change" id="marketBias">--</div><div class="spark"></div>
     </div>
   </div>
 
-  <div class="main-layout">
+  <div class="ref-main">
     <div class="card chart-card">
       <div class="toolbar">
         <div class="intervals">
@@ -4790,18 +4809,23 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
         </div>
         <div class="toggles">
           <label class="toggle"><input type="checkbox" id="emaToggle" checked onchange="toggleEma()"> EMA</label>
+          <label class="toggle"><input type="checkbox" id="tradeLevelsToggle" checked onchange="refreshSelectedTradeLevels()"> Show Trade Levels</label>
         </div>
       </div>
       <div class="chart-meta"><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
-      <div class="chart-wrap" id="chartWrap">
-        <div id="niftyChart"></div>
-      </div>
-      <div class="chart-note">Intraday NIFTY levels are drawn from the active CE/PE setup: Entry, Stop Loss, Target 1 and Target 2. WAIT shows no artificial trade levels.</div>
+      <div class="chart-wrap" id="chartWrap"><div id="niftyChart"></div></div>
+      <div class="chart-note">Selected option controls Entry, Stop Loss, Target 1 and Target 2. Premium levels stay in the cards; NIFTY-equivalent levels are drawn on this chart.</div>
     </div>
 
-    <div class="side">
+    <div class="ref-right">
+      <div class="card sidecard option-chain-card" id="optionChainPanel">
+        <div class="side-title">◉ OPTION CHAIN (ATM)</div>
+        <div class="manual-chain-head"><span id="manualExpiry" class="pill">Expiry --</span><span id="manualSpot" class="pill">NIFTY --</span><button onclick="loadManualOptionChain()">↻</button></div>
+        <div class="table-wrap ref-chain-wrap"><table class="option-table ref-option-table"><thead><tr><th>CALL (CE)</th><th>CE OI</th><th>STRIKE</th><th>PE OI</th><th>PUT (PE)</th></tr></thead><tbody id="manualOptionRows"><tr><td colspan="5">Loading option chain...</td></tr></tbody></table></div>
+      </div>
+
       <div class="card sidecard">
-        <div class="side-title">✧ AI Insights</div>
+        <div class="side-title">ⓘ AI INSIGHTS</div>
         <div class="insight-row"><span>Trend</span><span id="insTrend">--</span></div>
         <div class="insight-row"><span>EMA</span><span id="insEma">--</span></div>
         <div class="insight-row"><span>RSI</span><span id="insRsi">--</span></div>
@@ -4815,46 +4839,66 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
         <div class="insight-row"><span>Time / Event</span><span id="insTime">--</span></div>
         <div class="insight-row"><span>Prediction Engine</span><span id="insConfirm">--</span></div>
       </div>
-
-      <div class="card sidecard summary-card">
-        <div class="side-title">▣ Intraday Prediction Setup</div>
-        <div class="sumrow"><span>Signal</span><b id="sumSignal">--</b></div>
-        <div class="sumrow"><span>Strike</span><b id="sumStrike">--</b></div>
-        <div class="sumrow"><span>Confidence</span><b id="sumConfidence">--</b></div>
-        <div class="sumrow"><span>Entry</span><b id="sumEntry">--</b></div>
-        <div class="sumrow"><span>Stop Loss</span><b id="sumStop">--</b></div>
-        <div class="sumrow"><span>Target 1</span><b id="sumT1">--</b></div>
-        <div class="sumrow"><span>Target 2</span><b id="sumT2">--</b></div>
-        <div class="sumrow"><span>Reason</span><b id="sumReason" style="text-align:right;max-width:150px">--</b></div>
-      </div>
-
-      <div class="card sidecard risk">
-        <div class="side-title">● Note</div>
-        <p>The prediction zone is an estimated path generated from the current model direction, confidence and recent volatility. It is for validation/paper trading, not guaranteed future price movement.</p>
-      </div>
     </div>
   </div>
 
-  <div class="card section-card">
-    <div class="section-head"><div><div class="section-title">Manual Option Paper Trading</div><div class="section-sub">Choose any NIFTY CE or PE. AI signal is context only and never blocks a paper trade.</div></div><div class="actions"><button onclick="loadManualOptionChain()">↻ Option Chain</button><button onclick="paperReset()">Reset</button></div></div>
-    <div class="manual-option-grid">
-      <div class="manual-chain">
-        <div class="manual-chain-head"><b>Option Chain</b><span id="manualExpiry" class="pill">Expiry --</span><span id="manualSpot" class="pill">NIFTY --</span></div>
-        <div class="table-wrap"><table class="option-table"><thead><tr><th>CE LTP</th><th>CE OI</th><th>CE ΔOI</th><th>Strike</th><th>PE ΔOI</th><th>PE OI</th><th>PE LTP</th></tr></thead><tbody id="manualOptionRows"><tr><td colspan="7">Loading option chain...</td></tr></tbody></table></div>
+  <div class="ref-bottom" id="selectedOptionPanel">
+    <div class="card sidecard selected-card">
+      <div class="side-title">SELECTED OPTION: <span id="manualContract">Select CE / PE</span></div>
+      <div class="sumrow"><span>Signal</span><b id="sumSignal">--</b></div>
+      <div class="sumrow"><span>Strike</span><b id="sumStrike">--</b></div>
+      <div class="sumrow"><span>Confidence</span><b id="sumConfidence">--</b></div>
+      <div class="sumrow"><span>Entry (Premium)</span><b id="sumEntry">--</b></div>
+      <div class="sumrow"><span>Stop Loss (Premium)</span><b id="sumStop">--</b></div>
+      <div class="sumrow"><span>Target 1 (Premium)</span><b id="sumT1">--</b></div>
+      <div class="sumrow"><span>Target 2 (Premium)</span><b id="sumT2">--</b></div>
+      <div class="sumrow"><span>Reason</span><b id="sumReason">--</b></div>
+    </div>
+
+    <div class="card sidecard nifty-level-card">
+      <div class="side-title">NIFTY EQUIVALENT LEVELS <span>(For Chart)</span></div>
+      <div class="nifty-level"><span>Entry (NIFTY)</span><b id="niftyEntryLevel">--</b></div>
+      <div class="nifty-level"><span>Stop Loss (NIFTY)</span><b id="niftySlLevel">--</b></div>
+      <div class="nifty-level"><span>Target 1 (NIFTY)</span><b id="niftyT1Level">--</b></div>
+      <div class="nifty-level"><span>Target 2 (NIFTY)</span><b id="niftyT2Level">--</b></div>
+      <div class="ticket-note">Chart levels are estimated from option premium, strike, IV and time to expiry. They update when you select a different option.</div>
+    </div>
+
+    <div class="card sidecard paper-ticket">
+      <div class="side-title">PAPER TRADE</div>
+      <div class="ticket-grid">
+        <label>Premium<input id="manualPremium" type="number" step="0.05" readonly></label>
+        <label>Quantity<input id="manualQty" type="number" value="75" min="1" step="1"></label>
+        <label>Stop Loss<input id="manualSL" type="number" step="0.05" oninput="refreshSelectedTradeLevels()"></label>
+        <label>Target 1<input id="manualT1" type="number" step="0.05" oninput="refreshSelectedTradeLevels()"></label>
+        <label>Target 2<input id="manualT2" type="number" step="0.05" oninput="refreshSelectedTradeLevels()"></label>
       </div>
-      <div class="manual-ticket">
-        <div class="eyebrow">Selected Paper Contract</div>
-        <div class="manual-contract" id="manualContract">Select a CE or PE from the chain</div>
-        <div class="ticket-grid">
-          <label>Premium<input id="manualPremium" type="number" step="0.05" readonly></label>
-          <label>Quantity<input id="manualQty" type="number" value="75" min="1" step="1"></label>
-          <label>Stop Loss<input id="manualSL" type="number" step="0.05"></label>
-          <label>Target 1<input id="manualT1" type="number" step="0.05"></label>
-          <label>Target 2<input id="manualT2" type="number" step="0.05"></label>
-        </div>
-        <div class="ticket-note" id="manualRiskNote">Select a contract to calculate premium-based suggested risk levels.</div>
-        <button class="primary manual-buy" onclick="paperBuySelected()">Paper Buy Selected Option</button>
-      </div>
+      <div class="ticket-note" id="manualRiskNote">Select a contract to calculate suggested levels.</div>
+      <button class="primary manual-buy" onclick="paperBuySelected()">Paper Buy Selected Option</button>
+    </div>
+  </div>
+
+  <div class="card section-card compact-paper" id="paperTradingSection">
+    <div class="section-head"><div><div class="section-title">Paper Trading & Trade Analytics</div><div class="section-sub">Filter positions, export to Excel, review timing and control auto paper trading.</div></div><button onclick="paperReset()">Reset</button></div>
+    <div class="paper-controls">
+      <label>From Date<input type="date" id="paperDateFrom" onchange="loadPaper()"></label>
+      <label>To Date<input type="date" id="paperDateTo" onchange="loadPaper()"></label>
+      <button onclick="setPaperRange(0)">Today</button><button onclick="setPaperRange(7)">7D</button><button onclick="setPaperRange(30)">30D</button><button onclick="clearPaperRange()">All</button>
+      <button class="primary" onclick="downloadPaperExcel()">⬇ Download Excel</button>
+    </div>
+    <div class="auto-paper-bar">
+      <label class="toggle"><input type="checkbox" id="autoPaperToggle" onchange="saveAutoPaperSettings()"> AUTO PAPER TRADE</label>
+      <label>Qty <input type="number" id="autoPaperQty" value="75" min="1" onchange="saveAutoPaperSettings()"></label>
+      <label>Min confidence <input type="number" id="autoPaperConfidence" value="70" min="0" max="100" onchange="saveAutoPaperSettings()">%</label>
+      <span class="auto-note">Uses Market Status direction + matching BUY confirmation. Max one auto trade per side/day. Open positions square off at 15:20 IST.</span>
+    </div>
+    <div class="trade-analytics">
+      <div class="metric"><span class="label">Avg Buy Time</span><b id="avgBuyTime">--</b></div>
+      <div class="metric"><span class="label">Avg Hold Time</span><b id="avgHoldTime">--</b></div>
+      <div class="metric"><span class="label">Filtered Trades</span><b id="filteredTrades">--</b></div>
+      <div class="metric"><span class="label">Filtered Win Rate</span><b id="filteredWinRate">--%</b></div>
+      <div class="metric"><span class="label">Filtered P&L</span><b id="filteredPnl">₹--</b></div>
+      <div class="metric"><span class="label">Most Common Buy Window</span><b id="commonBuyWindow">--</b></div>
     </div>
     <div class="metrics">
       <div class="metric"><span class="label">Equity</span><b id="paperEquity">₹--</b></div>
@@ -4867,7 +4911,7 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
     <div class="table-wrap"><table><thead><tr><th>Time</th><th>Signal</th><th>Contract</th><th>Entry</th><th>Current/Exit</th><th>P&L</th><th>Status</th><th>Action</th></tr></thead><tbody id="paperHistory"></tbody></table></div>
   </div>
 
-  <div class="card section-card">
+<div class="card section-card">
     <div class="section-head"><div><div class="section-title">Prediction Accuracy Tracker</div><div class="section-sub">Target 1 observed before stop = WIN. This is separate from displayed confidence.</div></div><span class="pill" id="accuracySample">0 completed</span></div>
     <div class="metrics">
       <div class="metric"><span class="label">Overall Accuracy</span><b id="accuracyOverall">--%</b></div>
@@ -4896,18 +4940,7 @@ function fmt(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):"--
 function signalColor(s){s=String(s||"").toUpperCase();if(s.includes("CE")||s.includes("BULL"))return "#22d3a6";if(s.includes("PE")||s.includes("BEAR"))return "#fb5b6b";return "#f7b84b"}
 function enableNotifications(){if("Notification" in window)Notification.requestPermission()}
 async function logout(){await fetch("/auth/logout",{method:"POST"});location.href="/login"}
-function notifySignal(sig,reason){
-  if(!sig)return;
-  const changed=sig!==lastSignal;
-  if(changed){
-    const now=new Date().toISOString();
-    localStorage.setItem("nifty_signal_changed_at",now);
-    if(lastSignal&&"Notification" in window&&Notification.permission==="granted")new Notification("NIFTY AI signal changed",{body:`${lastSignal} → ${sig} • ${reason||""}`});
-    lastSignal=sig;localStorage.setItem("nifty_last_signal",sig);
-  }
-  const ts=localStorage.getItem("nifty_signal_changed_at");
-  setText("signalChangedAt",ts?new Date(ts).toLocaleString():"--");
-}
+function notifySignal(sig,reason){if(!sig||sig===lastSignal)return;if(lastSignal&&"Notification" in window&&Notification.permission==="granted")new Notification("NIFTY AI signal changed",{body:`${lastSignal} → ${sig} • ${reason||""}`});lastSignal=sig;localStorage.setItem("nifty_last_signal",sig)}
 
 function pickTrade(data){
   const setup=String(data.fno_setup||"WAIT").toUpperCase(),a=data.fno_alerts||{};
@@ -4942,9 +4975,6 @@ function renderPrediction(data){
   const entry=entryText(trade),stop=trade.stop_loss!=null?`₹ ${trade.stop_loss}`:"--",t1=trade.target_1!=null?`₹ ${trade.target_1}`:"--",t2=trade.target_2!=null?`₹ ${trade.target_2}`:"--";
   setText("entry",entry);setText("stop",stop);setText("target1",t1);setText("target2",t2);
   const reason=data.fno_setup_reason||trade.reason||"Waiting for stronger confirmation.";
-  setText("focusDecision",setup);
-  setText("focusContract",typ&&trade.strike?`NIFTY ${trade.strike} ${typ}`:"--");
-  setText("focusAction",typ?`BUY ${typ}`:"NO TRADE");
   setText("intradaySetupSub",setup.includes("CE")||setup.includes("PE")?`Prediction-confirmed intraday ${setup.includes("CE")?"CE":"PE"} setup · Entry, SL and targets below`:`WAIT · No forced trade. Entry, SL and targets activate when the prediction setup qualifies.`);
   const ts=data.signal_generated_at||new Date().toISOString();setText("signalTime","Signal time: "+new Date(ts).toLocaleTimeString());
   setText("marketBias",`${data.prediction||"--"} · Score ${data.combined_score??"--"}`);
@@ -4992,43 +5022,99 @@ async function loadChart(prediction){
   setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
   setText("chartIntervalLabel",currentInterval);chart.timeScale().fitContent();
 }
-function renderTradeLevels(data){
+
+function clearTradeLevels(){
   if(!candleSeries)return;
-  (window.tradePriceLines||[]).forEach(x=>{try{candleSeries.removePriceLine(x)}catch(e){}});window.tradePriceLines=[];
+  (window.tradePriceLines||[]).forEach(x=>{try{candleSeries.removePriceLine(x)}catch(e){}});
+  window.tradePriceLines=[];
+}
+function normalCdf(x){const t=1/(1+.2316419*Math.abs(x)),d=.3989423*Math.exp(-x*x/2);let p=1-d*t*(.3193815+t*(-.3565638+t*(1.781478+t*(-1.821256+t*1.330274))));return x>=0?p:1-p}
+function expiryYears(v){if(!v)return 1/365;let d=new Date(v);if(Number.isNaN(d.getTime()))return 1/365;return Math.max((d-Date.now())/(365*86400000),1/(365*24))}
+function bsPremium(spot,strike,t,vol,type){if(!(spot>0&&strike>0&&t>0&&vol>0))return NaN;const r=.065,sv=vol*Math.sqrt(t),d1=(Math.log(spot/strike)+(r+.5*vol*vol)*t)/sv,d2=d1-sv;return type==="CE"?spot*normalCdf(d1)-strike*Math.exp(-r*t)*normalCdf(d2):strike*Math.exp(-r*t)*normalCdf(-d2)-spot*normalCdf(-d1)}
+function premiumToSpot(p,opt){
+  const spot=Number(manualChainData?.spot||latestPrediction?.price),strike=Number(opt?.strike),iv=Number(opt?.iv)/100,t=expiryYears(manualChainData?.expiry);
+  if(!(spot>0&&strike>0&&p>0&&iv>0))return null;let lo=spot*.8,hi=spot*1.2;
+  for(let i=0;i<65;i++){const mid=(lo+hi)/2,v=bsPremium(mid,strike,t,iv,opt.type);if(!Number.isFinite(v))return null;if(opt.type==="CE"){if(v<p)lo=mid;else hi=mid}else{if(v>p)lo=mid;else hi=mid}}
+  return (lo+hi)/2
+}
+function selectedNiftyLevels(){
+  if(!selectedManualOption)return null;
+  const e=Number(el("manualPremium")?.value||selectedManualOption.premium),sl=Number(el("manualSL")?.value),t1=Number(el("manualT1")?.value),t2=Number(el("manualT2")?.value);
+  const z={entry:premiumToSpot(e,selectedManualOption),sl:premiumToSpot(sl,selectedManualOption),t1:premiumToSpot(t1,selectedManualOption),t2:premiumToSpot(t2,selectedManualOption)};
+  return Object.values(z).every(Number.isFinite)?z:null
+}
+function drawTradeLevels(levels){
+  clearTradeLevels();if(!candleSeries||!levels||el("tradeLevelsToggle")?.checked===false)return;
+  [{title:"ENTRY",price:levels.entry,color:"#4da3ff"},{title:"TARGET 1",price:levels.t1,color:"#35d07f"},{title:"TARGET 2",price:levels.t2,color:"#35d07f"},{title:"STOP LOSS",price:levels.sl,color:"#ff5b64"}].forEach(x=>{if(Number.isFinite(x.price)&&x.price>0)try{window.tradePriceLines.push(candleSeries.createPriceLine({price:x.price,color:x.color,lineWidth:2,lineStyle:2,axisLabelVisible:true,title:`${x.title}: ${fmt(x.price,2)}`}))}catch(e){}})
+}
+function refreshSelectedTradeLevels(){
+  if(!selectedManualOption){renderTradeLevels(latestPrediction);return}
+  const lv=selectedNiftyLevels();drawTradeLevels(lv);
+  if(lv){setText("niftyEntryLevel",fmt(lv.entry));setText("niftySlLevel",fmt(lv.sl));setText("niftyT1Level",fmt(lv.t1));setText("niftyT2Level",fmt(lv.t2))}
+}
+function renderTradeLevels(data){
+  if(selectedManualOption){refreshSelectedTradeLevels();return}
+  clearTradeLevels();
   const setup=String(data?.fno_setup||"WAIT").toUpperCase();
   if(!setup.includes("CE")&&!setup.includes("PE"))return;
-  const oc=data?.signals?.option_chain||{},entry=Number(data?.price);
-  const ce=setup.includes("CE");
-  const sl=Number(ce?(oc.immediate_support??oc.support):(oc.immediate_resistance??oc.resistance));
-  const t1=Number(ce?(oc.immediate_resistance??oc.resistance):(oc.immediate_support??oc.support));
-  const t2=Number(ce?(oc.major_resistance??oc.resistance):(oc.major_support??oc.support));
-  const levels=[
-    {title:"ENTRY",price:entry,color:"#4da3ff"},
-    {title:"TARGET 1",price:t1,color:"#35d07f"},
-    {title:"TARGET 2",price:t2,color:"#35d07f"},
-    {title:"STOP LOSS",price:sl,color:"#ff5b64"}
-  ].filter(x=>Number.isFinite(x.price)&&x.price>0);
-  levels.forEach(x=>{try{window.tradePriceLines.push(candleSeries.createPriceLine({price:x.price,color:x.color,lineWidth:2,lineStyle:2,axisLabelVisible:true,title:`${x.title} ${fmt(x.price,2)}`}))}catch(e){}});
+  const oc=data?.signals?.option_chain||{},entry=Number(data?.price),ce=setup.includes("CE");
+  drawTradeLevels({entry,sl:Number(ce?(oc.immediate_support??oc.support):(oc.immediate_resistance??oc.resistance)),t1:Number(ce?(oc.immediate_resistance??oc.resistance):(oc.immediate_support??oc.support)),t2:Number(ce?(oc.major_resistance??oc.resistance):(oc.major_support??oc.support))});
 }
 
 async function loadPrediction(){
   const r=await fetch("/prediction?include_alerts=true",{cache:"no-store"}),d=await r.json();
   if(!r.ok||d.status==="error")throw new Error(d.message||"Prediction unavailable");renderPrediction(d);return d;
 }
+let paperTradesCache=[];
+function paperQuery(){
+  const f=el("paperDateFrom")?.value,t=el("paperDateTo")?.value,p=new URLSearchParams({limit:"2000"});
+  if(f)p.set("date_from",f);if(t)p.set("date_to",t);return p.toString()
+}
+function minsToClock(v){if(!Number.isFinite(v))return "--";let m=Math.round(v)%1440;return `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")} IST`}
+function durationText(mins){if(!Number.isFinite(mins))return "--";const h=Math.floor(mins/60),m=Math.round(mins%60);return h?`${h}h ${m}m`:`${m}m`}
+function updatePaperAnalytics(trades){
+  const closed=trades.filter(x=>x.status==="CLOSED"),wins=closed.filter(x=>Number(x.pnl)>0);
+  const pnl=closed.reduce((a,x)=>a+Number(x.pnl||0),0);
+  const openMins=trades.map(x=>{const d=new Date(x.opened_at);return d.getHours()*60+d.getMinutes()}).filter(Number.isFinite);
+  const avg=openMins.length?openMins.reduce((a,b)=>a+b,0)/openMins.length:NaN;
+  const holds=closed.filter(x=>x.closed_at).map(x=>(new Date(x.closed_at)-new Date(x.opened_at))/60000).filter(x=>x>=0);
+  const avgHold=holds.length?holds.reduce((a,b)=>a+b,0)/holds.length:NaN;
+  const buckets={};openMins.forEach(m=>{const k=Math.floor(m/30)*30;buckets[k]=(buckets[k]||0)+1});
+  const common=Object.entries(buckets).sort((a,b)=>b[1]-a[1])[0];
+  setText("avgBuyTime",minsToClock(avg));setText("avgHoldTime",durationText(avgHold));setText("filteredTrades",trades.length);
+  setText("filteredWinRate",closed.length?(wins.length/closed.length*100).toFixed(1)+"%":"--%");setText("filteredPnl","₹"+pnl.toFixed(2));
+  setText("commonBuyWindow",common?`${minsToClock(Number(common[0]))}–${minsToClock(Number(common[0])+30)}`:"--");
+}
 async function loadPaper(){
   try{
     await fetch("/api/paper/sync",{method:"POST"});
-    const [a,b]=await Promise.all([fetch("/api/paper/summary"),fetch("/api/paper/history")]),s=await a.json(),h=await b.json();
-    if(s.status==="success"){const x=s.summary;setText("paperEquity","₹"+Number(x.equity).toFixed(2));setText("paperCash","₹"+Number(x.cash_balance).toFixed(2));setText("paperOpenPnl","₹"+Number(x.open_pnl).toFixed(2));setText("paperRealized","₹"+Number(x.realized_pnl).toFixed(2));setText("paperWinRate",Number(x.win_rate).toFixed(1)+"%");setText("paperOpenCount",x.open_positions)}
-    el("paperHistory").innerHTML=(h.trades||[]).map(t=>`<tr><td>${new Date(t.opened_at).toLocaleString()}</td><td>${t.signal}</td><td>${t.strike_price} ${t.option_type}${t.expiry?`<div style="font-size:9px;color:#7188a3">${t.expiry}</div>`:""}</td><td>${t.entry_price}</td><td>${t.status==="OPEN"?(t.current_price??t.entry_price):(t.exit_price??"--")}</td><td>₹${Number(t.pnl).toFixed(2)}</td><td>${t.status}${t.exit_reason?` / ${t.exit_reason}`:""}</td><td>${t.status==="OPEN"?`<button onclick="paperExit(${t.trade_id},${t.current_price||t.entry_price})">Exit</button>`:""}</td></tr>`).join("")||'<tr><td colspan="8">No paper trades yet.</td></tr>';
+    const [a,b]=await Promise.all([fetch("/api/paper/summary"),fetch("/api/paper/history?"+paperQuery())]),s=await a.json(),h=await b.json();
+    if(s.status==="success"){const x=s.summary;setText("paperEquity","₹"+Number(x.equity).toFixed(2));setText("paperCash","₹"+Number(x.cash_balance).toFixed(2));setText("paperOpenPnl","₹"+Number(x.open_pnl).toFixed(2));setText("paperRealized","₹"+Number(x.realized_pnl).toFixed(2));setText("paperWinRate",Number(x.win_rate).toFixed(1)+"%");setText("paperOpenCount",x.open_positions);if(el("autoPaperToggle"))el("autoPaperToggle").checked=!!x.auto_trade;if(el("autoPaperQty"))el("autoPaperQty").value=x.quantity||75;if(el("autoPaperConfidence"))el("autoPaperConfidence").value=x.min_confidence??70}
+    paperTradesCache=h.trades||[];updatePaperAnalytics(paperTradesCache);
+    el("paperHistory").innerHTML=paperTradesCache.map(t=>`<tr><td>${new Date(t.opened_at).toLocaleString()}</td><td>${t.signal}</td><td>${t.strike_price} ${t.option_type}${t.expiry?`<div style="font-size:9px;color:#7188a3">${t.expiry}</div>`:""}</td><td>${t.entry_price}</td><td>${t.status==="OPEN"?(t.current_price??t.entry_price):(t.exit_price??"--")}</td><td>₹${Number(t.pnl).toFixed(2)}</td><td>${t.status}${t.exit_reason?` / ${t.exit_reason}`:""}</td><td>${t.status==="OPEN"?`<button onclick="paperExit(${t.trade_id},${t.current_price||t.entry_price})">Exit</button>`:""}</td></tr>`).join("")||'<tr><td colspan="8">No paper trades for selected dates.</td></tr>';
   }catch(e){console.warn("Paper:",e)}
+}
+function isoDate(d){return d.toISOString().slice(0,10)}
+function setPaperRange(days){const now=new Date(),from=new Date(now);if(days>0)from.setDate(now.getDate()-days+1);el("paperDateFrom").value=isoDate(from);el("paperDateTo").value=isoDate(now);loadPaper()}
+function clearPaperRange(){el("paperDateFrom").value="";el("paperDateTo").value="";loadPaper()}
+async function saveAutoPaperSettings(){
+  const body={auto_trade:!!el("autoPaperToggle")?.checked,quantity:Number(el("autoPaperQty")?.value||75),min_confidence:Number(el("autoPaperConfidence")?.value||70)};
+  const r=await fetch("/api/paper/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),x=await r.json();
+  if(!r.ok||x.status==="error")alert(x.message||"Unable to save auto-paper settings.")
+}
+function downloadPaperExcel(){
+  if(!paperTradesCache.length)return alert("No trades in the selected date range.");
+  const cols=["Trade ID","Buy Time","Sell Time","Holding Minutes","Signal","Option Type","Strike","Expiry","Quantity","Entry","Stop Loss","Target 1","Target 2","Exit","Exit Reason","P&L","Confidence","NIFTY Entry"];
+  const rows=paperTradesCache.map(t=>{const hold=t.closed_at?Math.round((new Date(t.closed_at)-new Date(t.opened_at))/60000):"";return [t.trade_id,t.opened_at,t.closed_at||"",hold,t.signal,t.option_type,t.strike_price,t.expiry||"",t.quantity,t.entry_price,t.stop_loss??"",t.target1??"",t.target2??"",t.exit_price??"",t.exit_reason||"",t.pnl,t.confidence??"",t.nifty_price??""]});
+  const esc=v=>`"${String(v??"").replaceAll('"','""')}"`,csv="\ufeff"+[cols,...rows].map(r=>r.map(esc).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"application/vnd.ms-excel;charset=utf-8"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`NIFTY_Paper_Trades_${el("paperDateFrom")?.value||"ALL"}_${el("paperDateTo")?.value||"ALL"}.csv`;a.click();URL.revokeObjectURL(a.href)
 }
 
 let selectedManualOption=null;
 let manualChainData=null;
 function manualNum(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):"--"}
 async function loadManualOptionChain(){
-  const body=el("manualOptionRows");if(body)body.innerHTML='<tr><td colspan="7">Loading live option chain...</td></tr>';
+  const body=el("manualOptionRows");if(body)body.innerHTML='<tr><td colspan="5">Loading live option chain...</td></tr>';
   try{
     const r=await fetch("/option-chain",{cache:"no-store"}),d=await r.json();
     if(!r.ok||d.status!=="success")throw new Error(d.message||"Option chain unavailable");
@@ -5039,12 +5125,12 @@ async function loadManualOptionChain(){
       const strike=Number(x.strike),atmClass=Math.abs(strike-atm)<1?"atm-row":"";
       return `<tr class="${atmClass}">
         <td><button class="optpick ce" onclick="selectManualOption('CE',${strike},${Number(x.call_ltp||0)},${Number(x.call_iv||0)})">₹${manualNum(x.call_ltp)}</button></td>
-        <td>${manualNum(x.call_oi,0)}</td><td>${manualNum(x.call_change_oi,0)}</td>
+        <td>${manualNum(x.call_oi,0)}</td>
         <td class="strike-cell">${manualNum(strike,0)}</td>
-        <td>${manualNum(x.put_change_oi,0)}</td><td>${manualNum(x.put_oi,0)}</td>
+        <td>${manualNum(x.put_oi,0)}</td>
         <td><button class="optpick pe" onclick="selectManualOption('PE',${strike},${Number(x.put_ltp||0)},${Number(x.put_iv||0)})">₹${manualNum(x.put_ltp)}</button></td>
-      </tr>`}).join("")||'<tr><td colspan="7">No nearby option contracts returned.</td></tr>';
-  }catch(e){if(body)body.innerHTML=`<tr><td colspan="7">${e.message}</td></tr>`}
+      </tr>`}).join("")||'<tr><td colspan="5">No nearby option contracts returned.</td></tr>';
+  }catch(e){if(body)body.innerHTML=`<tr><td colspan="5">${e.message}</td></tr>`}
 }
 function selectManualOption(type,strike,premium,iv){
   if(!premium||premium<=0)return alert("Premium unavailable for this contract.");
@@ -5056,6 +5142,12 @@ function selectManualOption(type,strike,premium,iv){
   setText("manualContract",`NIFTY ${strike} ${type} · ₹${manualNum(premium)}${iv?` · IV ${manualNum(iv)}%`:""}`);
   el("manualPremium").value=premium.toFixed(2);el("manualSL").value=sl.toFixed(2);el("manualT1").value=t1.toFixed(2);el("manualT2").value=t2.toFixed(2);
   setText("manualRiskNote",`Suggested premium risk: ${stopPct}% stop · Target 1 = 1R · Target 2 = 2R. You can edit SL/targets before paper buying. AI currently says ${String(latestPrediction?.fno_setup||"WAIT").toUpperCase()}, but it does not block this manual paper trade.`);
+  setText("tradePlanTitle",`INTRADAY TRADING SETUP – NIFTY ${strike} ${type}`);
+  setText("intradaySetupSub","Selected option controls premium plan and NIFTY chart levels.");
+  setText("entry",`₹ ${manualNum(premium)}`);setText("stop",`₹ ${manualNum(sl)}`);setText("target1",`₹ ${manualNum(t1)}`);setText("target2",`₹ ${manualNum(t2)}`);
+  setText("sumStrike",`${strike} ${type}`);setText("sumEntry",`₹ ${manualNum(premium)}`);setText("sumStop",`₹ ${manualNum(sl)}`);setText("sumT1",`₹ ${manualNum(t1)}`);setText("sumT2",`₹ ${manualNum(t2)}`);
+  setText("sumReason","Manual option selected · AI signal remains context");
+  refreshSelectedTradeLevels();
 }
 async function paperBuySelected(){
   if(!selectedManualOption)return alert("Select a CE or PE contract from the option chain first.");
