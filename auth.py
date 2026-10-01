@@ -98,6 +98,10 @@ def _init_db():
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            cur.execute("ALTER TABLE paper_accounts ADD COLUMN IF NOT EXISTS auto_trade BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute("ALTER TABLE paper_accounts ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 75")
+            cur.execute("ALTER TABLE paper_accounts ADD COLUMN IF NOT EXISTS min_confidence NUMERIC(5,2) NOT NULL DEFAULT 70")
+            cur.execute("ALTER TABLE paper_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS paper_trades (
                     trade_id BIGSERIAL PRIMARY KEY,
@@ -159,6 +163,26 @@ def _verify_password(password: str, stored: str) -> bool:
         return secrets.compare_digest(actual, expected)
     except Exception:
         return False
+
+
+
+def _create_token(user_id: int, mobile: str) -> str:
+    if not JWT_SECRET or len(JWT_SECRET) < 24:
+        raise RuntimeError("JWT_SECRET must be configured with at least 24 characters.")
+    now=datetime.now(timezone.utc)
+    payload={"sub":str(user_id),"mobile":mobile,"iat":int(now.timestamp()),"exp":int(now.timestamp())+SESSION_DAYS*86400}
+    return jwt.encode(payload,JWT_SECRET,algorithm=JWT_ALGORITHM)
+
+
+def _current_user(request: Request):
+    token=request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    try:
+        payload=jwt.decode(token,JWT_SECRET,algorithms=[JWT_ALGORITHM])
+        return {"user_id":int(payload["sub"]),"mobile_number":payload.get("mobile")}
+    except Exception:
+        return None
 
 
 def _ensure_paper_account(user_id: int):
