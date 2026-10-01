@@ -185,6 +185,74 @@ def _current_user(request: Request):
         return None
 
 
+
+def _login_page() -> HTMLResponse:
+    return HTMLResponse("""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NIFTY AI Login</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#06101f;color:#eef5ff;font-family:Inter,system-ui,Arial,sans-serif}
+.card{width:min(92vw,430px);padding:28px;border:1px solid #213653;border-radius:20px;background:#0b192b;box-shadow:0 22px 70px #0008}
+.brand{font-size:30px;font-weight:800;letter-spacing:.5px}.brand b{color:#28d8e8}.sub{color:#91a5bd;margin:7px 0 22px}
+.tabs{display:flex;gap:8px;margin-bottom:18px}.tabs button{flex:1}.active{background:linear-gradient(90deg,#3477ff,#804cff)!important;color:white!important}
+label{display:block;color:#9db0c7;font-size:12px;margin:12px 0 6px;text-transform:uppercase;letter-spacing:.7px}
+input{width:100%;padding:13px 14px;border-radius:11px;border:1px solid #29415f;background:#071426;color:#fff;font-size:16px;outline:none}
+button{border:1px solid #2c4566;background:#10243b;color:#dce9f8;border-radius:11px;padding:12px 14px;font-weight:700;cursor:pointer}
+.submit{width:100%;margin-top:18px;background:linear-gradient(90deg,#3477ff,#804cff);border:0;color:white}
+.msg{min-height:22px;margin-top:14px;font-size:13px;color:#9db0c7}.err{color:#ff7f91}.ok{color:#49e0ad}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">NIFTY <b>AI</b></div>
+  <div class="sub">Sign in to your trading dashboard.</div>
+  <div class="tabs">
+    <button id="loginTab" class="active" onclick="mode='login';draw()">Login</button>
+    <button id="registerTab" onclick="mode='register';draw()">Register</button>
+  </div>
+  <form id="form">
+    <label>Mobile Number</label>
+    <input id="mobile" inputmode="tel" autocomplete="tel" placeholder="9876543210" required>
+    <label>Password</label>
+    <input id="password" type="password" autocomplete="current-password" minlength="6" required>
+    <div id="confirmWrap" style="display:none">
+      <label>Confirm Password</label>
+      <input id="confirm" type="password" minlength="6">
+    </div>
+    <button class="submit" id="submitBtn" type="submit">Login</button>
+    <div id="msg" class="msg"></div>
+  </form>
+</div>
+<script>
+let mode="login";
+const q=id=>document.getElementById(id);
+function draw(){
+ q("loginTab").className=mode==="login"?"active":"";
+ q("registerTab").className=mode==="register"?"active":"";
+ q("confirmWrap").style.display=mode==="register"?"block":"none";
+ q("confirm").required=mode==="register";
+ q("submitBtn").textContent=mode==="register"?"Create Account":"Login";
+ q("msg").textContent="";
+}
+q("form").addEventListener("submit",async e=>{
+ e.preventDefault(); const msg=q("msg"); msg.className="msg"; msg.textContent="Please wait…";
+ const body={mobile_number:q("mobile").value,password:q("password").value};
+ if(mode==="register") body.confirm_password=q("confirm").value;
+ try{
+   const r=await fetch(mode==="register"?"/auth/register":"/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+   const d=await r.json();
+   if(!r.ok||d.status!=="success") throw new Error(d.message||"Request failed.");
+   msg.className="msg ok"; msg.textContent=d.message||"Success";
+   location.href="/dashboard";
+ }catch(err){msg.className="msg err";msg.textContent=err.message}
+});
+</script>
+</body>
+</html>""")
+
 def _ensure_paper_account(user_id: int):
     with _db() as conn:
         with conn.cursor() as cur:
