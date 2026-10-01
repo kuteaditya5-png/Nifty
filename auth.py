@@ -481,7 +481,17 @@ def setup_auth(app, fno_alert_provider=None):
         user=_current_user(request)
         with _db() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM paper_trades WHERE user_id=%s",(user["user_id"],)); cur.execute("UPDATE paper_accounts SET cash_balance=starting_balance WHERE user_id=%s",(user["user_id"],))
+                cur.execute("""
+                    UPDATE paper_trades
+                    SET status='CLOSED',
+                        exit_price=COALESCE(current_price,entry_price),
+                        current_price=COALESCE(current_price,entry_price),
+                        pnl=(COALESCE(current_price,entry_price)-entry_price)*quantity,
+                        exit_reason='RESET',
+                        closed_at=COALESCE(closed_at,CURRENT_TIMESTAMP)
+                    WHERE user_id=%s AND status='OPEN'
+                """,(user["user_id"],))
+                cur.execute("UPDATE paper_accounts SET cash_balance=starting_balance WHERE user_id=%s",(user["user_id"],))
             conn.commit()
         return {"status":"success"}
 

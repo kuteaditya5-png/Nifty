@@ -4573,14 +4573,24 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
 </div>
 
 <div class="backtest-panel" id="backtestPanel">
-<div class="section-head"><div><div class="section-title">Auto Trade Performance Replay v3</div><div class="section-sub">Uses recorded Auto Trade option entries, exits and paper P&amp;L — not the old NIFTY proxy.</div></div><button onclick="closeBacktestPanel()">✕</button></div>
-<div class="backtest-grid"><div class="backtest-field"><label>Replay Period</label><select id="btPeriod"><option value="7">Last 7 Days</option><option value="30" selected>Last 30 Days</option><option value="60">Last 60 Days</option><option value="90">Last 90 Days</option><option value="all">All Recorded Trades</option></select></div></div>
-<div class="auto-grid" style="margin-top:12px"><div class="auto-box"><span class="eyebrow">Source</span><b>Recorded Auto Trades</b><div class="section-sub">Actual option P&amp;L</div></div><div class="auto-box"><span class="eyebrow">Paper Quantity</span><b id="btAutoQty">--</b><div class="section-sub">Current setting</div></div><div class="auto-box"><span class="eyebrow">Min Confidence</span><b id="btAutoConfidence">--%</b><div class="section-sub">Current setting</div></div></div>
-<div class="bt-actions" style="margin-top:12px"><button class="primary" onclick="runBacktest()">Replay My Auto Trades</button></div>
-<div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div><div class="bt-note" id="btDiagnostics" style="margin-top:8px">Manual option buys are excluded. Closed trades use realized P&amp;L; open trades use stored mark-to-market P&amp;L.</div>
-<div class="backtest-results"><div class="btmetric"><span>Starting Balance</span><b id="btStartBalance">₹--</b></div><div class="btmetric"><span>Realized P&amp;L</span><b id="btNetPnl">₹--</b></div><div class="btmetric"><span>Open P&amp;L</span><b id="btOpenPnl">₹--</b></div><div class="btmetric"><span>Total P&amp;L</span><b id="btTotalPnl">₹--</b></div><div class="btmetric"><span>Return</span><b id="btReturn">--%</b></div><div class="btmetric"><span>Auto Trades</span><b id="btTrades">--</b></div><div class="btmetric"><span>Wins / Losses</span><b id="btWL">-- / --</b></div><div class="btmetric"><span>Win Rate</span><b id="btWinRate">--%</b></div><div class="btmetric"><span>Max Drawdown</span><b id="btDD">--%</b></div></div>
-<div id="btEquityChart"></div>
-<div class="bt-table-wrap"><table><thead><tr><th>Opened</th><th>Contract</th><th>Entry</th><th>Exit / Current</th><th>P&amp;L</th><th>Status</th><th>Reason</th></tr></thead><tbody id="btHistory"><tr><td colspan="7">Run replay to load recorded Auto Trades.</td></tr></tbody></table></div>
+  <div class="section-head"><div><div class="section-title">Auto Trade Backtest</div><div class="section-sub">Focused historical replay for the current CE / PE / WAIT trading direction.</div></div><button onclick="closeBacktestPanel()">✕</button></div>
+  <div class="backtest-grid">
+    <div class="backtest-field"><label>Starting Capital</label><input id="btCapital" type="number" value="100000" min="10000" step="10000"></div>
+    <div class="backtest-field"><label>Backtest Period</label><select id="btPeriod"><option value="30d">Last 30 Days</option><option value="60d" selected>Last 60 Days</option></select></div>
+  </div>
+  <div class="auto-grid" style="margin-top:12px">
+    <div class="auto-box"><span class="eyebrow">Strategy</span><b>Current Auto Trade</b><div class="section-sub">CE / PE / WAIT</div></div>
+    <div class="auto-box"><span class="eyebrow">Paper Quantity</span><b id="btAutoQty">--</b><div class="section-sub">Current account setting</div></div>
+    <div class="auto-box"><span class="eyebrow">Min Confidence</span><b id="btAutoConfidence">--%</b><div class="section-sub">Current account setting</div></div>
+  </div>
+  <div class="bt-actions" style="margin-top:12px"><button class="primary" onclick="runBacktest()">Run Auto Trade Backtest</button></div>
+  <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
+  <div class="bt-note" id="btDiagnostics" style="margin-top:8px">Historical option-chain values are not fabricated when point-in-time option data is unavailable.</div>
+  <div class="backtest-results">
+    <div class="btmetric"><span>Final Capital</span><b id="btFinal">₹--</b></div><div class="btmetric"><span>Net P&L</span><b id="btNetPnl">₹--</b></div><div class="btmetric"><span>Return</span><b id="btReturn">--%</b></div><div class="btmetric"><span>Total Trades</span><b id="btTrades">--</b></div><div class="btmetric"><span>Wins / Losses</span><b id="btWL">-- / --</b></div><div class="btmetric"><span>Win Rate</span><b id="btWinRate">--%</b></div><div class="btmetric"><span>Max Drawdown</span><b id="btDD">--%</b></div>
+  </div>
+  <div id="btEquityChart"></div>
+  <div class="bt-table-wrap"><table><thead><tr><th>Entry</th><th>Trade</th><th>Regime</th><th>P&L</th><th>Exit</th><th>Capital</th></tr></thead><tbody id="btHistory"><tr><td colspan="6">Run the backtest to see simulated trades.</td></tr></tbody></table></div>
 </div>
 <div class="shell">
   <div class="topbar">
@@ -5044,25 +5054,19 @@ function renderBacktestEquity(points){
   btChart.timeScale().fitContent();
 }
 async function runBacktest(){
- const period=el("btPeriod")?.value||"30";setText("btStatus","Loading recorded Auto Trade history…");
- try{
-  try{await fetch("/api/paper/sync",{method:"POST",cache:"no-store"})}catch(_){}
-  const [sr,hr]=await Promise.all([fetch("/api/paper/summary",{cache:"no-store"}),fetch("/api/paper/history?limit=2000&status=ALL",{cache:"no-store"})]);
-  const sj=await sr.json(),hj=await hr.json();if(!sr.ok||sj.status!=="success")throw new Error(sj.message||"Paper account unavailable");if(!hr.ok||hj.status!=="success")throw new Error(hj.message||"Trade history unavailable");
-  const account=sj.summary||{};setText("btAutoQty",account.quantity||"--");setText("btAutoConfidence",Number(account.min_confidence||0).toFixed(0)+"%");
-  const now=Date.now(),cutoff=period==="all"?0:now-Number(period)*86400000;
-  const trades=(hj.trades||[]).filter(t=>!String(t.signal||"").toUpperCase().includes("MANUAL")).filter(t=>period==="all"||new Date(t.opened_at||0).getTime()>=cutoff).sort((x,y)=>new Date(x.opened_at)-new Date(y.opened_at));
-  const closed=trades.filter(t=>String(t.status).toUpperCase()==="CLOSED"),open=trades.filter(t=>String(t.status).toUpperCase()==="OPEN");
-  const realized=closed.reduce((n,t)=>n+Number(t.pnl||0),0),openPnl=open.reduce((n,t)=>n+Number(t.pnl||0),0),total=realized+openPnl;
-  const wins=closed.filter(t=>Number(t.pnl||0)>0).length,losses=closed.filter(t=>Number(t.pnl||0)<0).length,wr=closed.length?wins/closed.length*100:0,starting=Number(account.starting_balance||100000);
-  let equity=starting,peak=starting,maxDD=0;const curve=[];
-  closed.slice().sort((x,y)=>new Date(x.closed_at||x.opened_at)-new Date(y.closed_at||y.opened_at)).forEach(t=>{equity+=Number(t.pnl||0);peak=Math.max(peak,equity);if(peak>0)maxDD=Math.max(maxDD,(peak-equity)/peak*100);const ts=new Date(t.closed_at||t.opened_at).getTime();if(Number.isFinite(ts))curve.push({time:Math.floor(ts/1000),value:Number(equity.toFixed(2))})});
-  const money=v=>(v>=0?"+":"-")+"₹"+Math.abs(v).toLocaleString("en-IN",{maximumFractionDigits:2});
-  setText("btStartBalance","₹"+starting.toLocaleString("en-IN"));setText("btNetPnl",money(realized));setText("btOpenPnl",money(openPnl));setText("btTotalPnl",money(total));setText("btReturn",(total>=0?"+":"")+((total/Math.max(1,starting))*100).toFixed(2)+"%");setText("btTrades",trades.length);setText("btWL",wins+" / "+losses);setText("btWinRate",wr.toFixed(1)+"%");setText("btDD","-"+maxDD.toFixed(2)+"%");
-  setText("btDiagnostics",`${closed.length} closed Auto Trades + ${open.length} open. P&L is read directly from stored option trades; MANUAL BUY trades are excluded.`);setText("btStatus",`Completed · ${trades.length} recorded Auto Trades`);
-  renderBacktestEquity(curve);
-  el("btHistory").innerHTML=trades.slice().reverse().map(t=>{const px=String(t.status).toUpperCase()==="OPEN"?(t.current_price??t.entry_price):(t.exit_price??t.current_price??null),p=Number(t.pnl||0);return `<tr><td>${t.opened_at?new Date(t.opened_at).toLocaleString():"--"}</td><td>${Number(t.strike_price||0)} ${t.option_type||""}</td><td>₹${Number(t.entry_price||0).toFixed(2)}</td><td>${px==null?"--":"₹"+Number(px).toFixed(2)}</td><td>${p>=0?"+":""}₹${p.toFixed(2)}</td><td>${t.status||"--"}</td><td>${t.exit_reason||"--"}</td></tr>`}).join("")||'<tr><td colspan="7">No recorded Auto Trades in this period.</td></tr>';
- }catch(e){setText("btStatus","Replay failed · "+e.message);setText("btDiagnostics","Could not load recorded paper-trade performance: "+e.message)}
+  const capital=Number(el("btCapital")?.value||100000),period=el("btPeriod")?.value||"60d";
+  setText("btStatus","Running Auto Trade replay…");
+  try{
+    let paper={};try{const pr=await fetch("/api/paper/summary",{cache:"no-store"}),pj=await pr.json();paper=pj.summary||{}}catch(_){}
+    setText("btAutoQty",paper.quantity||"--");setText("btAutoConfidence",Number(paper.min_confidence||0).toFixed(0)+"%");
+    const qs=new URLSearchParams({starting_capital:String(capital),period,threshold:"0.30",risk_per_trade:"0.02",reward_risk:"0.7",compounding:"false",fee_per_trade:"40",slippage_points:"2",mode:"reversion_only",max_hold:"6",stop_atr_mult:"2.0"});
+    const r=await fetch("/v13/backtest?"+qs.toString(),{cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Backtest failed");
+    const finalCapital=Number(d.final_capital||capital),net=finalCapital-capital,trades=Number(d.total_trades||0),wins=Math.round(trades*Number(d.win_rate||0)/100),losses=Math.max(0,trades-wins);
+    setText("btFinal","₹"+finalCapital.toLocaleString("en-IN",{maximumFractionDigits:2}));setText("btNetPnl",(net>=0?"+":"")+"₹"+net.toLocaleString("en-IN",{maximumFractionDigits:2}));setText("btReturn",(Number(d.return_percent)>=0?"+":"")+Number(d.return_percent||0).toFixed(2)+"%");setText("btTrades",trades);setText("btWL",wins+" / "+losses);setText("btWinRate",Number(d.win_rate||0).toFixed(1)+"%");setText("btDD",Number(d.max_drawdown_percent||0).toFixed(2)+"%");
+    setText("btDiagnostics",`Signals → CE ${d.signal_counts?.CE||0}, PE ${d.signal_counts?.PE||0}, WAIT ${d.signal_counts?.WAIT||0}. Historical option-chain values are not fabricated.`);
+    setText("btStatus",`Completed · ${trades} trades`);renderBacktestEquity(d.equity_curve||[]);
+    el("btHistory").innerHTML=(d.trades||[]).slice().reverse().map(t=>`<tr><td>${new Date(t.entry_time).toLocaleString()}</td><td>${t.signal}</td><td>${t.regime||"--"}</td><td>${Number(t.pnl)>=0?"+":""}₹${Number(t.pnl||0).toFixed(2)}</td><td>${t.exit_reason||"--"}</td><td>₹${Number(t.capital_after||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</td></tr>`).join("")||'<tr><td colspan="6">No qualifying trades in this period.</td></tr>';
+  }catch(e){setText("btStatus","Failed · "+e.message);setText("btDiagnostics","Backtest could not complete: "+e.message)}
 }
 
 async function uploadHistoryBackfill(){
