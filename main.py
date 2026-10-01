@@ -4573,176 +4573,24 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
 </div>
 
 <div class="backtest-panel" id="backtestPanel">
-  <div class="section-head">
-    <div>
-      <div class="section-title">Strategy Backtest</div>
-      <div class="section-sub">Replay our historical price logic from ₹1 lakh.</div>
-    </div>
-    <button onclick="closeBacktestPanel()">✕</button>
-  </div>
-
+  <div class="section-head"><div><div class="section-title">Auto Trade Backtest</div><div class="section-sub">Focused historical replay for the current CE / PE / WAIT trading direction.</div></div><button onclick="closeBacktestPanel()">✕</button></div>
   <div class="backtest-grid">
-    <div class="backtest-field">
-      <label>Starting Capital</label>
-      <input id="btCapital" type="number" value="100000" min="10000" step="10000">
-    </div>
-    <div class="backtest-field">
-      <label>Period</label>
-      <select id="btPeriod"><option value="30d">30 Days</option><option value="60d" selected>60 Days</option></select>
-    </div>
-    <div class="backtest-field">
-      <label>Signal Threshold</label>
-      <input id="btThreshold" type="number" value="0.30" min="0.15" max="0.60" step="0.05">
-    </div>
-    <div class="backtest-field">
-      <label>Risk Per Trade %</label>
-      <input id="btRisk" type="number" value="2" min="0.25" max="10" step="0.25">
-    </div>
-    <div class="backtest-field">
-      <label>Reward : Risk</label>
-      <input id="btRR" type="number" value="0.7" min="0.3" max="3" step="0.1">
-    </div>
-    <div class="backtest-field">
-      <label>Compounding</label>
-      <select id="btCompound"><option value="false" selected>OFF</option><option value="true">ON</option></select>
-    </div>
-    <div class="backtest-field">
-      <label>Signal Direction</label>
-      <select id="btMode">
-        <option value="reversion_only" selected>Mean reversion</option>
-        <option value="trend_only">Momentum (v12.3)</option>
-        <option value="auto">Regime router</option>
-      </select>
-    </div>
-    <div class="backtest-field">
-      <label>Max Hold (bars)</label>
-      <input id="btHold" type="number" value="6" min="2" max="40" step="1">
-    </div>
-    <div class="backtest-field">
-      <label>Stop Width (× ATR)</label>
-      <input id="btStop" type="number" value="2.0" min="0.5" max="3" step="0.25">
-    </div>
-    <div class="backtest-field">
-      <label>Fee Per Trade ₹</label>
-      <input id="btFee" type="number" value="40" min="0" step="10">
-    </div>
-    <div class="backtest-field">
-      <label>Slippage Points</label>
-      <input id="btSlip" type="number" value="2" min="0" step="0.5">
-    </div>
+    <div class="backtest-field"><label>Starting Capital</label><input id="btCapital" type="number" value="100000" min="10000" step="10000"></div>
+    <div class="backtest-field"><label>Backtest Period</label><select id="btPeriod"><option value="30d">Last 30 Days</option><option value="60d" selected>Last 60 Days</option></select></div>
   </div>
-
-  <div class="bt-actions">
-    <button class="primary" onclick="runBacktest()">Run Backtest</button>
-    <button class="primary" onclick="runOptimizer()">Optimize + Walk-Forward</button>
-    <button class="primary" onclick="runRollingWF()">Rolling Walk-Forward (5 folds)</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalEdge()">Signal Edge Diagnostic v14.1</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="runRegimeMatrix()">Regime × Engine Matrix v14.3</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="runRegimeWalkForward()">Regime-Aware Walk-Forward v14.4</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="runExtendedValidation()">Extended Historical Validation v14.5</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="syncHistoryStore()">Sync Historical Store v14.6</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="historyStoreStatus()">History Store Status</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="historyQualityCheck()">Data Quality & Gap Check v15.4.3</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="recoverHistoricalData()">Historical Data Recovery v14.9</button>
-          <button class="primary" style="width:100%;margin-top:8px" onclick="checkBacktestReadiness()">Backtest Readiness Gate</button>
-          <input id="historyBackfillFile" type="file" accept=".csv" style="width:100%;margin-top:8px;padding:10px;border:1px solid #2b3f59;border-radius:10px;background:#0b1828;color:#dce8f8">
-          <button class="primary" style="width:100%;margin-top:8px" onclick="uploadHistoryBackfill()">Import 15m CSV Backfill v14.7</button>
-          <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)">
-            <div style="font-size:12px;font-weight:700;margin-bottom:8px">v15.2 HISTORICAL DATA ACQUISITION</div>
-            <input id="v150DatasetFiles" type="file" accept=".csv,text/csv" multiple style="width:100%;margin-bottom:8px">
-            <button class="primary" style="width:100%;margin-bottom:8px" onclick="buildHistoricalDataset()">Build / Merge Dataset v15.2</button>
-            <button class="primary" style="width:100%;margin-bottom:8px" onclick="datasetBuilderStatus()">Dataset Builder Status</button>
-            <button class="primary" style="width:100%" onclick="expandHistoricalDataset()">Expand / Plan 200 Sessions v15.1</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="acquisitionPlanV152()">Acquisition Progress v15.2</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="autoCollectV153()">Auto Collect History v15.3</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="collectorDiagV1531()">Collector Diagnostics v15.3.1</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runFullValidationV154()">Run Full Validation v15.4.4</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runPromotionValidationV155()">Promotion Validation v15.5</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runFailureAttributionV156()">Failure Attribution v15.6</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runSignalQualityV157()">Signal Quality Rebuild v15.7</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureWalkForwardV158()">Feature Walk-Forward v15.8</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runFeatureInteractionV1510()">Feature Interaction & Regime v15.10</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runIndependentVixV1511()">Independent VIX Validation v15.11</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="acquireOptionOiV1512()">Acquire Historical Option OI v15.12</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runOptionOiValidationV1512()">Independent Option OI Validation v15.12</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="expandOptionOiV1513()">Expand + Diagnose Option OI v15.13</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="auditOptionOiV1514()">Audit Upstox OI Payload v15.14</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="reconstructOptionOiV1515()">Reconstruct Historical OI Features v15.15</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="auditOiIntegrityV1516()">OI Value Integrity Audit v15.16</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="acquireFuturesResearchV1517()">Acquire NIFTY Futures Research v15.17</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="diagnoseFuturesApiV15171()">Futures API Diagnostic v15.17.1</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="discoverMonthlyFuturesV15172()">Discover + Acquire Monthly Futures v15.17.2</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="runFuturesValidationV1517()">Independent Futures Validation v15.17</button>
-            <button class="primary" style="width:100%;margin-top:8px" onclick="sessionTimestampDiagV1542()">Session Timestamp Diagnostic v15.4.2</button>
-          </div>
+  <div class="auto-grid" style="margin-top:12px">
+    <div class="auto-box"><span class="eyebrow">Strategy</span><b>Current Auto Trade</b><div class="section-sub">CE / PE / WAIT</div></div>
+    <div class="auto-box"><span class="eyebrow">Paper Quantity</span><b id="btAutoQty">--</b><div class="section-sub">Current account setting</div></div>
+    <div class="auto-box"><span class="eyebrow">Min Confidence</span><b id="btAutoConfidence">--%</b><div class="section-sub">Current account setting</div></div>
   </div>
+  <div class="bt-actions" style="margin-top:12px"><button class="primary" onclick="runBacktest()">Run Auto Trade Backtest</button></div>
   <div id="btStatus" class="section-sub" style="margin-top:8px">Ready.</div>
-  <div class="bt-note" id="btCosts" style="margin-top:8px">Run a backtest to see cost attribution.</div>
-  <div class="bt-note" id="btExits" style="margin-top:8px">Exit mix appears after a run.</div>
-  <div class="bt-note" id="btRolling" style="margin-top:8px">
-    Rolling walk-forward optimises on one segment and validates on the next, five times. This is the test for repeatability across regimes.
-  </div>
-  <div class="bt-note" id="btSignalEdge" style="margin-top:8px">v14.1 raw signal edge has not been tested yet.</div>
-  <div class="bt-note" id="btRegimeMatrix" style="margin-top:8px">Regime × Engine Matrix has not been run yet.</div>
-  <div class="bt-note" id="btRegimeWF" style="margin-top:8px">v14.4 unseen validation has not been run yet.</div>
-  <div class="bt-note" id="btExtendedValidation" style="margin-top:8px">v14.5 extended historical validation has not been run yet.</div>
-  <div class="bt-note" id="btHistoryStore" style="margin-top:8px">Historical store has not been checked yet.</div>
-  <div class="bt-note" id="btHistoryQuality" style="margin-top:8px">Historical data quality has not been checked yet.</div>
-  <div class="bt-note" id="btRecoveryStatus" style="margin-top:8px">Historical recovery has not been run yet.</div>
-<div class="bt-note" id="btDatasetBuilder" style="margin-top:8px">v15.1 dataset expansion has not been run yet.</div>
-  <div class="bt-note" id="btFullValidation" style="margin-top:8px">v15.4 full 200-session validation has not been run yet.</div>
-  <div class="bt-note" id="btPromotionValidation" style="margin-top:8px">v15.5 frozen-rule promotion validation has not been run yet.</div>
-  <div class="bt-note" id="btFailureAttribution" style="margin-top:8px">v15.6 failure attribution has not been run yet.</div>
-  <div class="bt-note" id="btSignalQuality157" style="margin-top:8px">v15.7 signal quality rebuild has not been run yet.</div>
-  <div class="bt-note" id="btFeatureWF158" style="margin-top:8px">v15.8 chronological feature walk-forward has not been run yet.</div>
-  <div class="bt-note" id="btFeatureInteraction1510" style="margin-top:8px">v15.10 corrected feature interaction & regime discovery has not been run yet.</div>
-  <div class="bt-note" id="btIndependentVix1511" style="margin-top:8px">v15.11 independent India VIX validation has not been run yet.</div>
-  <div class="bt-note" id="btOptionOiAcquire1512" style="margin-top:8px">v15.12 historical option OI has not been acquired yet.</div>
-  <div class="bt-note" id="btOptionOiValidation1512" style="margin-top:8px">v15.12 independent option OI validation has not been run yet.</div>
-  <div class="bt-note" id="btOptionOiExpand1513" style="margin-top:8px">v15.13 OI expansion/coverage diagnostic has not been run yet.</div>
-  <div class="bt-note" id="btOptionOiAudit1514" style="margin-top:8px">v15.14 Upstox OI payload audit has not been run yet.</div>
-  <div class="bt-note" id="btOptionOiReconstruct1515" style="margin-top:8px">v15.15 historical OI feature reconstruction has not been run yet.</div>
-  <div class="bt-note" id="btOiIntegrity1516" style="margin-top:8px">v15.16 OI value integrity audit has not been run yet.</div>
-  <div class="bt-note" id="btFuturesAcquire1517" style="margin-top:8px">v15.17 historical futures research has not been acquired yet.</div>
-  <div class="bt-note" id="btFuturesDiag15171" style="margin-top:8px">v15.17.1 futures API diagnostic has not been run yet.</div>
-  <div class="bt-note" id="btFuturesMonthly15172" style="margin-top:8px">v15.17.2 monthly futures discovery has not been run yet.</div>
-  <div class="bt-note" id="btFuturesValidation1517" style="margin-top:8px">v15.17 independent futures validation has not been run yet.</div>
-  <div class="bt-note" id="btTimestampDiag" style="margin-top:8px">v15.4.2 session timestamp diagnostic has not been run yet.</div>
-  <div class="bt-note" id="btBackfillStatus" style="margin-top:8px">No historical CSV backfill imported yet.</div>
-  <div class="bt-note" id="btOptimizer" style="margin-top:8px">
-    v13 engine: next-bar entry, no overnight holds, symmetric slippage. Edge vs random is the number that matters — a positive return with negative edge is luck.
-  </div>
-
+  <div class="bt-note" id="btDiagnostics" style="margin-top:8px">Historical option-chain values are not fabricated when point-in-time option data is unavailable.</div>
   <div class="backtest-results">
-    <div class="btmetric"><span>Final Capital</span><b id="btFinal">₹--</b></div>
-    <div class="btmetric"><span>Return</span><b id="btReturn">--%</b></div>
-    <div class="btmetric"><span>Total Trades</span><b id="btTrades">--</b></div>
-    <div class="btmetric"><span>Win Rate</span><b id="btWinRate">--%</b></div>
-    <div class="btmetric"><span>Edge vs Random</span><b id="btEdge">--</b></div>
-    <div class="btmetric"><span>Profit Factor</span><b id="btPF">--</b></div>
-    <div class="btmetric"><span>Max Drawdown</span><b id="btDD">--%</b></div>
-    <div class="btmetric"><span>Expectancy / Trade</span><b id="btExpectancy">₹--</b></div>
-    <div class="btmetric"><span>Max Consecutive Losses</span><b id="btConsec">--</b></div>
-    <div class="btmetric"><span>WAIT Ratio</span><b id="btWait">--%</b></div>
-    <div class="btmetric"><span>Verdict</span><b id="btVerdict">--</b></div>
+    <div class="btmetric"><span>Final Capital</span><b id="btFinal">₹--</b></div><div class="btmetric"><span>Net P&L</span><b id="btNetPnl">₹--</b></div><div class="btmetric"><span>Return</span><b id="btReturn">--%</b></div><div class="btmetric"><span>Total Trades</span><b id="btTrades">--</b></div><div class="btmetric"><span>Wins / Losses</span><b id="btWL">-- / --</b></div><div class="btmetric"><span>Win Rate</span><b id="btWinRate">--%</b></div><div class="btmetric"><span>Max Drawdown</span><b id="btDD">--%</b></div>
   </div>
-
   <div id="btEquityChart"></div>
-
-  <div class="bt-table-wrap">
-    <table>
-      <thead><tr><th>Entry</th><th>Signal</th><th>Score</th><th>Threshold</th><th>Regime</th><th>P&L</th><th>Exit</th><th>Capital</th></tr></thead>
-      <tbody id="btHistory"><tr><td colspan="8">Run the backtest to see simulated trades.</td></tr></tbody>
-    </table>
-  </div>
-
-  <div class="bt-note" id="btDiagnostics">
-    CE/PE/WAIT diagnostics will appear after the backtest.
-  </div>
-
-  <div class="bt-note">
-    Proxy mode: uses historical NIFTY candles and v12.3 signal-quality optimizer logic. It does not pretend historical option premiums are available. This is for strategy validation before full F&O historical data is added.
-  </div>
+  <div class="bt-table-wrap"><table><thead><tr><th>Entry</th><th>Trade</th><th>Regime</th><th>P&L</th><th>Exit</th><th>Capital</th></tr></thead><tbody id="btHistory"><tr><td colspan="6">Run the backtest to see simulated trades.</td></tr></tbody></table></div>
 </div>
 <div class="shell">
   <div class="topbar">
@@ -5172,6 +5020,7 @@ function showMainDashboard(btn){
 }
 function toggleBacktestPanel(btn){
   const panel=el("backtestPanel");
+  fetch("/api/paper/summary",{cache:"no-store"}).then(r=>r.json()).then(x=>{const p=x.summary||{};setText("btAutoQty",p.quantity||"--");setText("btAutoConfidence",Number(p.min_confidence||0).toFixed(0)+"%")}).catch(()=>{});
   const open=!panel.classList.contains("open");
   document.querySelectorAll(".sidebar-nav button").forEach(b=>b.classList.remove("active"));
   if(open){
@@ -5205,115 +5054,20 @@ function renderBacktestEquity(points){
   btChart.timeScale().fitContent();
 }
 async function runBacktest(){
-  const capital=Number(el("btCapital").value||100000);
-  const period=el("btPeriod").value||"60d";
-  const threshold=Number(el("btThreshold").value||0.30);
-  const risk=Number(el("btRisk").value||2)/100;
-  const rr=Number(el("btRR").value||1.5);
-  const comp=el("btCompound").value==="true";
-  const fee=Number(el("btFee").value||40);
-  const slip=Number(el("btSlip").value||2);
-  const mode=(el("btMode")||{}).value||"reversion_only";
-  const hold=Number((el("btHold")||{}).value||12);
-  setText("btStatus","Running v13 backtest...");
-  const qs=new URLSearchParams({
-    starting_capital:String(capital),
-    period,
-    threshold:String(threshold),
-    risk_per_trade:String(risk),
-    reward_risk:String(rr),
-    compounding:String(comp),
-    fee_per_trade:String(fee),
-    slippage_points:String(slip),
-    mode:String(mode),
-    max_hold:String(hold),
-    stop_atr_mult:String(Number((el("btStop")||{}).value||2.0))
-  });
+  const capital=Number(el("btCapital")?.value||100000),period=el("btPeriod")?.value||"60d";
+  setText("btStatus","Running Auto Trade replay…");
   try{
-    const r=await fetch("/v13/backtest?"+qs.toString(),{cache:"no-store"});
-    const d=await r.json();
-    if(!r.ok||d.status!=="success")throw new Error(d.message||"Backtest failed");
-    setText("btFinal","₹"+Number(d.final_capital).toLocaleString("en-IN",{maximumFractionDigits:2}));
-    setText("btReturn",(Number(d.return_percent)>=0?"+":"")+Number(d.return_percent).toFixed(2)+"%");
-    setText("btTrades",d.total_trades);
-    setText("btWinRate",Number(d.win_rate).toFixed(1)+"%");
-    setText("btPF",d.profit_factor==null?"--":Number(d.profit_factor).toFixed(2));
-    const rawEdge=d.edge_vs_random_percentage_points;
-    const edgeEl=el("btEdge");
-    if(rawEdge==null){
-      setText("btEdge","n/a");
-      if(edgeEl){edgeEl.style.color="#849bb9";}
-    }else{
-      const edge=Number(rawEdge);
-      setText("btEdge",(edge>=0?"+":"")+edge.toFixed(1)+" pts");
-      if(edgeEl){edgeEl.style.color=edge>2?"#22d3a6":edge>0?"#f7b84b":"#fb5b6b";}
-    }
-    setText("btDD",Number(d.max_drawdown_percent).toFixed(2)+"%");
-    setText("btExpectancy","₹"+Number(d.expectancy_per_trade||0).toFixed(2));
-    setText("btConsec",d.max_consecutive_losses||0);
-    const sc=d.signal_counts||{};
-    const tot=(sc.CE||0)+(sc.PE||0)+(sc.WAIT||0);
-    setText("btWait",tot?((sc.WAIT||0)/tot*100).toFixed(1)+"%":"--%");
-    setText("btVerdict",d.verdict||"--");
-    const verdictEl=el("btVerdict");
-    if(verdictEl){
-      verdictEl.style.color=d.verdict==="PASS"?"#22d3a6":d.verdict==="CAUTION"?"#f7b84b":"#fb5b6b";
-    }
-    const cfg=d.config||{};
-    const wr=Number(d.win_rate||0), bl=Number(d.random_walk_baseline_win_rate||0);
-    setText("btDiagnostics",
-      `Signals → CE ${d.signal_counts?.CE||0}, PE ${d.signal_counts?.PE||0}, WAIT ${d.signal_counts?.WAIT||0}. `
-      + `Win rate ${wr.toFixed(1)}% vs coin-flip baseline ${bl.toFixed(1)}% for this stop/target geometry. `
-      + `Expectancy ${Number(d.expectancy_r||0).toFixed(3)} R. Direction: ${cfg.mode||"--"}.`
-    );
-    const em=d.exit_mix||{};
-    setText("btExits",
-      `Exits → target ${em.target||0}, stop ${em.stop||0}, time ${em.time||0} `
-      + `(${Number(em.time_exit_percent||0).toFixed(0)}% time). `
-      + `Edge basis: ${d.edge_basis||"--"}. `
-      + (Number(em.time_exit_percent||0)>60
-          ? "Most trades never reach a barrier, so R:R and Max Hold are fighting each other — lower R:R or raise Max Hold."
-          : "Barrier resolution is healthy.")
-    );
-    const ca=d.cost_attribution||{};
-    if(ca.net_r_per_trade!==undefined){
-      setText("btCosts",
-        `Where the money goes, per trade → signal ${Number(ca.gross_r_per_trade||0).toFixed(3)} R, `
-        + `slippage ${Number(ca.slippage_r_per_trade||0).toFixed(3)} R, `
-        + `fees ${Number(ca.fee_r_per_trade||0).toFixed(3)} R, `
-        + `net ${Number(ca.net_r_per_trade||0).toFixed(3)} R. `
-        + (ca.slippage_share_of_total_cost!=null
-            ? `Slippage is ${Number(ca.slippage_share_of_total_cost).toFixed(0)}% of all costs. `
-            : "")
-        + (Math.abs(Number(ca.slippage_r_per_trade||0))>Math.abs(Number(ca.gross_r_per_trade||0))
-            ? "Costs dominate the signal — widen Stop Width or trade less often before touching the signal."
-            : "Signal dominates costs — the direction is the thing to work on.")
-      );
-    }
-    setText("btStatus",`Completed · ${d.total_trades} trades · ${d.verdict||"--"}`);
-    renderBacktestEquity(d.equity_curve||[]);
-    el("btHistory").innerHTML=(d.trades||[]).slice().reverse().map(t=>`
-      <tr>
-        <td>${new Date(t.entry_time).toLocaleString()}</td>
-        <td>${t.signal}</td>
-        <td>${Number(t.score).toFixed(2)}</td>
-        <td>${t.source||"--"}</td>
-        <td>${t.regime}</td>
-        <td>${Number(t.pnl)>=0?"+":""}₹${Number(t.pnl).toFixed(2)}</td>
-        <td>${t.exit_reason}</td>
-        <td>₹${Number(t.capital_after).toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
-      </tr>`).join("")||'<tr><td colspan="8">No qualifying signals in this period.</td></tr>';
-  }catch(e){
-    setText("btStatus","Error: "+e.message);
-  }
+    let paper={};try{const pr=await fetch("/api/paper/summary",{cache:"no-store"}),pj=await pr.json();paper=pj.summary||{}}catch(_){}
+    setText("btAutoQty",paper.quantity||"--");setText("btAutoConfidence",Number(paper.min_confidence||0).toFixed(0)+"%");
+    const qs=new URLSearchParams({starting_capital:String(capital),period,threshold:"0.30",risk_per_trade:"0.02",reward_risk:"0.7",compounding:"false",fee_per_trade:"40",slippage_points:"2",mode:"reversion_only",max_hold:"6",stop_atr_mult:"2.0"});
+    const r=await fetch("/v13/backtest?"+qs.toString(),{cache:"no-store"}),d=await r.json();if(!r.ok||d.status!=="success")throw new Error(d.message||"Backtest failed");
+    const finalCapital=Number(d.final_capital||capital),net=finalCapital-capital,trades=Number(d.total_trades||0),wins=Math.round(trades*Number(d.win_rate||0)/100),losses=Math.max(0,trades-wins);
+    setText("btFinal","₹"+finalCapital.toLocaleString("en-IN",{maximumFractionDigits:2}));setText("btNetPnl",(net>=0?"+":"")+"₹"+net.toLocaleString("en-IN",{maximumFractionDigits:2}));setText("btReturn",(Number(d.return_percent)>=0?"+":"")+Number(d.return_percent||0).toFixed(2)+"%");setText("btTrades",trades);setText("btWL",wins+" / "+losses);setText("btWinRate",Number(d.win_rate||0).toFixed(1)+"%");setText("btDD",Number(d.max_drawdown_percent||0).toFixed(2)+"%");
+    setText("btDiagnostics",`Signals → CE ${d.signal_counts?.CE||0}, PE ${d.signal_counts?.PE||0}, WAIT ${d.signal_counts?.WAIT||0}. Historical option-chain values are not fabricated.`);
+    setText("btStatus",`Completed · ${trades} trades`);renderBacktestEquity(d.equity_curve||[]);
+    el("btHistory").innerHTML=(d.trades||[]).slice().reverse().map(t=>`<tr><td>${new Date(t.entry_time).toLocaleString()}</td><td>${t.signal}</td><td>${t.regime||"--"}</td><td>${Number(t.pnl)>=0?"+":""}₹${Number(t.pnl||0).toFixed(2)}</td><td>${t.exit_reason||"--"}</td><td>₹${Number(t.capital_after||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</td></tr>`).join("")||'<tr><td colspan="6">No qualifying trades in this period.</td></tr>';
+  }catch(e){setText("btStatus","Failed · "+e.message);setText("btDiagnostics","Backtest could not complete: "+e.message)}
 }
-
-
-
-
-
-
-
 
 async function uploadHistoryBackfill(){
   const input=document.getElementById("historyBackfillFile");
