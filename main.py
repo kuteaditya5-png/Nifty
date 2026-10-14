@@ -4588,6 +4588,43 @@ body{background:radial-gradient(ellipse at 50% -18%,#102954 0%,#030b1b 52%)!impo
 @media(max-width:980px){.topbar{justify-content:center!important}.topbar .actions{margin-left:0}.brand{font-size:25px!important}#mainHorizontalNav{order:3;flex-basis:100%;justify-content:flex-start;overflow-x:auto;flex-wrap:nowrap!important}#mainHorizontalNav .app-tab{white-space:nowrap}}
 @media(max-width:640px){.shell{width:96%!important}.topbar{padding:10px!important}.ui-signature{font-size:10px}.topbar .actions{gap:4px}.topbar .actions button{padding:7px!important}.backtest-panel{top:115px!important;max-height:calc(100vh - 130px)!important}}
 </style>
+<style id="aditya-mobile-first-v18-1">
+/* Mobile-only presentation improvements; trading logic is unchanged. */
+html,body{max-width:100%;overflow-x:hidden}
+#mainHorizontalNav{scrollbar-width:thin;scrollbar-color:#2b6cff transparent}
+#mainHorizontalNav .app-tab{flex:0 0 auto}
+@media(max-width:760px){
+  .shell{width:100%!important;max-width:100%!important;padding:8px 10px 80px!important;margin:0 auto!important;box-sizing:border-box}
+  .topbar{display:grid!important;grid-template-columns:1fr auto!important;gap:8px!important;padding:12px!important;border-radius:14px!important}
+  .brandline,.brand{min-width:0!important}.brand{font-size:24px!important;letter-spacing:-.5px!important}
+  .topbar .actions{grid-column:1/-1!important;width:100%!important;display:flex!important;align-items:center!important;gap:7px!important;flex-wrap:wrap!important;margin:0!important}
+  .topbar .actions .pill{font-size:10px!important;padding:5px 7px!important}
+  .topbar .actions button{font-size:11px!important;padding:8px 9px!important;min-height:36px!important}
+  #mainHorizontalNav{position:sticky!important;top:0!important;z-index:60!important;display:flex!important;flex-wrap:nowrap!important;justify-content:flex-start!important;overflow-x:auto!important;overscroll-behavior-x:contain;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;width:100%!important;max-width:100%!important;box-sizing:border-box;margin:8px 0 12px!important;padding:7px!important;background:#06172f!important;border:1px solid #1b3b68!important;border-radius:13px!important;box-shadow:0 10px 24px rgba(0,0,0,.3)}
+  #mainHorizontalNav .app-tab{scroll-snap-align:start;padding:10px 13px!important;min-height:40px!important;font-size:12px!important}
+  .topgrid,.main-layout,.manual-option-grid,.auto-grid{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:10px!important}
+  .card,.section-card,.sidecard,.metric,.tradebox,.manual-chain,.manual-ticket{min-width:0!important;max-width:100%!important;box-sizing:border-box}
+  .card,.section-card,.sidecard{padding:13px!important;border-radius:14px!important}
+  .prediction-card{order:0}.trade-card{order:1}.market-card{order:2}
+  .signalrow{flex-wrap:wrap!important;gap:12px!important}.signal{font-size:clamp(24px,7vw,34px)!important}
+  .tradeboxes{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
+  .tradebox{padding:11px!important}.tradebox .v{font-size:clamp(15px,4.4vw,23px)!important;overflow-wrap:anywhere}
+  .manual-option-grid{margin:10px 0!important}.manual-chain{overflow-x:auto!important}.option-table{min-width:650px!important}
+  table{max-width:none} .table-wrap,.table-scroll,.table-container{max-width:100%!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch}
+  input,select,textarea{max-width:100%!important;box-sizing:border-box;font-size:16px!important}
+  button{touch-action:manipulation}button,input[type=button],input[type=submit]{min-height:38px}
+  canvas,svg{max-width:100%} .backtest-panel{position:fixed!important;left:8px!important;right:8px!important;top:8px!important;bottom:8px!important;transform:none!important;width:auto!important;max-height:none!important;overflow-y:auto!important;overscroll-behavior:contain;padding:12px!important;z-index:200!important;border-radius:14px!important}
+  .backtest-grid,.ticket-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .ui-signature{font-size:11px!important;white-space:normal!important}
+}
+@media(max-width:390px){
+  .shell{padding-left:7px!important;padding-right:7px!important}
+  .brand{font-size:22px!important}
+  .topbar .actions button{padding:7px!important}
+  .backtest-grid{grid-template-columns:1fr!important}
+}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
+</style>
 </head>
 <body>
 <div class="backtest-panel" id="backtestPanel">
