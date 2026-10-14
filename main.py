@@ -4565,13 +4565,31 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
 .ticket-note{font-size:11px;line-height:1.45;color:#8ba2c3;margin:11px 0}.manual-buy{width:100%}
 @media(max-width:900px){.manual-option-grid{grid-template-columns:1fr}.option-table{min-width:650px}}
 </style>
+<style id="aditya-modern-dark-v18">
+/* UI-only redesign. All original trading calculations and endpoints remain intact. */
+:root{--bg:#030b1b;--panel:#07152b;--panel2:#07152b;--line:#193a65;--blue:#2368ff;--green:#11e5a4}
+body{background:radial-gradient(ellipse at 50% -18%,#102954 0%,#030b1b 52%)!important;color:#ecf4ff}
+.sidebar-nav{display:none!important}
+.shell{width:min(1640px,98%)!important;padding-top:12px!important}
+.topbar{position:relative;display:flex!important;flex-wrap:wrap;align-items:center!important;gap:12px!important;padding:12px 15px!important;border:1px solid #193a65;border-radius:16px;background:rgba(4,15,34,.94);box-shadow:0 12px 40px rgba(0,0,0,.25)}
+.brand{font-size:29px!important;white-space:nowrap}.brand span{color:#5480ff!important}.brandline .tag{display:none}
+#mainHorizontalNav{display:flex!important;gap:5px!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;flex:1;align-items:center;justify-content:center;flex-wrap:wrap}
+#mainHorizontalNav .app-tab{border-radius:10px!important;padding:10px 13px!important;font-size:12px!important;background:transparent!important;color:#c4d6f3!important}
+#mainHorizontalNav .app-tab.active,#mainHorizontalNav .app-tab:hover{background:linear-gradient(135deg,#1246be,#286dff)!important;color:#fff!important;box-shadow:0 0 17px rgba(42,111,255,.24)}
+.topbar .actions{margin-left:auto}.topbar .actions .pill:first-child{font-size:11px}
+.card,.section-card,.sidecard,.metric,.tradebox{border-radius:15px!important;border-color:#1b3b68!important;background:linear-gradient(155deg,rgba(8,26,55,.98),rgba(3,15,35,.98))!important}
+.card{box-shadow:0 12px 32px rgba(0,0,0,.18)}
+.prediction-card{border-color:#116a66!important;background:linear-gradient(145deg,#063b3d,#061a34)!important}
+.prediction-card .signal{color:#16e9a8!important}.tradebox.entry{border-color:#2868c7!important}.tradebox.stop{border-color:#8c3548!important}.tradebox.target{border-color:#176b55!important}
+.primary,button.primary{background:linear-gradient(135deg,#1c66ff,#2052d5)!important;color:#fff!important;border-color:#3d7fff!important}
+.market-open{white-space:nowrap}.topgrid{gap:13px!important}.main-layout{gap:13px!important}
+.backtest-panel{left:50%!important;transform:translateX(-50%);top:90px!important;width:min(1080px,96vw)!important;max-height:calc(100vh - 105px)!important;z-index:80!important}
+.ui-signature{font-size:12px;font-weight:700;color:#9db3d5;white-space:nowrap}.ui-signature strong{color:#72a1ff;font-weight:900}
+@media(max-width:980px){.topbar{justify-content:center!important}.topbar .actions{margin-left:0}.brand{font-size:25px!important}#mainHorizontalNav{order:3;flex-basis:100%;justify-content:flex-start;overflow-x:auto;flex-wrap:nowrap!important}#mainHorizontalNav .app-tab{white-space:nowrap}}
+@media(max-width:640px){.shell{width:96%!important}.topbar{padding:10px!important}.ui-signature{font-size:10px}.topbar .actions{gap:4px}.topbar .actions button{padding:7px!important}.backtest-panel{top:115px!important;max-height:calc(100vh - 130px)!important}}
+</style>
 </head>
 <body>
-<div class="sidebar-nav">
-  <button class="active" onclick="showMainDashboard(this)"><span class="nav-icon">⌂</span>Dashboard</button>
-  <button onclick="toggleBacktestPanel(this)"><span class="nav-icon">↺</span>Backtest</button>
-</div>
-
 <div class="backtest-panel" id="backtestPanel">
   <div class="section-head"><div><div class="section-title">Auto Trade Backtest</div><div class="section-sub">Focused historical replay for the current CE / PE / WAIT trading direction.</div></div><button onclick="closeBacktestPanel()">✕</button></div>
   <div class="backtest-grid">
@@ -4607,11 +4625,12 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
   </div>
 
 
-  <div class="app-tabs">
+  <div class="app-tabs" id="mainHorizontalNav">
     <button class="app-tab active" data-tab="dashboard" onclick="showAppTab('dashboard')">Dashboard</button>
     <button class="app-tab" data-tab="trading" onclick="showAppTab('trading')">Trading</button>
     <button class="app-tab" data-tab="history" onclick="showAppTab('history')">History</button>
     <button class="app-tab" data-tab="validation" onclick="showAppTab('validation')">Validation</button>
+    <button class="app-tab" id="navBacktest" onclick="toggleBacktestPanel(this)">Backtest</button>
   </div>
   <div class="error" id="errorBox"></div>
 
@@ -5759,6 +5778,26 @@ async function loadAll(){
 }
 function changeInterval(v){currentInterval=v;document.querySelectorAll("[data-i]").forEach(b=>b.classList.toggle("active",b.dataset.i===v));loadAll()}
 loadAll();setInterval(loadAll,60000);
+</script>
+<script id="aditya-horizontal-nav-init">
+(function(){
+  function initModernNav(){
+    const bar=document.querySelector('.topbar');
+    const nav=document.getElementById('mainHorizontalNav');
+    if(!bar||!nav)return;
+    const brand=bar.querySelector('.brandline');
+    if(brand)brand.insertAdjacentElement('afterend',nav);else bar.prepend(nav);
+    if(!bar.querySelector('.ui-signature')){
+      const signature=document.createElement('span');signature.className='ui-signature';
+      signature.innerHTML='Made by <strong>Aditya</strong>';
+      bar.appendChild(signature);
+    }
+    document.querySelectorAll('#mainHorizontalNav .app-tab[data-tab]').forEach(btn=>{
+      btn.addEventListener('click',()=>{document.getElementById('backtestPanel')?.classList.remove('open');document.getElementById('navBacktest')?.classList.remove('active');});
+    });
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initModernNav);else initModernNav();
+})();
 </script>
 </body>
 </html>
