@@ -13548,3 +13548,39 @@ def v15172_futures_monthly_discovery(max_contracts:int=6,scan_limit:int=102):
         }
     except Exception as e:
         return {"status":"error","message":str(e)}
+
+# v18.0: research-only candlestick + multi-timeframe challenger.
+# Existing /prediction, /fno-alerts and Auto Paper Trade remain unchanged.
+from v18 import classify as _v18_classify, replay as _v18_replay, VERSION as _v18_version
+
+@app.get('/api/v18/status')
+def v18_status():
+    return {'status':'success','version':_v18_version,'mode':'RESEARCH_ONLY','live_trading_changed':False,'features':['completed 5m candles','completed 15m trend','bullish/bearish engulfing','hammer','shooting star','morning/evening star','doji','RSI','support/resistance','volume-verified VWAP','trend/range separation','10:00 IST diagnostic replay'],'historical_option_pnl_available':False}
+
+@app.get('/api/v18/decision')
+def v18_decision():
+    try:
+        bars=yf.Ticker('^NSEI').history(period='5d',interval='5m')
+        if bars is None or bars.empty:return {'status':'error','message':'NIFTY candles unavailable'}
+        bars=bars.sort_index()
+        if bars.index.tz is not None:bars.index=bars.index.tz_convert('Asia/Kolkata').tz_localize(None)
+        # Exclude the potentially incomplete latest candle.
+        now=pd.Timestamp.now(tz='Asia/Kolkata').tz_localize(None)
+        bars=bars[bars.index+pd.Timedelta(minutes=5)<=now]
+        fifteen=bars.resample('15min',label='left',closed='left').agg({'Open':'first','High':'max','Low':'min','Close':'last'}).dropna()
+        fifteen=fifteen[fifteen.index+pd.Timedelta(minutes=15)<=now]
+        return {'status':'success','version':_v18_version,'mode':'RESEARCH_ONLY','production_unchanged':True,'decision':_v18_classify(bars,fifteen)}
+    except Exception as exc:return {'status':'error','message':str(exc)}
+
+@app.get('/api/v18/backtest')
+def v18_backtest(period: str='30d'):
+    if period not in ('7d','30d','60d'):
+        return {'status':'error','message':'Allowed periods: 7d, 30d, 60d'}
+    try:
+        # 5m Yahoo history has a limited lookback; never silently fabricate missing days.
+        bars=yf.Ticker('^NSEI').history(period=period,interval='5m')
+        result=_v18_replay(bars)
+        result['requested_period']=period
+        result['data_rows']=len(bars)
+        return result
+    except Exception as exc:return {'status':'error','message':str(exc)}
