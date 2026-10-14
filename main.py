@@ -4625,6 +4625,56 @@ html,body{max-width:100%;overflow-x:hidden}
 }
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
 </style>
+
+<style id="aditya-mobile-v18-2-layout-repair">
+/* v18.2: repair mobile layout without changing trade decisions. */
+@media (max-width:760px){
+ html,body{width:100%!important;min-width:0!important;overflow-x:clip!important}
+ .shell{width:100%!important;min-width:0!important;max-width:100vw!important;padding:10px 12px 80px!important}
+ .topbar{display:flex!important;flex-direction:column!important;align-items:stretch!important;justify-content:flex-start!important;gap:10px!important;width:100%!important;min-width:0!important;padding:12px!important;margin-bottom:8px!important}
+ .topbar>div:first-child{width:100%!important;min-width:0!important}
+ .brandline{display:flex!important;justify-content:space-between!important;align-items:center!important;width:100%!important;min-width:0!important}
+ .brand{font-size:23px!important;line-height:1.2!important;max-width:100%!important;overflow:visible!important}
+ .topbar .actions{width:100%!important;min-width:0!important;display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;align-items:center!important;gap:7px!important;margin:0!important}
+ .topbar .actions>div:first-child{grid-column:1/-1!important;min-width:0!important;flex-wrap:wrap!important}
+ .topbar .actions>.market-open{grid-column:1/3!important;min-width:0!important;font-size:11px!important;white-space:normal!important}
+ .topbar .actions>#lastUpdated{grid-column:3!important;font-size:10px!important;white-space:normal!important;text-align:center!important;overflow-wrap:anywhere!important}
+ .topbar .actions>button{min-width:0!important;width:100%!important;padding:9px 3px!important;font-size:11px!important;white-space:nowrap!important}
+ .ui-signature{display:block!important;font-size:11px!important;white-space:normal!important;max-width:100%!important}
+ #mainHorizontalNav{position:relative!important;top:auto!important;display:flex!important;flex-wrap:nowrap!important;justify-content:flex-start!important;width:100%!important;min-width:0!important;max-width:100%!important;overflow-x:auto!important;overflow-y:hidden!important;margin:0 0 12px!important;padding:6px!important;gap:4px!important;scrollbar-width:thin!important;-webkit-overflow-scrolling:touch!important}
+ #mainHorizontalNav .app-tab{flex:0 0 auto!important;min-width:max-content!important;padding:10px 12px!important;font-size:12px!important}
+ .topgrid,.main-layout{display:grid!important;grid-template-columns:minmax(0,1fr)!important;width:100%!important;min-width:0!important}
+ .topgrid>*,.main-layout>*,.card,.prediction-card,.trade-card,.market-card{width:100%!important;min-width:0!important;max-width:100%!important;grid-column:auto!important}
+ .prediction-card{padding:16px!important;min-height:0!important;text-align:left!important;overflow:hidden!important}
+ .prediction-card:before,.prediction-card:after{display:none!important;content:none!important}
+ .prediction-card .eyebrow{text-align:left!important}
+ .prediction-card .signalrow{display:flex!important;flex-direction:column!important;align-items:stretch!important;justify-content:flex-start!important;gap:10px!important;height:auto!important;min-height:0!important;margin-top:10px!important}
+ .prediction-card .signalwrap{display:flex!important;flex-direction:row!important;align-items:center!important;justify-content:flex-start!important;gap:12px!important;min-width:0!important}
+ .prediction-card .signalwrap>div:last-child{min-width:0!important}
+ .prediction-card .arrow{font-size:31px!important;flex-shrink:0!important}
+ .prediction-card .signal{font-size:clamp(30px,9vw,40px)!important;line-height:1.1!important;overflow-wrap:anywhere!important}
+ .prediction-card .signal-sub{font-size:13px!important;line-height:1.45!important;overflow-wrap:anywhere!important;margin-top:5px!important}
+ .prediction-card .conf{position:static!important;inset:auto!important;display:grid!important;grid-template-columns:auto 1fr!important;align-items:center!important;gap:3px 12px!important;text-align:left!important;padding-top:10px!important;border-top:1px solid rgba(118,166,232,.25)!important;width:100%!important}
+ .prediction-card .conf b{font-size:19px!important;text-align:right!important}
+ .prediction-card .conf #signalTime{grid-column:1/-1!important;display:block!important;font-size:11px!important;line-height:1.5!important;white-space:normal!important;overflow-wrap:anywhere!important}
+ .trade-card{min-height:0!important;padding:14px!important}
+ .trade-card .section-sub{font-size:12px!important;line-height:1.5!important;overflow-wrap:anywhere!important}
+ .tradeboxes{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
+ .tradebox{min-width:0!important;padding:11px!important}
+ .tradebox .eyebrow{font-size:10px!important;letter-spacing:.04em!important}
+ .tradebox .v{font-size:clamp(14px,4vw,18px)!important;line-height:1.4!important;overflow-wrap:anywhere!important;word-break:normal!important}
+ .chart-card,.chart-wrap,.toolbar,.intervals{min-width:0!important;max-width:100%!important}
+ .chart-wrap{height:320px!important}
+ .toolbar{flex-wrap:wrap!important}
+ .side{display:grid!important;grid-template-columns:minmax(0,1fr)!important}
+ .metrics{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important}
+ .option-table{min-width:650px!important}
+ .backtest-panel{left:8px!important;right:8px!important;top:8px!important;bottom:8px!important;width:auto!important;max-width:none!important;max-height:none!important;transform:none!important;overflow-y:auto!important}
+ .trade-card.wait-reference .tradeboxes{opacity:.55!important}
+ .trade-card.wait-reference:after{content:'WAIT — Reference levels only. No active trade.';display:block;font-size:11px;color:#ffd18a;margin-top:10px;font-weight:700}
+}
+@media(max-width:370px){.shell{padding-left:8px!important;padding-right:8px!important}.topbar .actions>button{font-size:10px!important}.tradebox .v{font-size:14px!important}}
+</style>
 </head>
 <body>
 <div class="backtest-panel" id="backtestPanel">
@@ -5834,6 +5884,21 @@ loadAll();setInterval(loadAll,60000);
     });
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initModernNav);else initModernNav();
+})();
+</script>
+<script id="v18-2-mobile-wait-visual">
+(function(){
+ function syncWaitVisual(){
+  var signal=document.getElementById('signal');
+  var card=document.querySelector('.trade-card');
+  if(!signal||!card)return;
+  card.classList.toggle('wait-reference',/^WAIT\b/i.test((signal.textContent||'').trim()));
+ }
+ document.addEventListener('DOMContentLoaded',function(){
+  var el=document.getElementById('signal');
+  if(el){new MutationObserver(syncWaitVisual).observe(el,{childList:true,characterData:true,subtree:true});}
+  syncWaitVisual();
+ });
 })();
 </script>
 </body>
