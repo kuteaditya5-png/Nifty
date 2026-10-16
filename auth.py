@@ -395,7 +395,7 @@ def setup_auth(app, fno_alert_provider=None):
                 cur.execute("SELECT COALESCE(SUM(COALESCE(current_price,entry_price)*quantity),0),MAX(last_price_at) FROM paper_trades WHERE user_id=%s AND status='OPEN'",(user["user_id"],))
                 v=cur.fetchone(); open_value=float(v[0] or 0); last_quote=v[1]
         closed=int(x[3] or 0); wins=int(x[4] or 0)
-        return {"status":"success","summary":{"starting_balance":float(a[0]),"cash_balance":float(a[1]),"equity":float(a[1])+float(x[0])+float(open_value),"last_price_at":last_quote.isoformat() if last_quote else None,"open_pnl":float(x[0]),"realized_pnl":float(x[1]),"open_positions":int(x[2]),"win_rate":round(wins/closed*100,1) if closed else 0,"auto_trade":a[2],"quantity":a[3],"min_confidence":float(a[4])}}
+        return {"status":"success","summary":{"starting_balance":float(a[0]),"cash_balance":float(a[1]),"equity":float(a[1])+float(open_value),"last_price_at":last_quote.isoformat() if last_quote else None,"open_pnl":float(x[0]),"realized_pnl":float(x[1]),"open_positions":int(x[2]),"win_rate":round(wins/closed*100,1) if closed else 0,"auto_trade":a[2],"quantity":a[3],"min_confidence":float(a[4])}}
 
     @app.get("/api/paper/history")
     def paper_history(request: Request, date_from: Optional[str]=None, date_to: Optional[str]=None, limit: int=500):

@@ -5940,6 +5940,76 @@ loadAll();setInterval(loadAll,60000);setInterval(()=>{if(document.visibilityStat
 # F&O ALERT ENGINE - VERSION 7
 # ============================================================
 
+def _v185_trend_observation(data):
+    """Research-only Supertrend(10,3), ADX(14), ATR(14) on completed 5m candles.
+    No changes to BUY CE / BUY PE / WAIT or prediction weights.
+    """
+    empty = {"status": "unavailable", "mode": "observation", "timeframe": "5m",
+             "supertrend": {"period": 10, "multiplier": 3, "direction": "UNAVAILABLE", "value": None},
+             "adx": {"period": 14, "value": None, "plus_di": None, "minus_di": None, "strength": "UNAVAILABLE"},
+             "atr": {"period": 14, "value": None, "percent_of_spot": None},
+             "last_completed_candle": None}
+    try:
+        import numpy as np
+        frame = _completed_intraday_frame(data, interval_minutes=5)
+        if frame is None or len(frame) < 45:
+            return empty
+        high = frame["High"].astype(float)
+        low = frame["Low"].astype(float)
+        close = frame["Close"].astype(float)
+        pc = close.shift(1)
+        tr = pd.concat([high-low, (high-pc).abs(), (low-pc).abs()], axis=1).max(axis=1)
+        # Wilder-smoothed ATR / directional movement; no forward-looking candles.
+        atr14 = tr.ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+        up = high.diff()
+        down = -low.diff()
+        pdm = up.where((up>down)&(up>0), 0.0)
+        mdm = down.where((down>up)&(down>0), 0.0)
+        pdi = 100*pdm.ewm(alpha=1/14, adjust=False, min_periods=14).mean()/atr14.replace(0, np.nan)
+        mdi = 100*mdm.ewm(alpha=1/14, adjust=False, min_periods=14).mean()/atr14.replace(0, np.nan)
+        dx = 100*(pdi-mdi).abs()/(pdi+mdi).replace(0, np.nan)
+        adx = dx.ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+        atr10 = tr.ewm(alpha=1/10, adjust=False, min_periods=10).mean()
+        mid = (high+low)/2
+        ub = (mid+3*atr10).to_numpy(dtype=float)
+        lb = (mid-3*atr10).to_numpy(dtype=float)
+        cls = close.to_numpy(dtype=float)
+        upper = ub.copy()
+        lower = lb.copy()
+        direction = np.ones(len(cls), dtype=int)
+        for i in range(1, len(cls)):
+            if not np.isfinite(ub[i]) or not np.isfinite(lb[i]):
+                continue
+            if np.isfinite(upper[i-1]) and (ub[i]>=upper[i-1] and cls[i-1]<=upper[i-1]):
+                upper[i] = upper[i-1]
+            if np.isfinite(lower[i-1]) and (lb[i]<=lower[i-1] and cls[i-1]>=lower[i-1]):
+                lower[i] = lower[i-1]
+            if cls[i]>upper[i-1]:
+                direction[i]=1
+            elif cls[i]<lower[i-1]:
+                direction[i]=-1
+            else:
+                direction[i]=direction[i-1]
+        def val(x):
+            x=float(x)
+            return round(x, 3) if np.isfinite(x) else None
+        a=val(adx.iloc[-1]); v=val(atr14.iloc[-1]); spot=val(close.iloc[-1]);
+        if a is None or v is None:
+            return empty
+        trend = 'BULLISH' if direction[-1]>0 else 'BEARISH'
+        return {"status":"success", "mode":"observation", "timeframe":"5m",
+                "supertrend":{"period":10,"multiplier":3,"direction":trend,
+                              "value":val(lower[-1] if direction[-1]>0 else upper[-1])},
+                "adx":{"period":14,"value":a,"plus_di":val(pdi.iloc[-1]),
+                       "minus_di":val(mdi.iloc[-1]),
+                       "strength":"WEAK" if a<20 else "DEVELOPING" if a<25 else "STRONG"},
+                "atr":{"period":14,"value":v,"percent_of_spot":round(v/spot*100,3) if spot else None},
+                "last_completed_candle":str(frame.index[-1]),
+                "message":"Observation only; does not alter trading calls or confidence."}
+    except Exception:
+        return empty
+
+
 def _calculate_intraday_atr(data, period=14):
     """
     Calculate a compact intraday ATR from the currently available candles.
@@ -6665,6 +6735,7 @@ def prediction(include_alerts: bool = False):
         # -----------------------------
         # 9. MULTI-TIMEFRAME PRICE ACTION
         # -----------------------------
+        trend_observation = _v185_trend_observation(market_data)
         price_action_data = calculate_price_action_confirmation(market_data)
         price_action_available = price_action_data.get("status") == "success"
         price_action_score = float(price_action_data.get("score", 0) or 0)
@@ -6835,6 +6906,42 @@ def prediction(include_alerts: bool = False):
         )
 
         # -----------------------------
+        # v18.6: ACTIVE 5-MINUTE TREND CONFIRMATION
+        # Only completed candles; capped adjustment prevents indicator overlap
+        # from overpowering the existing multi-source prediction model.
+        # ATR is used as a volatility/risk filter, never a direction signal.
+        # -----------------------------
+        active_trend = {"status": "unavailable", "mode": "active", "score_adjustment": 0.0,
+                        "direction": "NEUTRAL", "adx_filter": "UNAVAILABLE",
+                        "atr_filter": "UNAVAILABLE", "reason": "Insufficient completed 5-minute candles."}
+        if trend_observation.get("status") == "success":
+            st = trend_observation["supertrend"].get("direction")
+            adx_val = trend_observation["adx"].get("value")
+            di_plus = trend_observation["adx"].get("plus_di")
+            di_minus = trend_observation["adx"].get("minus_di")
+            atr_pct = trend_observation["atr"].get("percent_of_spot")
+            if all(isinstance(v, (int, float)) for v in (adx_val, di_plus, di_minus, atr_pct)):
+                # Require Supertrend and directional movement to agree.
+                st_dir = 1 if st == "BULLISH" else -1 if st == "BEARISH" else 0
+                di_dir = 1 if di_plus > di_minus else -1 if di_minus > di_plus else 0
+                agreement = st_dir if st_dir == di_dir else 0
+                # ADX<20 is choppy; 20-25 developing; >=25 trending.
+                strength = 0.0 if adx_val < 20 else 0.5 if adx_val < 25 else 1.0
+                # 5-minute ATR above 0.5% of index level signals exceptional volatility.
+                high_volatility = atr_pct > 0.5
+                adjustment = round(0.09 * agreement * strength * (0.5 if high_volatility else 1.0), 4)
+                combined_score = max(-1.0, min(1.0, combined_score + adjustment))
+                active_trend = {
+                    "status": "success", "mode": "active", "score_adjustment": adjustment,
+                    "direction": "BULLISH" if agreement > 0 else "BEARISH" if agreement < 0 else "NEUTRAL",
+                    "adx_filter": "WEAK" if adx_val < 20 else "DEVELOPING" if adx_val < 25 else "STRONG",
+                    "atr_filter": "HIGH_VOLATILITY" if high_volatility else "NORMAL",
+                    "reason": "Supertrend and DI agree" if agreement else "Supertrend and DI disagree or are neutral",
+                }
+        trend_observation["mode"] = "active"
+        trend_observation["active_prediction"] = active_trend
+
+        # -----------------------------
         # 20. PROBABILITY MODEL
         # -----------------------------
         direction_strength = abs(combined_score)
@@ -6977,6 +7084,15 @@ def prediction(include_alerts: bool = False):
         else:
             fno_setup = "WAIT"
 
+        # v18.6 conservative entry filter: no new CE/PE watch when
+        # completed-candle ADX is weak or ATR signals exceptional volatility.
+        # Fail open for unavailable data, preserving existing predictions.
+        if fno_setup != "WAIT" and active_trend["status"] == "success":
+            if active_trend["adx_filter"] == "WEAK" or active_trend["atr_filter"] == "HIGH_VOLATILITY":
+                fno_setup = "WAIT"
+            elif (fno_setup == "CE WATCH" and active_trend["direction"] == "BEARISH") or (fno_setup == "PE WATCH" and active_trend["direction"] == "BULLISH"):
+                fno_setup = "WAIT"
+
         # Explain exactly why the current setup is WAIT/CE/PE.
         setup_reasons = []
         if fno_setup == "CE WATCH":
@@ -7008,6 +7124,13 @@ def prediction(include_alerts: bool = False):
             if data_coverage < 0.72:
                 setup_reasons.append("Live data coverage is below the preferred 72% threshold.")
 
+        if fno_setup == "WAIT" and active_trend["status"] == "success":
+            if active_trend["adx_filter"] == "WEAK":
+                setup_reasons.insert(0, "ADX below 20: trend strength is weak.")
+            elif active_trend["atr_filter"] == "HIGH_VOLATILITY":
+                setup_reasons.insert(0, "5-minute ATR exceeds 0.5% of index price: elevated volatility.")
+            elif active_trend["direction"] != "NEUTRAL":
+                setup_reasons.insert(0, "Active Supertrend/DI confirmation: " + active_trend["direction"] + ".")
         fno_setup_reason = " ".join(setup_reasons[:3]) or "Signals are mixed, so the model is waiting for stronger confirmation."
 
         # -----------------------------
@@ -7038,7 +7161,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "15.0",
+            "model_version": "18.6",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7148,6 +7271,7 @@ def prediction(include_alerts: bool = False):
                     "score": round(option_score, 3),
                     "message": option_data.get("message")
                 },
+                "trend_observation_v185": trend_observation,
                 "price_action": {
                     "status": price_action_data.get("status"),
                     "bias": price_action_data.get("bias", "NEUTRAL"),
@@ -7891,7 +8015,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "15.0",
+            "model_version": "18.6",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -8409,7 +8533,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "15.0",
+        "model_version": "18.6",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -8955,7 +9079,7 @@ def v149_history_readiness():
 
         return {
             "status": "success",
-            "model_version": "15.0",
+            "model_version": "18.6",
             **gate
         }
 
@@ -10154,7 +10278,7 @@ def v145_extended_validation(
 
         return {
             "status": "success",
-            "model_version": "15.0",
+            "model_version": "18.6",
             "requested_months": months,
             "actual_yfinance_period": actual_period,
             "historical_candles": len(df),
@@ -10445,7 +10569,7 @@ def v144_regime_aware_walk_forward(
 
         return {
             "status": "success",
-            "model_version": "15.0",
+            "model_version": "18.6",
             "rule_under_test": {
                 "TRENDING": "REVERSION",
                 "RANGE": "WAIT",
@@ -10677,7 +10801,7 @@ def v143_regime_engine_matrix(
 
         return {
             "status": "success",
-            "model_version": "15.0",
+            "model_version": "18.6",
             "period": period,
             "threshold": threshold,
             "matrix": matrix,
@@ -10915,7 +11039,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "15.0",
+            "model_version": "18.6",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
