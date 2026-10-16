@@ -1218,6 +1218,33 @@ def analyze_candlestick_patterns(
             "Three strong consecutive bearish candles with falling closes."
         )
 
+    # v18.4: additional completed-candle confirmations. These are heuristic
+    # detectors; correlated matches are capped by the existing score logic.
+    tol = max(current["range"], previous["range"]) * 0.12
+    if current["range"] > 0:
+        if current["body"] / current["range"] < 0.12 and current["lower_wick"] > current["range"] * 0.65 and current["upper_wick"] < current["range"] * 0.12:
+            add_pattern("DRAGONFLY DOJI", "BULLISH" if prior_trend == "DOWNTREND" else "NEUTRAL", 0.75 if prior_trend == "DOWNTREND" else 0, "Long lower wick and near-equal open/close after a decline.")
+        if current["body"] / current["range"] < 0.12 and current["upper_wick"] > current["range"] * 0.65 and current["lower_wick"] < current["range"] * 0.12:
+            add_pattern("GRAVESTONE DOJI", "BEARISH" if prior_trend == "UPTREND" else "NEUTRAL", -0.75 if prior_trend == "UPTREND" else 0, "Long upper wick and near-equal open/close after a rise.")
+    if prior_trend == "DOWNTREND" and previous["bearish"] and current["bullish"] and abs(previous["low"] - current["low"]) <= tol and current["close"] > (current["low"] + current["high"]) / 2:
+        add_pattern("TWEEZER BOTTOM", "BULLISH", 0.65, "Two nearby lows followed by bullish rejection.")
+    if prior_trend == "UPTREND" and previous["bullish"] and current["bearish"] and abs(previous["high"] - current["high"]) <= tol and current["close"] < (current["low"] + current["high"]) / 2:
+        add_pattern("TWEEZER TOP", "BEARISH", -0.65, "Two nearby highs followed by bearish rejection.")
+    # Three inside/outside patterns use the last three completed candles.
+    a, b, c = two_back, previous, current
+    inside = b["high"] < a["high"] and b["low"] > a["low"]
+    outside = b["high"] > a["high"] and b["low"] < a["low"]
+    if prior_trend == "DOWNTREND" and a["bearish"] and b["bullish"] and c["bullish"]:
+        if inside and c["close"] > a["open"]:
+            add_pattern("THREE INSIDE UP", "BULLISH", 1.0, "Bullish inside candle followed by confirmation above first open.")
+        if outside and c["close"] > b["close"]:
+            add_pattern("THREE OUTSIDE UP", "BULLISH", 1.0, "Bullish outside candle followed by a higher close.")
+    if prior_trend == "UPTREND" and a["bullish"] and b["bearish"] and c["bearish"]:
+        if inside and c["close"] < a["open"]:
+            add_pattern("THREE INSIDE DOWN", "BEARISH", -1.0, "Bearish inside candle followed by confirmation below first open.")
+        if outside and c["close"] < b["close"]:
+            add_pattern("THREE OUTSIDE DOWN", "BEARISH", -1.0, "Bearish outside candle followed by a lower close.")
+
     # Cap overlap from multiple simultaneous pattern matches.
     capped_raw_score = max(
         -3.0,
@@ -4743,8 +4770,8 @@ html,body{max-width:100%;overflow-x:hidden}
     </div>
 
     <div class="card market-card">
-      <div class="eyebrow">Market Status</div><div style="font-weight:800;margin-top:8px">NIFTY</div>
-      <div class="market-price" id="price">--</div><div class="market-change" id="marketBias">--</div><div class="spark"></div>
+      <div style="display:flex;align-items:center;gap:8px"><button type="button" id="marketInfoButton" onclick="toggleMarketInfo()" aria-label="Explain market status" aria-expanded="false" style="width:28px;height:28px;border:1px solid #44617e;border-radius:50%;background:#162c45;color:#bce6ff;font-weight:800;cursor:pointer;flex-shrink:0">ⓘ</button><div class="eyebrow">Market Status</div></div><div style="font-weight:800;margin-top:8px">NIFTY</div>
+      <div class="market-price" id="price">--</div><div class="market-change" id="marketBias">--</div><div id="marketInfoPanel" hidden style="margin-top:12px;padding:12px;border-radius:12px;background:#0c1e32;border:1px solid #34506c;color:#dce9f7;font-size:12px;line-height:1.6;overflow-wrap:anywhere" role="region" aria-label="Market status explanation"><div style="font-weight:800;margin-bottom:6px">Why this market status?</div><div id="marketInfoContent">Waiting for live analysis…</div></div><div class="spark"></div>
     </div>
   </div>
 
@@ -4932,6 +4959,43 @@ function confidenceValue(data,trade){
   if(Number.isFinite(c)&&c<=1)c*=100;
   return Number.isFinite(c)?c:0;
 }
+function toggleMarketInfo(){
+  const panel=el("marketInfoPanel"),btn=el("marketInfoButton");
+  if(!panel)return;
+  panel.hidden=!panel.hidden;
+  if(btn)btn.setAttribute("aria-expanded",String(!panel.hidden));
+}
+function renderMarketInfo(data){
+  const root=el("marketInfoContent");if(!root)return;
+  const signals=data.signals||{};
+  const checks=[
+    ["Technical trend",signals.technical],
+    ["5m / 15m price action",signals.price_action],
+    ["Candlestick patterns",signals.candlestick],
+    ["Options positioning",signals.option_chain],
+    ["Institutional flow",signals.institutional_flow],
+    ["Market breadth",signals.market_breadth],
+    ["Momentum",signals.momentum],
+    ["News sentiment",signals.news]
+  ];
+  const status=String(data.prediction||"UNKNOWN");
+  const header=document.createElement("div");header.textContent=`Status: ${status} · Combined score: ${data.combined_score??"unavailable"}`;
+  root.replaceChildren(header);
+  const desc=document.createElement("div");desc.style.margin="6px 0";
+  desc.textContent=status.includes("SIDEWAYS")||status.includes("NEUTRAL")?"Directional evidence is mixed or insufficient; this does not automatically imply a trade.":"Directional score currently favors "+status.toLowerCase()+" conditions; individual confirmations are listed below.";
+  root.append(desc);
+  const list=document.createElement("div");
+  for(const [label,item] of checks){
+    if(!item||typeof item!=="object")continue;
+    const bias=item.bias||item.pattern_bias||item.fifteen_minute_trend||"";
+    const score=item.score??item.pattern_score;
+    const name=item.primary_pattern&&item.primary_pattern!=="NO CLEAR PATTERN"?` · ${item.primary_pattern}`:"";
+    const detail=[bias,score!=null?`score ${score}`:""].filter(Boolean).join(" · ");
+    const line=document.createElement("div");line.textContent=`• ${label}: ${detail||item.status||"unavailable"}${name}`;list.append(line);
+  }
+  root.append(list);
+  const note=document.createElement("div");note.style.marginTop="8px";note.style.opacity=".75";note.textContent="These are current contributing signals, not a verified attribution of each point in the combined score. CE/PE/WAIT uses additional trading gates.";root.append(note);
+}
 function renderPrediction(data){
   latestPrediction=data;
   const setup=String(data.fno_setup||"WAIT").toUpperCase();
@@ -4949,6 +5013,7 @@ function renderPrediction(data){
   setText("intradaySetupSub",setup.includes("CE")||setup.includes("PE")?`Prediction-confirmed intraday ${setup.includes("CE")?"CE":"PE"} setup · Entry, SL and targets below`:`WAIT · No forced trade. Entry, SL and targets activate when the prediction setup qualifies.`);
   const ts=data.signal_generated_at||new Date().toISOString();setText("signalTime","Signal time: "+new Date(ts).toLocaleTimeString());
   setText("marketBias",`${data.prediction||"--"} · Score ${data.combined_score??"--"}`);
+  renderMarketInfo(data);
   setText("sumSignal",setup);el("sumSignal").style.color=color;setText("sumStrike",typ&&trade.strike?`${trade.strike} ${typ}`:"--");setText("sumConfidence",conf.toFixed(0)+"%");setText("sumEntry",entry);setText("sumStop",stop);setText("sumT1",t1);setText("sumT2",t2);setText("sumReason",reason);
 
   const s=data.signals||{},tech=s.technical||{},pa=s.price_action||{},flow=s.institutional_flow||{},oc=s.option_chain||{},news=s.news||{};
