@@ -4770,8 +4770,8 @@ html,body{max-width:100%;overflow-x:hidden}
     </div>
 
     <div class="card market-card">
-      <div style="display:flex;align-items:center;gap:8px"><button type="button" id="marketInfoButton" onclick="toggleMarketInfo()" aria-label="Explain market status" aria-expanded="false" style="width:28px;height:28px;border:1px solid #44617e;border-radius:50%;background:#162c45;color:#bce6ff;font-weight:800;cursor:pointer;flex-shrink:0">ⓘ</button><div class="eyebrow">Market Status</div></div><div style="font-weight:800;margin-top:8px">NIFTY</div>
-      <div class="market-price" id="price">--</div><div class="market-change" id="marketBias">--</div><div id="marketInfoPanel" hidden style="margin-top:12px;padding:12px;border-radius:12px;background:#0c1e32;border:1px solid #34506c;color:#dce9f7;font-size:12px;line-height:1.6;overflow-wrap:anywhere" role="region" aria-label="Market status explanation"><div style="font-weight:800;margin-bottom:6px">Why this market status?</div><div id="marketInfoContent">Waiting for live analysis…</div></div><div class="spark"></div>
+      <div class="eyebrow">Market Status</div><div style="font-weight:800;margin-top:8px">NIFTY</div>
+      <div class="market-price" id="price">--</div><div class="market-change" id="marketBias">--</div><div class="spark"></div>
     </div>
   </div>
 
@@ -4959,43 +4959,6 @@ function confidenceValue(data,trade){
   if(Number.isFinite(c)&&c<=1)c*=100;
   return Number.isFinite(c)?c:0;
 }
-function toggleMarketInfo(){
-  const panel=el("marketInfoPanel"),btn=el("marketInfoButton");
-  if(!panel)return;
-  panel.hidden=!panel.hidden;
-  if(btn)btn.setAttribute("aria-expanded",String(!panel.hidden));
-}
-function renderMarketInfo(data){
-  const root=el("marketInfoContent");if(!root)return;
-  const signals=data.signals||{};
-  const checks=[
-    ["Technical trend",signals.technical],
-    ["5m / 15m price action",signals.price_action],
-    ["Candlestick patterns",signals.candlestick],
-    ["Options positioning",signals.option_chain],
-    ["Institutional flow",signals.institutional_flow],
-    ["Market breadth",signals.market_breadth],
-    ["Momentum",signals.momentum],
-    ["News sentiment",signals.news]
-  ];
-  const status=String(data.prediction||"UNKNOWN");
-  const header=document.createElement("div");header.textContent=`Status: ${status} · Combined score: ${data.combined_score??"unavailable"}`;
-  root.replaceChildren(header);
-  const desc=document.createElement("div");desc.style.margin="6px 0";
-  desc.textContent=status.includes("SIDEWAYS")||status.includes("NEUTRAL")?"Directional evidence is mixed or insufficient; this does not automatically imply a trade.":"Directional score currently favors "+status.toLowerCase()+" conditions; individual confirmations are listed below.";
-  root.append(desc);
-  const list=document.createElement("div");
-  for(const [label,item] of checks){
-    if(!item||typeof item!=="object")continue;
-    const bias=item.bias||item.pattern_bias||item.fifteen_minute_trend||"";
-    const score=item.score??item.pattern_score;
-    const name=item.primary_pattern&&item.primary_pattern!=="NO CLEAR PATTERN"?` · ${item.primary_pattern}`:"";
-    const detail=[bias,score!=null?`score ${score}`:""].filter(Boolean).join(" · ");
-    const line=document.createElement("div");line.textContent=`• ${label}: ${detail||item.status||"unavailable"}${name}`;list.append(line);
-  }
-  root.append(list);
-  const note=document.createElement("div");note.style.marginTop="8px";note.style.opacity=".75";note.textContent="These are current contributing signals, not a verified attribution of each point in the combined score. CE/PE/WAIT uses additional trading gates.";root.append(note);
-}
 function renderPrediction(data){
   latestPrediction=data;
   const setup=String(data.fno_setup||"WAIT").toUpperCase();
@@ -5013,7 +4976,6 @@ function renderPrediction(data){
   setText("intradaySetupSub",setup.includes("CE")||setup.includes("PE")?`Prediction-confirmed intraday ${setup.includes("CE")?"CE":"PE"} setup · Entry, SL and targets below`:`WAIT · No forced trade. Entry, SL and targets activate when the prediction setup qualifies.`);
   const ts=data.signal_generated_at||new Date().toISOString();setText("signalTime","Signal time: "+new Date(ts).toLocaleTimeString());
   setText("marketBias",`${data.prediction||"--"} · Score ${data.combined_score??"--"}`);
-  renderMarketInfo(data);
   setText("sumSignal",setup);el("sumSignal").style.color=color;setText("sumStrike",typ&&trade.strike?`${trade.strike} ${typ}`:"--");setText("sumConfidence",conf.toFixed(0)+"%");setText("sumEntry",entry);setText("sumStop",stop);setText("sumT1",t1);setText("sumT2",t2);setText("sumReason",reason);
 
   const s=data.signals||{},tech=s.technical||{},pa=s.price_action||{},flow=s.institutional_flow||{},oc=s.option_chain||{},news=s.news||{};
