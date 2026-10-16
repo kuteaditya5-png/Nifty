@@ -4842,7 +4842,8 @@ html,body{max-width:100%;overflow-x:hidden}
       <div class="chart-note">Auto Trade remains paper-only. The production CE/PE/WAIT prediction engine is unchanged.</div>
     </div>
     <div class="metrics">
-      <div class="metric"><span class="label">Equity</span><b id="paperEquity">₹--</b></div>
+      <div id="paperPriceStatus" style="color:#ffbd69;font-size:12px;padding:6px 10px" role="status">Waiting for first quote sync…</div>
+<div class="metric"><span class="label">Equity</span><b id="paperEquity">₹--</b></div>
       <div class="metric"><span class="label">Cash</span><b id="paperCash">₹--</b></div>
       <div class="metric"><span class="label">Open P&L</span><b id="paperOpenPnl">₹--</b></div>
       <div class="metric"><span class="label">Realized P&L</span><b id="paperRealized">₹--</b></div>
@@ -5017,9 +5018,12 @@ async function loadPrediction(){
 }
 async function loadPaper(){
   try{
-    await fetch("/api/paper/sync",{method:"POST"});
+    const syncResponse=await fetch("/api/paper/sync",{method:"POST",cache:"no-store"});
+    const syncData=await syncResponse.json();
+    const syncWarning=(!syncResponse.ok||syncData.status==="error")?(syncData.message||"Quote sync failed"):(syncData.unavailable_quotes?syncData.message:"");
     const [sr,hr]=await Promise.all([fetch("/api/paper/summary"),fetch("/api/paper/history?limit=500&status=ALL")]);
     const s=await sr.json(),h=await hr.json(),p=s.summary||{};
+    const priceStatus=el("paperPriceStatus");if(priceStatus)priceStatus.textContent=syncWarning?("⚠ "+syncWarning):("Last price sync: "+new Date().toLocaleTimeString());
     setText("paperEquity","₹"+Number(p.equity||0).toFixed(2));setText("paperCash","₹"+Number(p.cash_balance||0).toFixed(2));
     setText("paperOpenPnl","₹"+Number(p.open_pnl||0).toFixed(2));setText("paperRealized","₹"+Number(p.realized_pnl||0).toFixed(2));
     setText("paperWinRate",Number(p.win_rate||0).toFixed(1)+"%");setText("paperOpenCount",p.open_positions||0);
@@ -5028,7 +5032,7 @@ async function loadPaper(){
     const ob=el("paperOpenPositions");
     if(ob)ob.innerHTML=open.map(t=>`<tr><td>${new Date(t.opened_at).toLocaleString()}</td><td>${t.signal||"--"}</td><td>${t.strike_price} ${t.option_type}${t.expiry?`<div style="font-size:9px;color:#7188a3">${t.expiry}</div>`:""}</td><td>₹${Number(t.entry_price).toFixed(2)}</td><td>₹${Number(t.current_price??t.entry_price).toFixed(2)}</td><td>₹${Number(t.pnl||0).toFixed(2)}</td><td>${t.status}</td><td><button onclick="paperExit(${t.trade_id},${t.current_price||t.entry_price})">Exit</button></td></tr>`).join("")||'<tr><td colspan="8">No open paper positions.</td></tr>';
     renderTradeHistory(h.trades||[]);
-  }catch(e){console.warn("Paper:",e)}
+  }catch(e){console.warn("Paper:",e);const ps=el("paperPriceStatus");if(ps)ps.textContent="⚠ Paper data unavailable: "+e.message}
 }
 function renderTradeHistory(trades){
   const filter=el("historyStatus")?.value||"ALL";
@@ -5864,7 +5868,7 @@ async function loadAll(){
   catch(e){box.textContent=e.message;box.style.display="block";setText("lastUpdated","Update failed")}
 }
 function changeInterval(v){currentInterval=v;document.querySelectorAll("[data-i]").forEach(b=>b.classList.toggle("active",b.dataset.i===v));loadAll()}
-loadAll();setInterval(loadAll,60000);
+loadAll();setInterval(loadAll,60000);setInterval(()=>{if(document.visibilityState==="visible" && document.getElementById("paperOpenPositions"))loadPaper()},30000);
 </script>
 <script id="aditya-horizontal-nav-init">
 (function(){
