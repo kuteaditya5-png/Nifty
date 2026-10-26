@@ -4542,6 +4542,24 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
 .history-count{color:#7f96b6;font-size:11px}
 .auto-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.auto-box{padding:14px;border:1px solid #203650;border-radius:11px;background:#081728}.auto-box b{display:block;margin-top:6px;font-size:18px}
 @media(max-width:720px){.app-tabs{position:static;overflow:auto;flex-wrap:nowrap}.app-tab{white-space:nowrap;padding:9px 12px}.auto-grid{grid-template-columns:1fr}}
+
+/* v18.9: reference Option 1 — compact dark NIFTY AI confirmation dashboard */
+.ref-panel{border:1px solid #1c4668;background:linear-gradient(150deg,#071b31,#071323);border-radius:12px;padding:14px;margin:12px 0;color:#e9f4ff}
+.ref-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
+.ref-metric{border:1px solid #193750;background:#081d32;border-radius:9px;padding:11px;min-width:0}
+.ref-label{color:#adc2db;font-size:12px}.ref-value{font-size:17px;font-weight:800;margin-top:6px;overflow-wrap:anywhere}
+.ref-confirm{border:1px solid #176b5e;background:#071e29;border-radius:11px;margin-top:12px;overflow:hidden}
+.ref-confirm.wait{border-color:#926e27}.ref-confirm.pe{border-color:#953a53}
+.ref-confirm-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;background:rgba(16,121,99,.24);font-weight:800}
+.ref-confirm.wait .ref-confirm-head{background:rgba(169,114,19,.20)}.ref-confirm.pe .ref-confirm-head{background:rgba(167,44,69,.18)}
+.ref-confirm-body{padding:8px 14px}.ref-confirm-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #183349;padding:8px 0;font-size:13px}.ref-confirm-row:last-child{border-bottom:0}.ref-confirm-row b{text-align:right;overflow-wrap:anywhere}
+.ref-indicators{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
+.ref-indicator{border:1px solid #193750;background:#081d32;border-radius:8px;padding:10px;min-width:0}.ref-indicator b{display:block;margin-top:4px;font-size:13px;overflow-wrap:anywhere}
+.ref-suggest{display:grid;grid-template-columns:1.6fr repeat(3,minmax(0,.7fr));gap:9px;background:linear-gradient(110deg,#101d47,#17143d);border:1px solid #333b84;border-radius:10px;padding:12px;margin-top:12px}.ref-suggest>div{min-width:0}.ref-suggest b{display:block;margin-top:4px;overflow-wrap:anywhere}
+.ref-signal{font-size:28px;font-weight:900;letter-spacing:.01em}.ref-signal.ce{color:#29e9ac}.ref-signal.pe{color:#ff647b}.ref-signal.wait{color:#ffc44f}
+.ref-sub{font-size:12px;color:#a8c0d8;margin-top:5px}
+@media(max-width:640px){.ref-metrics,.ref-indicators{grid-template-columns:repeat(2,minmax(0,1fr))}.ref-suggest{grid-template-columns:repeat(2,minmax(0,1fr))}.ref-signal{font-size:25px}}
+
 </style>
 
 <style id="futuristic-v17-preview">
@@ -4761,6 +4779,42 @@ html,body{max-width:100%;overflow-x:hidden}
         <div id="entryGateReason" style="color:#aabdd1;margin-top:3px">Checking completed 5-minute candles</div>
         <div id="entryGateLevels" style="color:#8da9c3;margin-top:3px"></div>
       </div>
+    </div>
+
+    <div class="card ref-panel" id="referenceOverview" style="grid-column:1/-1;margin:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>NIFTY AI · LIVE ENTRY DECISION</b><span class="ref-label" id="refUpdated">Awaiting market data</span></div>
+      <div id="refSignal" class="ref-signal wait" style="margin-top:12px">⏳ WAIT</div>
+      <div class="ref-sub" id="refSignalReason">Loading completed 5-minute candle confirmation…</div>
+      <div class="ref-metrics">
+        <div class="ref-metric"><span class="ref-label">NIFTY Spot</span><div class="ref-value" id="refSpot">--</div></div>
+        <div class="ref-metric"><span class="ref-label">Spot Trend</span><div class="ref-value" id="refTrend">--</div></div>
+        <div class="ref-metric"><span class="ref-label">Signal Strength</span><div class="ref-value" id="refStrength">--</div></div>
+      </div>
+      <div class="ref-confirm wait" id="refConfirmation">
+        <div class="ref-confirm-head"><span>Entry Confirmation</span><span id="refConfirmStatus">⏳ Waiting</span></div>
+        <div class="ref-confirm-body">
+          <div class="ref-confirm-row"><span>Opening Range High</span><b id="refOrbHigh">--</b></div>
+          <div class="ref-confirm-row"><span>Opening Range Low</span><b id="refOrbLow">--</b></div>
+          <div class="ref-confirm-row"><span>Breakout Type</span><b id="refBreakout">--</b></div>
+          <div class="ref-confirm-row"><span>Confirmation Candle</span><b id="refCandle">--</b></div>
+          <div class="ref-confirm-row"><span>Status</span><b id="refGateReason">--</b></div>
+        </div>
+      </div>
+      <div class="ref-indicators">
+        <div class="ref-indicator"><span class="ref-label">EMA</span><b id="refEma">--</b></div>
+        <div class="ref-indicator"><span class="ref-label">Supertrend</span><b id="refSupertrend">--</b></div>
+        <div class="ref-indicator"><span class="ref-label">ADX</span><b id="refAdx">--</b></div>
+        <div class="ref-indicator"><span class="ref-label">RSI</span><b id="refRsi">--</b></div>
+        <div class="ref-indicator"><span class="ref-label">VWAP</span><b id="refVwap">--</b></div>
+        <div class="ref-indicator"><span class="ref-label">ATR</span><b id="refAtr">--</b></div>
+      </div>
+      <div class="ref-suggest">
+        <div><span class="ref-label">Suggested Option</span><b id="refOption">Wait for confirmation</b></div>
+        <div><span class="ref-label">Entry</span><b id="refEntry">--</b></div>
+        <div><span class="ref-label">Target</span><b id="refTarget">--</b></div>
+        <div><span class="ref-label">Stop Loss</span><b id="refStop">--</b></div>
+      </div>
+      <div class="ref-sub">Prices and indicator values appear only when supplied by the live API. Signals are for validation/paper trading, not guaranteed outcomes.</div>
     </div>
 
     <div class="card trade-card">
@@ -5001,6 +5055,30 @@ function renderPrediction(data){
   setText("insTime",`${tc.session_phase||"--"}${tc.expiry_day?" · EXPIRY":""}${tc.event_day?" · EVENT":""}`);
   const arch=data.prediction_architecture||{};
   setText("insConfirm",arch.selected_engine?`${arch.market_regime||"--"} → ${arch.selected_engine} · ${fmt(arch.routed_score,2)}`:"--");
+  // Reference Option 1 panel: always reflect the gated FINAL decision.
+  const isCE=setup.includes("CE"),isPE=setup.includes("PE"),confirmed=(isCE||isPE)&&gate.status==="success";
+  const refClass=isCE?"ce":isPE?"pe":"wait";
+  const rs=el("refSignal");rs.className="ref-signal "+refClass;
+  setText("refSignal",isCE?"↗ BUY CE":isPE?"↘ BUY PE":"⏳ WAIT");
+  setText("refSignalReason",reason);
+  const panel=el("refConfirmation");panel.className="ref-confirm "+refClass;
+  setText("refConfirmStatus",confirmed?"✓ Confirmed":"⏳ Waiting");
+  setText("refOrbHigh",gate.opening_range_high!=null?fmt(gate.opening_range_high):"--");
+  setText("refOrbLow",gate.opening_range_low!=null?fmt(gate.opening_range_low):"--");
+  setText("refBreakout",gate.false_breakout?"Rejected / false breakout":isCE?"Upward (CE)":isPE?"Downward (PE)":"Not confirmed");
+  setText("refCandle",gate.candle_at?new Date(gate.candle_at).toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata",hour:"2-digit",minute:"2-digit"})+" IST (5m)":"--");
+  setText("refGateReason",gate.reason||"Waiting for completed candle");
+  setText("refSpot",fmt(data.price));setText("refTrend",data.prediction||"--");
+  setText("refStrength",conf.toFixed(0)+"% confidence");
+  setText("refUpdated",gate.checked_at?"Checked: "+new Date(gate.checked_at).toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata"}):"Latest API update");
+  setText("refEma",tech.ema_20!=null&&tech.ema_50!=null?(Number(tech.ema_20)>Number(tech.ema_50)?"Bullish":"Bearish"):"--");
+  const active=s.active_trend||s.trend_observation||data.active_trend||data.trend_observation||{};
+  setText("refSupertrend",active.direction||"--");setText("refAdx",active.adx!=null?fmt(active.adx,1):"--");
+  setText("refRsi",tech.rsi_14!=null?fmt(tech.rsi_14,1):"--");
+  setText("refVwap",tech.vwap!=null?fmt(tech.vwap):"--");
+  setText("refAtr",active.atr!=null?fmt(active.atr,2):"--");
+  setText("refOption",confirmed&&typ&&trade.strike?`NIFTY ${trade.strike} ${typ}`:confirmed?"Confirmed direction · option quote unavailable":"Wait for confirmation");
+  setText("refEntry",confirmed?entry:"--");setText("refTarget",confirmed?t1:"--");setText("refStop",confirmed?stop:"--");
   notifySignal(setup,reason);
 }
 
@@ -5025,6 +5103,11 @@ async function loadChart(prediction){
   if(!r.ok||d.status!=="success")throw new Error(d.message||"Chart unavailable");
   latestChartData=d;candleSeries.setData(d.candles||[]);ema20Series.setData(d.ema20||[]);ema50Series.setData(d.ema50||[]);
   renderTradeLevels(prediction);
+  (window.orbPriceLines||[]).forEach(x=>{try{candleSeries.removePriceLine(x)}catch(e){}});window.orbPriceLines=[];
+  const gate=prediction?.entry_confirmation||{};
+  if(currentInterval==="5m")for(const [label,value,color] of [["ORB HIGH",gate.opening_range_high,"#22d3a6"],["ORB LOW",gate.opening_range_low,"#f59e56"]]){
+    if(value!=null&&Number.isFinite(Number(value)))try{window.orbPriceLines.push(candleSeries.createPriceLine({price:Number(value),color,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:label}))}catch(e){}
+  }
   const bars=d.candles||[],last=bars[bars.length-1]||{};
   if(typeof candleSeries.setMarkers==="function")candleSeries.setMarkers([]);
   setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
@@ -7188,7 +7271,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "18.8",
+            "model_version": "18.9",
             "entry_confirmation": {**_gate, "base_setup": _base_fno_setup, "final_setup": fno_setup,
                                    "mode": "ACTIVE", "checked_at": datetime.now().isoformat()},
             "price": round(latest_close, 2),
