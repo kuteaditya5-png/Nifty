@@ -30,14 +30,17 @@ def evaluate(bars, prediction, now=None):
     previous = frame.iloc[-2]
     close, prev_close = float(last['Close']), float(previous['Close'])
     candle_at = frame.index[-1].isoformat()
+    if (now - (frame.index[-1] + timedelta(minutes=5))).total_seconds() > 12 * 60:
+        return {'status':'unavailable','action':'WAIT','reason':'Latest completed candle is stale','candle_at':candle_at}
     raw = str(prediction.get('fno_setup') or prediction.get('prediction') or '').upper()
     # Never infer a CE/PE direction from an ambiguous prediction label.
     bullish = ('BUY CE' in raw or 'BUY_CALL' in raw or raw in ('BULLISH','CE WATCH'))
     bearish = ('BUY PE' in raw or 'BUY_PUT' in raw or raw in ('BEARISH','PE WATCH'))
     if bullish and bearish:
         bullish = bearish = False
-    up = close > high and prev_close <= high
-    down = close < low and prev_close >= low
+    recent = frame.tail(4)
+    up = close > high and any(float(v) <= high for v in recent['Close'].iloc[:-1])
+    down = close < low and any(float(v) >= low for v in recent['Close'].iloc[:-1])
     failed_up = float(last['High']) > high and close <= high
     failed_down = float(last['Low']) < low and close >= low
     if failed_up or failed_down:

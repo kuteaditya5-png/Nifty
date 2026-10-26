@@ -4756,6 +4756,11 @@ html,body{max-width:100%;overflow-x:hidden}
         <div class="signalwrap"><div class="arrow" id="signalArrow">→</div><div><div class="signal" id="signal">--</div><div class="signal-sub" id="signalStrike">NIFTY --</div></div></div>
         <div class="conf"><span>Confidence</span><b id="confidence">--%</b><span id="signalTime">Signal time: --</span></div>
       </div>
+      <div id="entryGateStrip" style="margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(22,43,65,.7);border:1px solid #274057;font-size:12px;line-height:1.5">
+        <strong id="entryGateTitle">Entry confirmation: Loading…</strong>
+        <div id="entryGateReason" style="color:#aabdd1;margin-top:3px">Checking completed 5-minute candles</div>
+        <div id="entryGateLevels" style="color:#8da9c3;margin-top:3px"></div>
+      </div>
     </div>
 
     <div class="card trade-card">
@@ -4962,7 +4967,7 @@ function confidenceValue(data,trade){
 function renderPrediction(data){
   latestPrediction=data;
   const setup=String(data.fno_setup||"WAIT").toUpperCase();
-  const picked=pickTrade(data),trade=picked.trade||{},typ=picked.type;
+  const picked=setup==="WAIT"?{type:null,trade:{}}:pickTrade(data),trade=picked.trade||{},typ=picked.type;
   const conf=confidenceValue(data,trade);
   const color=signalColor(setup);
   const arrow=setup.includes("CE")?"↗":setup.includes("PE")?"↘":"→";
@@ -4972,6 +4977,11 @@ function renderPrediction(data){
   setText("tradePlanTitle",typ&&trade.strike?`Intraday Setup · NIFTY ${trade.strike} ${typ}`:"Intraday Trading Setup · WAIT");
   const entry=entryText(trade),stop=trade.stop_loss!=null?`₹ ${trade.stop_loss}`:"--",t1=trade.target_1!=null?`₹ ${trade.target_1}`:"--",t2=trade.target_2!=null?`₹ ${trade.target_2}`:"--";
   setText("entry",entry);setText("stop",stop);setText("target1",t1);setText("target2",t2);
+  const gate=data.entry_confirmation||{};
+  const gaction=String(gate.action||"WAIT"),gstatus=String(gate.status||"unavailable");
+  setText("entryGateTitle",gstatus==="success"?(gaction==="WAIT"?"⏳ Entry: WAIT":"✓ Entry: "+gaction):"⚠ Entry confirmation unavailable");
+  setText("entryGateReason",gate.reason||"Awaiting completed 5-minute candles");
+  setText("entryGateLevels",gate.opening_range_high!=null?`Opening range: ${gate.opening_range_low} – ${gate.opening_range_high} · Last close: ${gate.last_close} · ${gate.candle_at||""}`:"Opening range levels not yet available");
   const reason=data.fno_setup_reason||trade.reason||"Waiting for stronger confirmation.";
   setText("intradaySetupSub",setup.includes("CE")||setup.includes("PE")?`Prediction-confirmed intraday ${setup.includes("CE")?"CE":"PE"} setup · Entry, SL and targets below`:`WAIT · No forced trade. Entry, SL and targets activate when the prediction setup qualifies.`);
   const ts=data.signal_generated_at||new Date().toISOString();setText("signalTime","Signal time: "+new Date(ts).toLocaleTimeString());
@@ -7159,10 +7169,28 @@ def prediction(include_alerts: bool = False):
                 market_regime=regime_data["regime"]
             )
 
+        # v18.8: completed-candle ORB gate is now part of the live dashboard decision.
+        # Preserve the original model's direction/score for diagnostics; no look-ahead.
+        from entry_confirmation_v187 import evaluate as _evaluate_entry_v188
+        _base_fno_setup = fno_setup
+        _gate = _evaluate_entry_v188(market_data, {"fno_setup": _base_fno_setup})
+        _gate_action = str(_gate.get("action") or "WAIT")
+        _gate_reason = str(_gate.get("reason") or "Entry confirmation unavailable")
+        if _base_fno_setup != "WAIT":
+            if (_base_fno_setup == "CE WATCH" and _gate_action != "BUY CE") or (_base_fno_setup == "PE WATCH" and _gate_action != "BUY PE"):
+                fno_setup = "WAIT"
+                fno_setup_reason = "Entry gate: " + _gate_reason
+            elif _gate_action in ("BUY CE", "BUY PE"):
+                fno_setup_reason = "Confirmed: " + _gate_reason
+        # Never display actionable option alerts when the final dashboard is WAIT.
+        if fno_setup == "WAIT":
+            fno_alerts = None
+
         return {
             "status": "success",
-            "model_version": "18.6",
-            "market": "NIFTY 50",
+            "model_version": "18.8",
+            "entry_confirmation": {**_gate, "base_setup": _base_fno_setup, "final_setup": fno_setup,
+                                   "mode": "ACTIVE", "checked_at": datetime.now().isoformat()},
             "price": round(latest_close, 2),
             "prediction": prediction_label,
             "confidence": confidence,
