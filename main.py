@@ -13880,3 +13880,30 @@ def v18_backtest(period: str='30d'):
         result['data_rows']=len(bars)
         return result
     except Exception as exc:return {'status':'error','message':str(exc)}
+
+# v18.7: request-driven, persisted 5-minute entry confirmations.
+# Does not alter the existing /prediction score or place broker orders.
+@app.post('/api/v18.7/monitor')
+def v187_monitor(request: __import__("fastapi").Request):
+    import os, secrets
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from fastapi import HTTPException
+    from entry_confirmation_v187 import evaluate, persist
+    expected = os.getenv('NIFTY_MONITOR_SECRET','')
+    provided = request.headers.get('X-Monitor-Secret','')
+    if not expected or not secrets.compare_digest(provided,expected):
+        raise HTTPException(status_code=401,detail='Monitor authentication failed')
+    now = datetime.now(ZoneInfo('Asia/Kolkata'))
+    if now.weekday() >= 5 or not (9 <= now.hour <= 15):
+        return {'status':'skipped','reason':'Outside NSE monitoring hours'}
+    try:
+        bars = yf.Ticker('^NSEI').history(period='2d',interval='5m')
+        base = prediction(include_alerts=False)
+        if base.get('status') != 'success':
+            return {'status':'unavailable','reason':'Prediction unavailable','details':base.get('message')}
+        result = evaluate(bars,base,now)
+        result['persistence'] = persist(result)
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=503,detail='Monitor failed: '+str(exc)[:200])
