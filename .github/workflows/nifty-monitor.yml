@@ -1,1 +1,21 @@
-
+name: NIFTY AI v18.7 Market Monitor
+on:
+  schedule:
+    - cron: '*/5 3-10 * * 1-5' # UTC; server enforces IST session window
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check completed NIFTY candle
+        env:
+          SITE_URL: ${{ secrets.NIFTY_SITE_URL }}
+          MONITOR_SECRET: ${{ secrets.NIFTY_MONITOR_SECRET }}
+        run: |
+          test -n "$SITE_URL" && test -n "$MONITOR_SECRET" || { echo 'Missing secrets'; exit 1; }
+          curl --fail-with-body --retry 2 --max-time 180 -sS -X POST \
+            -H "X-Monitor-Secret: $MONITOR_SECRET" \
+            "${SITE_URL%/}/api/v18.7/monitor"
