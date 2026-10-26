@@ -4781,6 +4781,26 @@ html,body{max-width:100%;overflow-x:hidden}
       </div>
     </div>
 
+    <div class="card chart-card" style="grid-column:1/-1;min-width:0">
+      <div class="toolbar">
+        <div class="intervals">
+          <button data-i="1m" onclick="changeInterval('1m')">1m</button>
+          <button data-i="5m" class="active" onclick="changeInterval('5m')">5m</button>
+          <button data-i="15m" onclick="changeInterval('15m')">15m</button>
+        </div>
+        <div class="toggles">
+          <label class="toggle"><input type="checkbox" id="emaToggle" checked onchange="toggleEma()"> EMA</label>
+        </div>
+      </div>
+      <div class="chart-meta"><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
+      <div class="chart-wrap" id="chartWrap">
+        <div id="niftyChart"></div>
+      </div>
+      <div class="chart-note" id="chartConfirmationNote" style="color:#a8d6ee">⏳ Awaiting confirmed 5-minute breakout.</div>
+      <div class="chart-note">Intraday NIFTY levels are drawn from the active CE/PE setup: Entry, Stop Loss, Target 1 and Target 2. WAIT shows no artificial trade levels.</div>
+    </div>
+
+
     <div class="card ref-panel" id="referenceOverview" style="grid-column:1/-1;margin:0">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>NIFTY AI · LIVE ENTRY DECISION</b><span class="ref-label" id="refUpdated">Awaiting market data</span></div>
       <div id="refSignal" class="ref-signal wait" style="margin-top:12px">⏳ WAIT</div>
@@ -4835,24 +4855,6 @@ html,body{max-width:100%;overflow-x:hidden}
   </div>
 
   <div class="main-layout">
-    <div class="card chart-card">
-      <div class="toolbar">
-        <div class="intervals">
-          <button data-i="1m" onclick="changeInterval('1m')">1m</button>
-          <button data-i="5m" class="active" onclick="changeInterval('5m')">5m</button>
-          <button data-i="15m" onclick="changeInterval('15m')">15m</button>
-        </div>
-        <div class="toggles">
-          <label class="toggle"><input type="checkbox" id="emaToggle" checked onchange="toggleEma()"> EMA</label>
-        </div>
-      </div>
-      <div class="chart-meta"><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
-      <div class="chart-wrap" id="chartWrap">
-        <div id="niftyChart"></div>
-      </div>
-      <div class="chart-note">Intraday NIFTY levels are drawn from the active CE/PE setup: Entry, Stop Loss, Target 1 and Target 2. WAIT shows no artificial trade levels.</div>
-    </div>
-
     <div class="side">
       <div class="card sidecard">
         <div class="side-title">✧ AI Insights</div>
@@ -5109,7 +5111,31 @@ async function loadChart(prediction){
     if(value!=null&&Number.isFinite(Number(value)))try{window.orbPriceLines.push(candleSeries.createPriceLine({price:Number(value),color,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:label}))}catch(e){}
   }
   const bars=d.candles||[],last=bars[bars.length-1]||{};
-  if(typeof candleSeries.setMarkers==="function")candleSeries.setMarkers([]);
+  // Place a confirmation arrow ONLY on the exact completed 5-minute candle.
+  // The chart and confirmation engine may use different data feeds; never guess a timestamp.
+  const markers=[];
+  const action=String(gate.action||"WAIT").toUpperCase();
+  const finalAction=String(prediction?.fno_setup||"WAIT").toUpperCase();
+  if(currentInterval==="5m" && gate.status==="success" &&
+     (action==="BUY CE"||action==="BUY PE") && action===finalAction &&
+     !gate.false_breakout && gate.candle_at){
+    const confirmedTime=Date.parse(gate.candle_at)/1000;
+    const confirmedBar=bars.find(b=>Number(b.time)===confirmedTime);
+    if(confirmedBar){
+      const ce=action==="BUY CE";
+      markers.push({time:confirmedBar.time,position:ce?"aboveBar":"belowBar",
+        color:ce?"#22e7a4":"#ff5975",shape:ce?"arrowDown":"arrowUp",
+        text:ce?"BREAKOUT CONFIRMED · CE":"BREAKDOWN CONFIRMED · PE"});
+      setText("chartConfirmationNote",(ce?"🟢 Bullish breakout":"🔴 Bearish breakdown")+
+        " confirmed on the completed 5-minute candle at "+new Date(confirmedTime*1000).toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata",hour:"2-digit",minute:"2-digit"})+" IST");
+    }else{
+      setText("chartConfirmationNote","Confirmation exists, but the exact candle is unavailable in the chart feed. Marker withheld.");
+    }
+  }else{
+    setText("chartConfirmationNote",currentInterval!=="5m"?"Select 5m to view confirmed breakout markers.":
+      "⏳ No confirmed breakout marker for the current prediction.");
+  }
+  if(typeof candleSeries.setMarkers==="function")candleSeries.setMarkers(markers);
   setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
   setText("chartIntervalLabel",currentInterval);chart.timeScale().fitContent();
 }
