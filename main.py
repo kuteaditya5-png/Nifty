@@ -4542,24 +4542,6 @@ button{cursor:pointer;font-weight:750}.primary{background:#edf4ff;color:#07101d}
 .history-count{color:#7f96b6;font-size:11px}
 .auto-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.auto-box{padding:14px;border:1px solid #203650;border-radius:11px;background:#081728}.auto-box b{display:block;margin-top:6px;font-size:18px}
 @media(max-width:720px){.app-tabs{position:static;overflow:auto;flex-wrap:nowrap}.app-tab{white-space:nowrap;padding:9px 12px}.auto-grid{grid-template-columns:1fr}}
-
-/* v18.9: reference Option 1 — compact dark NIFTY AI confirmation dashboard */
-.ref-panel{border:1px solid #1c4668;background:linear-gradient(150deg,#071b31,#071323);border-radius:12px;padding:14px;margin:12px 0;color:#e9f4ff}
-.ref-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
-.ref-metric{border:1px solid #193750;background:#081d32;border-radius:9px;padding:11px;min-width:0}
-.ref-label{color:#adc2db;font-size:12px}.ref-value{font-size:17px;font-weight:800;margin-top:6px;overflow-wrap:anywhere}
-.ref-confirm{border:1px solid #176b5e;background:#071e29;border-radius:11px;margin-top:12px;overflow:hidden}
-.ref-confirm.wait{border-color:#926e27}.ref-confirm.pe{border-color:#953a53}
-.ref-confirm-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;background:rgba(16,121,99,.24);font-weight:800}
-.ref-confirm.wait .ref-confirm-head{background:rgba(169,114,19,.20)}.ref-confirm.pe .ref-confirm-head{background:rgba(167,44,69,.18)}
-.ref-confirm-body{padding:8px 14px}.ref-confirm-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #183349;padding:8px 0;font-size:13px}.ref-confirm-row:last-child{border-bottom:0}.ref-confirm-row b{text-align:right;overflow-wrap:anywhere}
-.ref-indicators{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
-.ref-indicator{border:1px solid #193750;background:#081d32;border-radius:8px;padding:10px;min-width:0}.ref-indicator b{display:block;margin-top:4px;font-size:13px;overflow-wrap:anywhere}
-.ref-suggest{display:grid;grid-template-columns:1.6fr repeat(3,minmax(0,.7fr));gap:9px;background:linear-gradient(110deg,#101d47,#17143d);border:1px solid #333b84;border-radius:10px;padding:12px;margin-top:12px}.ref-suggest>div{min-width:0}.ref-suggest b{display:block;margin-top:4px;overflow-wrap:anywhere}
-.ref-signal{font-size:28px;font-weight:900;letter-spacing:.01em}.ref-signal.ce{color:#29e9ac}.ref-signal.pe{color:#ff647b}.ref-signal.wait{color:#ffc44f}
-.ref-sub{font-size:12px;color:#a8c0d8;margin-top:5px}
-@media(max-width:640px){.ref-metrics,.ref-indicators{grid-template-columns:repeat(2,minmax(0,1fr))}.ref-suggest{grid-template-columns:repeat(2,minmax(0,1fr))}.ref-signal{font-size:25px}}
-
 </style>
 
 <style id="futuristic-v17-preview">
@@ -4774,67 +4756,6 @@ html,body{max-width:100%;overflow-x:hidden}
         <div class="signalwrap"><div class="arrow" id="signalArrow">→</div><div><div class="signal" id="signal">--</div><div class="signal-sub" id="signalStrike">NIFTY --</div></div></div>
         <div class="conf"><span>Confidence</span><b id="confidence">--%</b><span id="signalTime">Signal time: --</span></div>
       </div>
-      <div id="entryGateStrip" style="margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(22,43,65,.7);border:1px solid #274057;font-size:12px;line-height:1.5">
-        <strong id="entryGateTitle">Entry confirmation: Loading…</strong>
-        <div id="entryGateReason" style="color:#aabdd1;margin-top:3px">Checking completed 5-minute candles</div>
-        <div id="entryGateLevels" style="color:#8da9c3;margin-top:3px"></div>
-      </div>
-    </div>
-
-    <div class="card chart-card" style="grid-column:1/-1;min-width:0">
-      <div class="toolbar">
-        <div class="intervals">
-          <button data-i="1m" onclick="changeInterval('1m')">1m</button>
-          <button data-i="5m" class="active" onclick="changeInterval('5m')">5m</button>
-          <button data-i="15m" onclick="changeInterval('15m')">15m</button>
-        </div>
-        <div class="toggles">
-          <label class="toggle"><input type="checkbox" id="emaToggle" checked onchange="toggleEma()"> EMA</label>
-        </div>
-      </div>
-      <div class="chart-meta"><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
-      <div class="chart-wrap" id="chartWrap">
-        <div id="niftyChart"></div>
-      </div>
-      <div class="chart-note" id="chartConfirmationNote" style="color:#a8d6ee">⏳ Awaiting confirmed 5-minute breakout.</div>
-      <div class="chart-note">Intraday NIFTY levels are drawn from the active CE/PE setup: Entry, Stop Loss, Target 1 and Target 2. WAIT shows no artificial trade levels.</div>
-    </div>
-
-
-    <div class="card ref-panel" id="referenceOverview" style="grid-column:1/-1;margin:0">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>NIFTY AI · LIVE ENTRY DECISION</b><span class="ref-label" id="refUpdated">Awaiting market data</span></div>
-      <div id="refSignal" class="ref-signal wait" style="margin-top:12px">⏳ WAIT</div>
-      <div class="ref-sub" id="refSignalReason">Loading completed 5-minute candle confirmation…</div>
-      <div class="ref-metrics">
-        <div class="ref-metric"><span class="ref-label">NIFTY Spot</span><div class="ref-value" id="refSpot">--</div></div>
-        <div class="ref-metric"><span class="ref-label">Spot Trend</span><div class="ref-value" id="refTrend">--</div></div>
-        <div class="ref-metric"><span class="ref-label">Signal Strength</span><div class="ref-value" id="refStrength">--</div></div>
-      </div>
-      <div class="ref-confirm wait" id="refConfirmation">
-        <div class="ref-confirm-head"><span>Entry Confirmation</span><span id="refConfirmStatus">⏳ Waiting</span></div>
-        <div class="ref-confirm-body">
-          <div class="ref-confirm-row"><span>Opening Range High</span><b id="refOrbHigh">--</b></div>
-          <div class="ref-confirm-row"><span>Opening Range Low</span><b id="refOrbLow">--</b></div>
-          <div class="ref-confirm-row"><span>Breakout Type</span><b id="refBreakout">--</b></div>
-          <div class="ref-confirm-row"><span>Confirmation Candle</span><b id="refCandle">--</b></div>
-          <div class="ref-confirm-row"><span>Status</span><b id="refGateReason">--</b></div>
-        </div>
-      </div>
-      <div class="ref-indicators">
-        <div class="ref-indicator"><span class="ref-label">EMA</span><b id="refEma">--</b></div>
-        <div class="ref-indicator"><span class="ref-label">Supertrend</span><b id="refSupertrend">--</b></div>
-        <div class="ref-indicator"><span class="ref-label">ADX</span><b id="refAdx">--</b></div>
-        <div class="ref-indicator"><span class="ref-label">RSI</span><b id="refRsi">--</b></div>
-        <div class="ref-indicator"><span class="ref-label">VWAP</span><b id="refVwap">--</b></div>
-        <div class="ref-indicator"><span class="ref-label">ATR</span><b id="refAtr">--</b></div>
-      </div>
-      <div class="ref-suggest">
-        <div><span class="ref-label">Suggested Option</span><b id="refOption">Wait for confirmation</b></div>
-        <div><span class="ref-label">Entry</span><b id="refEntry">--</b></div>
-        <div><span class="ref-label">Target</span><b id="refTarget">--</b></div>
-        <div><span class="ref-label">Stop Loss</span><b id="refStop">--</b></div>
-      </div>
-      <div class="ref-sub">Prices and indicator values appear only when supplied by the live API. Signals are for validation/paper trading, not guaranteed outcomes.</div>
     </div>
 
     <div class="card trade-card">
@@ -4855,6 +4776,24 @@ html,body{max-width:100%;overflow-x:hidden}
   </div>
 
   <div class="main-layout">
+    <div class="card chart-card">
+      <div class="toolbar">
+        <div class="intervals">
+          <button data-i="1m" onclick="changeInterval('1m')">1m</button>
+          <button data-i="5m" class="active" onclick="changeInterval('5m')">5m</button>
+          <button data-i="15m" onclick="changeInterval('15m')">15m</button>
+        </div>
+        <div class="toggles">
+          <label class="toggle"><input type="checkbox" id="emaToggle" checked onchange="toggleEma()"> EMA</label>
+        </div>
+      </div>
+      <div class="chart-meta"><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
+      <div class="chart-wrap" id="chartWrap">
+        <div id="niftyChart"></div>
+      </div>
+      <div class="chart-note">Intraday NIFTY levels are drawn from the active CE/PE setup: Entry, Stop Loss, Target 1 and Target 2. WAIT shows no artificial trade levels.</div>
+    </div>
+
     <div class="side">
       <div class="card sidecard">
         <div class="side-title">✧ AI Insights</div>
@@ -5023,7 +4962,7 @@ function confidenceValue(data,trade){
 function renderPrediction(data){
   latestPrediction=data;
   const setup=String(data.fno_setup||"WAIT").toUpperCase();
-  const picked=setup==="WAIT"?{type:null,trade:{}}:pickTrade(data),trade=picked.trade||{},typ=picked.type;
+  const picked=pickTrade(data),trade=picked.trade||{},typ=picked.type;
   const conf=confidenceValue(data,trade);
   const color=signalColor(setup);
   const arrow=setup.includes("CE")?"↗":setup.includes("PE")?"↘":"→";
@@ -5033,11 +4972,6 @@ function renderPrediction(data){
   setText("tradePlanTitle",typ&&trade.strike?`Intraday Setup · NIFTY ${trade.strike} ${typ}`:"Intraday Trading Setup · WAIT");
   const entry=entryText(trade),stop=trade.stop_loss!=null?`₹ ${trade.stop_loss}`:"--",t1=trade.target_1!=null?`₹ ${trade.target_1}`:"--",t2=trade.target_2!=null?`₹ ${trade.target_2}`:"--";
   setText("entry",entry);setText("stop",stop);setText("target1",t1);setText("target2",t2);
-  const gate=data.entry_confirmation||{};
-  const gaction=String(gate.action||"WAIT"),gstatus=String(gate.status||"unavailable");
-  setText("entryGateTitle",gstatus==="success"?(gaction==="WAIT"?"⏳ Entry: WAIT":"✓ Entry: "+gaction):"⚠ Entry confirmation unavailable");
-  setText("entryGateReason",gate.reason||"Awaiting completed 5-minute candles");
-  setText("entryGateLevels",gate.opening_range_high!=null?`Opening range: ${gate.opening_range_low} – ${gate.opening_range_high} · Last close: ${gate.last_close} · ${gate.candle_at||""}`:"Opening range levels not yet available");
   const reason=data.fno_setup_reason||trade.reason||"Waiting for stronger confirmation.";
   setText("intradaySetupSub",setup.includes("CE")||setup.includes("PE")?`Prediction-confirmed intraday ${setup.includes("CE")?"CE":"PE"} setup · Entry, SL and targets below`:`WAIT · No forced trade. Entry, SL and targets activate when the prediction setup qualifies.`);
   const ts=data.signal_generated_at||new Date().toISOString();setText("signalTime","Signal time: "+new Date(ts).toLocaleTimeString());
@@ -5057,30 +4991,6 @@ function renderPrediction(data){
   setText("insTime",`${tc.session_phase||"--"}${tc.expiry_day?" · EXPIRY":""}${tc.event_day?" · EVENT":""}`);
   const arch=data.prediction_architecture||{};
   setText("insConfirm",arch.selected_engine?`${arch.market_regime||"--"} → ${arch.selected_engine} · ${fmt(arch.routed_score,2)}`:"--");
-  // Reference Option 1 panel: always reflect the gated FINAL decision.
-  const isCE=setup.includes("CE"),isPE=setup.includes("PE"),confirmed=(isCE||isPE)&&gate.status==="success";
-  const refClass=isCE?"ce":isPE?"pe":"wait";
-  const rs=el("refSignal");rs.className="ref-signal "+refClass;
-  setText("refSignal",isCE?"↗ BUY CE":isPE?"↘ BUY PE":"⏳ WAIT");
-  setText("refSignalReason",reason);
-  const panel=el("refConfirmation");panel.className="ref-confirm "+refClass;
-  setText("refConfirmStatus",confirmed?"✓ Confirmed":"⏳ Waiting");
-  setText("refOrbHigh",gate.opening_range_high!=null?fmt(gate.opening_range_high):"--");
-  setText("refOrbLow",gate.opening_range_low!=null?fmt(gate.opening_range_low):"--");
-  setText("refBreakout",gate.false_breakout?"Rejected / false breakout":isCE?"Upward (CE)":isPE?"Downward (PE)":"Not confirmed");
-  setText("refCandle",gate.candle_at?new Date(gate.candle_at).toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata",hour:"2-digit",minute:"2-digit"})+" IST (5m)":"--");
-  setText("refGateReason",gate.reason||"Waiting for completed candle");
-  setText("refSpot",fmt(data.price));setText("refTrend",data.prediction||"--");
-  setText("refStrength",conf.toFixed(0)+"% confidence");
-  setText("refUpdated",gate.checked_at?"Checked: "+new Date(gate.checked_at).toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata"}):"Latest API update");
-  setText("refEma",tech.ema_20!=null&&tech.ema_50!=null?(Number(tech.ema_20)>Number(tech.ema_50)?"Bullish":"Bearish"):"--");
-  const active=s.active_trend||s.trend_observation||data.active_trend||data.trend_observation||{};
-  setText("refSupertrend",active.direction||"--");setText("refAdx",active.adx!=null?fmt(active.adx,1):"--");
-  setText("refRsi",tech.rsi_14!=null?fmt(tech.rsi_14,1):"--");
-  setText("refVwap",tech.vwap!=null?fmt(tech.vwap):"--");
-  setText("refAtr",active.atr!=null?fmt(active.atr,2):"--");
-  setText("refOption",confirmed&&typ&&trade.strike?`NIFTY ${trade.strike} ${typ}`:confirmed?"Confirmed direction · option quote unavailable":"Wait for confirmation");
-  setText("refEntry",confirmed?entry:"--");setText("refTarget",confirmed?t1:"--");setText("refStop",confirmed?stop:"--");
   notifySignal(setup,reason);
 }
 
@@ -5105,37 +5015,8 @@ async function loadChart(prediction){
   if(!r.ok||d.status!=="success")throw new Error(d.message||"Chart unavailable");
   latestChartData=d;candleSeries.setData(d.candles||[]);ema20Series.setData(d.ema20||[]);ema50Series.setData(d.ema50||[]);
   renderTradeLevels(prediction);
-  (window.orbPriceLines||[]).forEach(x=>{try{candleSeries.removePriceLine(x)}catch(e){}});window.orbPriceLines=[];
-  const gate=prediction?.entry_confirmation||{};
-  if(currentInterval==="5m")for(const [label,value,color] of [["ORB HIGH",gate.opening_range_high,"#22d3a6"],["ORB LOW",gate.opening_range_low,"#f59e56"]]){
-    if(value!=null&&Number.isFinite(Number(value)))try{window.orbPriceLines.push(candleSeries.createPriceLine({price:Number(value),color,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:label}))}catch(e){}
-  }
   const bars=d.candles||[],last=bars[bars.length-1]||{};
-  // Place a confirmation arrow ONLY on the exact completed 5-minute candle.
-  // The chart and confirmation engine may use different data feeds; never guess a timestamp.
-  const markers=[];
-  const action=String(gate.action||"WAIT").toUpperCase();
-  const finalAction=String(prediction?.fno_setup||"WAIT").toUpperCase();
-  if(currentInterval==="5m" && gate.status==="success" &&
-     (action==="BUY CE"||action==="BUY PE") && action===finalAction &&
-     !gate.false_breakout && gate.candle_at){
-    const confirmedTime=Date.parse(gate.candle_at)/1000;
-    const confirmedBar=bars.find(b=>Number(b.time)===confirmedTime);
-    if(confirmedBar){
-      const ce=action==="BUY CE";
-      markers.push({time:confirmedBar.time,position:ce?"aboveBar":"belowBar",
-        color:ce?"#22e7a4":"#ff5975",shape:ce?"arrowDown":"arrowUp",
-        text:ce?"BREAKOUT CONFIRMED · CE":"BREAKDOWN CONFIRMED · PE"});
-      setText("chartConfirmationNote",(ce?"🟢 Bullish breakout":"🔴 Bearish breakdown")+
-        " confirmed on the completed 5-minute candle at "+new Date(confirmedTime*1000).toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata",hour:"2-digit",minute:"2-digit"})+" IST");
-    }else{
-      setText("chartConfirmationNote","Confirmation exists, but the exact candle is unavailable in the chart feed. Marker withheld.");
-    }
-  }else{
-    setText("chartConfirmationNote",currentInterval!=="5m"?"Select 5m to view confirmed breakout markers.":
-      "⏳ No confirmed breakout marker for the current prediction.");
-  }
-  if(typeof candleSeries.setMarkers==="function")candleSeries.setMarkers(markers);
+  if(typeof candleSeries.setMarkers==="function")candleSeries.setMarkers([]);
   setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
   setText("chartIntervalLabel",currentInterval);chart.timeScale().fitContent();
 }
@@ -7278,28 +7159,10 @@ def prediction(include_alerts: bool = False):
                 market_regime=regime_data["regime"]
             )
 
-        # v18.8: completed-candle ORB gate is now part of the live dashboard decision.
-        # Preserve the original model's direction/score for diagnostics; no look-ahead.
-        from entry_confirmation_v187 import evaluate as _evaluate_entry_v188
-        _base_fno_setup = fno_setup
-        _gate = _evaluate_entry_v188(market_data, {"fno_setup": _base_fno_setup})
-        _gate_action = str(_gate.get("action") or "WAIT")
-        _gate_reason = str(_gate.get("reason") or "Entry confirmation unavailable")
-        if _base_fno_setup != "WAIT":
-            if (_base_fno_setup == "CE WATCH" and _gate_action != "BUY CE") or (_base_fno_setup == "PE WATCH" and _gate_action != "BUY PE"):
-                fno_setup = "WAIT"
-                fno_setup_reason = "Entry gate: " + _gate_reason
-            elif _gate_action in ("BUY CE", "BUY PE"):
-                fno_setup_reason = "Confirmed: " + _gate_reason
-        # Never display actionable option alerts when the final dashboard is WAIT.
-        if fno_setup == "WAIT":
-            fno_alerts = None
-
         return {
             "status": "success",
-            "model_version": "18.9",
-            "entry_confirmation": {**_gate, "base_setup": _base_fno_setup, "final_setup": fno_setup,
-                                   "mode": "ACTIVE", "checked_at": datetime.now().isoformat()},
+            "model_version": "18.6",
+            "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
             "confidence": confidence,
@@ -14017,30 +13880,3 @@ def v18_backtest(period: str='30d'):
         result['data_rows']=len(bars)
         return result
     except Exception as exc:return {'status':'error','message':str(exc)}
-
-# v18.7: request-driven, persisted 5-minute entry confirmations.
-# Does not alter the existing /prediction score or place broker orders.
-@app.post('/api/v18.7/monitor')
-def v187_monitor(request: __import__("fastapi").Request):
-    import os, secrets
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from fastapi import HTTPException
-    from entry_confirmation_v187 import evaluate, persist
-    expected = os.getenv('NIFTY_MONITOR_SECRET','')
-    provided = request.headers.get('X-Monitor-Secret','')
-    if not expected or not secrets.compare_digest(provided,expected):
-        raise HTTPException(status_code=401,detail='Monitor authentication failed')
-    now = datetime.now(ZoneInfo('Asia/Kolkata'))
-    if now.weekday() >= 5 or not (9 <= now.hour <= 15):
-        return {'status':'skipped','reason':'Outside NSE monitoring hours'}
-    try:
-        bars = yf.Ticker('^NSEI').history(period='2d',interval='5m')
-        base = prediction(include_alerts=False)
-        if base.get('status') != 'success':
-            return {'status':'unavailable','reason':'Prediction unavailable','details':base.get('message')}
-        result = evaluate(bars,base,now)
-        result['persistence'] = persist(result)
-        return result
-    except Exception as exc:
-        raise HTTPException(status_code=503,detail='Monitor failed: '+str(exc)[:200])
