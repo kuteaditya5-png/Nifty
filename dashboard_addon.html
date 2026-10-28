@@ -4,7 +4,7 @@
 #signalJournalTools button{background:#17385b;color:#fff;border:1px solid #386189;border-radius:8px;padding:10px 14px;cursor:pointer}
 #signalJournalTools .hint{font-size:12px;color:#9cb1ca;flex-basis:100%}
 </style>
-<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Signals are recorded while this dashboard is open. Export requires your private key. Price-movement outcomes are not yet calculated.</span></div>
+<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadChartExcel">⬇ Download chart candles Excel</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Chart Excel exports timestamped Open, High, Low, Close and Volume from market data. Exports require your private key. Signals are observed only while this dashboard is open.</span></div>
 <script>
 (function(){
  const $=id=>document.getElementById(id);
@@ -24,6 +24,18 @@
    if(typeof chart==='undefined'||!chart||typeof chart.takeScreenshot!=='function')throw Error('Chart is not ready');
    let canvas=chart.takeScreenshot();let a=document.createElement('a');a.href=canvas.toDataURL('image/png');a.download='nifty_chart_'+new Date().toISOString().slice(0,10)+'.png';a.click();
   }catch(e){alert('Chart download unavailable: '+e.message)}
+ });
+ $('downloadChartExcel').addEventListener('click',async()=>{
+  let key=prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;
+  let date=prompt('Market date YYYY-MM-DD (blank = today):','')||'';
+  let interval=prompt('Candle interval: 1m, 5m, or 15m','5m')||'5m';
+  try{
+   let url='/api/signal-journal/candles.xlsx?date='+encodeURIComponent(date)+'&interval='+encodeURIComponent(interval);
+   let r=await fetch(url,{headers:{'X-Signal-Export-Key':key}});
+   if(!r.ok){let message=await r.text();throw Error('Candle export failed ('+r.status+'): '+message.slice(0,220))}
+   let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);
+   a.download='nifty_candles_'+(date||new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'}))+'_'+interval+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
+  }catch(e){alert(e.message)}
  });
  $('downloadSignalExcel').addEventListener('click',async()=>{
   let key=prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;

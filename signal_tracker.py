@@ -1,5 +1,5 @@
 """NIFTY AI observational signal journal. Browser-triggered, not a trading execution engine."""
-import os, io, csv, re
+import os, io, csv, re, hmac
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import psycopg
@@ -64,7 +64,7 @@ def register(app):
     @app.get('/api/signal-journal/export.xlsx')
     def export_excel(request: Request, date: str=''):
         key=os.getenv('SIGNAL_EXPORT_KEY')
-        if not key or request.headers.get('X-Signal-Export-Key')!=key: raise HTTPException(403,'Export authorization required')
+        if not key or not hmac.compare_digest(request.headers.get('X-Signal-Export-Key',''),key): raise HTTPException(403,'Export authorization required')
         if date and not re.fullmatch(r'\d{4}-\d{2}-\d{2}',date): raise HTTPException(422,'Invalid date')
         try:
             setup()
@@ -89,3 +89,84 @@ def register(app):
             return StreamingResponse(output,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="nifty_signal_history.xlsx"'})
         except HTTPException: raise
         except Exception as e: raise HTTPException(503,'Signal journal export unavailable') from e
+
+    @app.get('/api/signal-journal/candles.xlsx')
+    def export_chart_candles(request: Request, date: str='', interval: str='5m'):
+        """Export historical NIFTY OHLCV candles with exchange-local timestamps.
+        This independently fetches market data; it does not export chart pixels.
+        """
+        key=os.getenv('SIGNAL_EXPORT_KEY')
+        if not key or not hmac.compare_digest(request.headers.get('X-Signal-Export-Key',''),key):
+            raise HTTPException(403,'Export authorization required')
+        if interval not in ('1m','5m','15m'):
+            raise HTTPException(422,'Interval must be 1m, 5m or 15m')
+        from datetime import date as date_type, timedelta
+        try:
+            day=date_type.fromisoformat(date) if date else datetime.now(IST).date()
+        except ValueError:
+            raise HTTPException(422,'Date must be YYYY-MM-DD')
+        if day>datetime.now(IST).date():
+            raise HTTPException(422,'Future date is not available')
+        if day < datetime.now(IST).date()-timedelta(days=6 if interval=='1m' else 58):
+            raise HTTPException(422,'Date exceeds typical Yahoo intraday history window; use stored candle history if available')
+        try:
+            import yfinance as yf
+            import pandas as pd
+            start=datetime.combine(day,datetime.min.time(),tzinfo=IST)
+            end=start+timedelta(days=1)
+            df=yf.Ticker('^NSEI').history(start=start,end=end,interval=interval,auto_adjust=False)
+            if df is None or df.empty:
+                raise HTTPException(404,'No candles returned for this date (market closed or provider unavailable)')
+            if df.index.tz is None:
+                raise HTTPException(503,'Market data lacks timezone information; cannot safely label timestamps')
+            df=df.sort_index()
+            df.index=df.index.tz_convert(IST)
+            df=df[df.index.date==day]
+            now=pd.Timestamp.now(tz='Asia/Kolkata')
+            duration=pd.Timedelta(minutes=int(interval[:-1]))
+            df=df[(df.index+duration)<=now]
+            df=df.between_time('09:15','15:29')
+            if df.empty: raise HTTPException(404,'No completed market-session candles available')
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+            from openpyxl.chart import StockChart, Reference
+            wb=Workbook(); ws=wb.active; ws.title='NIFTY OHLCV'
+            ws.append(['Candle Start (IST)','Candle End (IST)','Open','High','Low','Close','Volume'])
+            for ts,row in df.iterrows():
+                st=ts.to_pydatetime().replace(tzinfo=None)
+                et=(ts+duration).to_pydatetime().replace(tzinfo=None)
+                def val(k):
+                    v=row.get(k)
+                    return float(v) if v is not None and pd.notna(v) else None
+                ws.append([st,et,val('Open'),val('High'),val('Low'),val('Close'),val('Volume')])
+            ws.freeze_panes='C2';ws.auto_filter.ref=ws.dimensions
+            for cell in ws[1]:
+                cell.font=Font(bold=True,color='FFFFFF')
+                cell.fill=PatternFill('solid',fgColor='16324F')
+            for col in 'AB': ws.column_dimensions[col].width=24
+            for col in 'CDEFG': ws.column_dimensions[col].width=16
+            for row in ws.iter_rows(min_row=2):
+                row[0].number_format='yyyy-mm-dd hh:mm:ss'
+                row[1].number_format='yyyy-mm-dd hh:mm:ss'
+                for c in row[2:6]: c.number_format='#,##0.00'
+                row[6].number_format='#,##0'
+            notes=wb.create_sheet('Source & Notes')
+            for item in [
+                ('Instrument','NIFTY 50 spot index (^NSEI)'),
+                ('Provider','Yahoo Finance via yfinance'),
+                ('Market date (IST)',str(day)),
+                ('Interval',interval),
+                ('Timestamp meaning','Start and end of each candle, Asia/Kolkata (IST)'),
+                ('Completed candles only','Yes; incomplete current candle excluded'),
+                ('Source limitation','Fetched at export time; may differ from chart feed or previously displayed candles'),
+                ('Data limitations','Volume may be missing for index data; no option premiums included'),
+                ('Timezone','IST (UTC+05:30)'),
+                ('Rows',len(df)),
+            ]: notes.append(item)
+            notes.column_dimensions['A'].width=30;notes.column_dimensions['B'].width=100
+            output=io.BytesIO();wb.save(output);output.seek(0)
+            filename=f'nifty_candles_{day}_{interval}.xlsx'
+            return StreamingResponse(output,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':f'attachment; filename="{filename}"'})
+        except HTTPException: raise
+        except Exception as e:
+            raise HTTPException(503,'Candle export unavailable; check market-data provider and server logs') from e
