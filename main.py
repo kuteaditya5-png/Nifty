@@ -1218,33 +1218,6 @@ def analyze_candlestick_patterns(
             "Three strong consecutive bearish candles with falling closes."
         )
 
-    # v18.4: additional completed-candle confirmations. These are heuristic
-    # detectors; correlated matches are capped by the existing score logic.
-    tol = max(current["range"], previous["range"]) * 0.12
-    if current["range"] > 0:
-        if current["body"] / current["range"] < 0.12 and current["lower_wick"] > current["range"] * 0.65 and current["upper_wick"] < current["range"] * 0.12:
-            add_pattern("DRAGONFLY DOJI", "BULLISH" if prior_trend == "DOWNTREND" else "NEUTRAL", 0.75 if prior_trend == "DOWNTREND" else 0, "Long lower wick and near-equal open/close after a decline.")
-        if current["body"] / current["range"] < 0.12 and current["upper_wick"] > current["range"] * 0.65 and current["lower_wick"] < current["range"] * 0.12:
-            add_pattern("GRAVESTONE DOJI", "BEARISH" if prior_trend == "UPTREND" else "NEUTRAL", -0.75 if prior_trend == "UPTREND" else 0, "Long upper wick and near-equal open/close after a rise.")
-    if prior_trend == "DOWNTREND" and previous["bearish"] and current["bullish"] and abs(previous["low"] - current["low"]) <= tol and current["close"] > (current["low"] + current["high"]) / 2:
-        add_pattern("TWEEZER BOTTOM", "BULLISH", 0.65, "Two nearby lows followed by bullish rejection.")
-    if prior_trend == "UPTREND" and previous["bullish"] and current["bearish"] and abs(previous["high"] - current["high"]) <= tol and current["close"] < (current["low"] + current["high"]) / 2:
-        add_pattern("TWEEZER TOP", "BEARISH", -0.65, "Two nearby highs followed by bearish rejection.")
-    # Three inside/outside patterns use the last three completed candles.
-    a, b, c = two_back, previous, current
-    inside = b["high"] < a["high"] and b["low"] > a["low"]
-    outside = b["high"] > a["high"] and b["low"] < a["low"]
-    if prior_trend == "DOWNTREND" and a["bearish"] and b["bullish"] and c["bullish"]:
-        if inside and c["close"] > a["open"]:
-            add_pattern("THREE INSIDE UP", "BULLISH", 1.0, "Bullish inside candle followed by confirmation above first open.")
-        if outside and c["close"] > b["close"]:
-            add_pattern("THREE OUTSIDE UP", "BULLISH", 1.0, "Bullish outside candle followed by a higher close.")
-    if prior_trend == "UPTREND" and a["bullish"] and b["bearish"] and c["bearish"]:
-        if inside and c["close"] < a["open"]:
-            add_pattern("THREE INSIDE DOWN", "BEARISH", -1.0, "Bearish inside candle followed by confirmation below first open.")
-        if outside and c["close"] < b["close"]:
-            add_pattern("THREE OUTSIDE DOWN", "BEARISH", -1.0, "Bearish outside candle followed by a lower close.")
-
     # Cap overlap from multiple simultaneous pattern matches.
     capped_raw_score = max(
         -3.0,
@@ -4869,8 +4842,7 @@ html,body{max-width:100%;overflow-x:hidden}
       <div class="chart-note">Auto Trade remains paper-only. The production CE/PE/WAIT prediction engine is unchanged.</div>
     </div>
     <div class="metrics">
-      <div id="paperPriceStatus" style="color:#ffbd69;font-size:12px;padding:6px 10px" role="status">Waiting for first quote sync…</div>
-<div class="metric"><span class="label">Equity</span><b id="paperEquity">₹--</b></div>
+      <div class="metric"><span class="label">Equity</span><b id="paperEquity">₹--</b></div>
       <div class="metric"><span class="label">Cash</span><b id="paperCash">₹--</b></div>
       <div class="metric"><span class="label">Open P&L</span><b id="paperOpenPnl">₹--</b></div>
       <div class="metric"><span class="label">Realized P&L</span><b id="paperRealized">₹--</b></div>
@@ -5045,12 +5017,9 @@ async function loadPrediction(){
 }
 async function loadPaper(){
   try{
-    const syncResponse=await fetch("/api/paper/sync",{method:"POST",cache:"no-store"});
-    const syncData=await syncResponse.json();
-    const syncWarning=(!syncResponse.ok||syncData.status==="error")?(syncData.message||"Quote sync failed"):(syncData.unavailable_quotes?syncData.message:"");
+    await fetch("/api/paper/sync",{method:"POST"});
     const [sr,hr]=await Promise.all([fetch("/api/paper/summary"),fetch("/api/paper/history?limit=500&status=ALL")]);
     const s=await sr.json(),h=await hr.json(),p=s.summary||{};
-    const priceStatus=el("paperPriceStatus");if(priceStatus)priceStatus.textContent=syncWarning?("⚠ "+syncWarning):("Last price sync: "+new Date().toLocaleTimeString());
     setText("paperEquity","₹"+Number(p.equity||0).toFixed(2));setText("paperCash","₹"+Number(p.cash_balance||0).toFixed(2));
     setText("paperOpenPnl","₹"+Number(p.open_pnl||0).toFixed(2));setText("paperRealized","₹"+Number(p.realized_pnl||0).toFixed(2));
     setText("paperWinRate",Number(p.win_rate||0).toFixed(1)+"%");setText("paperOpenCount",p.open_positions||0);
@@ -5059,7 +5028,7 @@ async function loadPaper(){
     const ob=el("paperOpenPositions");
     if(ob)ob.innerHTML=open.map(t=>`<tr><td>${new Date(t.opened_at).toLocaleString()}</td><td>${t.signal||"--"}</td><td>${t.strike_price} ${t.option_type}${t.expiry?`<div style="font-size:9px;color:#7188a3">${t.expiry}</div>`:""}</td><td>₹${Number(t.entry_price).toFixed(2)}</td><td>₹${Number(t.current_price??t.entry_price).toFixed(2)}</td><td>₹${Number(t.pnl||0).toFixed(2)}</td><td>${t.status}</td><td><button onclick="paperExit(${t.trade_id},${t.current_price||t.entry_price})">Exit</button></td></tr>`).join("")||'<tr><td colspan="8">No open paper positions.</td></tr>';
     renderTradeHistory(h.trades||[]);
-  }catch(e){console.warn("Paper:",e);const ps=el("paperPriceStatus");if(ps)ps.textContent="⚠ Paper data unavailable: "+e.message}
+  }catch(e){console.warn("Paper:",e)}
 }
 function renderTradeHistory(trades){
   const filter=el("historyStatus")?.value||"ALL";
@@ -5895,7 +5864,7 @@ async function loadAll(){
   catch(e){box.textContent=e.message;box.style.display="block";setText("lastUpdated","Update failed")}
 }
 function changeInterval(v){currentInterval=v;document.querySelectorAll("[data-i]").forEach(b=>b.classList.toggle("active",b.dataset.i===v));loadAll()}
-loadAll();setInterval(loadAll,60000);setInterval(()=>{if(document.visibilityState==="visible" && document.getElementById("paperOpenPositions"))loadPaper()},30000);
+loadAll();setInterval(loadAll,60000);
 </script>
 <script id="aditya-horizontal-nav-init">
 (function(){
@@ -5932,6 +5901,53 @@ loadAll();setInterval(loadAll,60000);setInterval(()=>{if(document.visibilityStat
  });
 })();
 </script>
+<!-- Signal Journal add-on: insert before </body> in dashboard HTML -->
+<style>
+#signalJournalTools{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;padding:12px;border:1px solid #203650;border-radius:12px;background:#0b1829;color:#eef5ff}
+#signalJournalTools button{background:#17385b;color:#fff;border:1px solid #386189;border-radius:8px;padding:10px 14px;cursor:pointer}
+#signalJournalTools .hint{font-size:12px;color:#9cb1ca;flex-basis:100%}
+</style>
+<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadChartExcel">⬇ Download chart candles Excel</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Chart Excel exports timestamped Open, High, Low, Close and Volume from market data. Exports require your private key. Signals are observed only while this dashboard is open.</span></div>
+<script>
+(function(){
+ const $=id=>document.getElementById(id);
+ function text(id){return ($(id)?.textContent||'').trim();}
+ function observe(){
+  let raw=text('signal').toUpperCase();
+  let signal=raw.includes('BUY CE')?'BUY CE':raw.includes('BUY PE')?'BUY PE':raw==='WAIT'?'WAIT':null;
+  if(!signal)return;
+  let p=text('confidence').match(/[\d.]+/);
+  // Do not guess the NIFTY spot from option strike or unrelated displayed values.
+  fetch('/api/signal-journal/observe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal,confidence:p?Number(p[0]):null,suggested_option:text('signalStrike')})}).catch(()=>{});
+ }
+ let previous='';
+ setInterval(()=>{let state=[text('signal'),text('confidence'),text('signalStrike')].join('|');if(state!==previous){previous=state;observe()}},5000);
+ $('downloadNiftyChart').addEventListener('click',()=>{
+  try{
+   if(typeof chart==='undefined'||!chart||typeof chart.takeScreenshot!=='function')throw Error('Chart is not ready');
+   let canvas=chart.takeScreenshot();let a=document.createElement('a');a.href=canvas.toDataURL('image/png');a.download='nifty_chart_'+new Date().toISOString().slice(0,10)+'.png';a.click();
+  }catch(e){alert('Chart download unavailable: '+e.message)}
+ });
+ $('downloadChartExcel').addEventListener('click',async()=>{
+  let key=prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;
+  let date=prompt('Market date YYYY-MM-DD (blank = today):','')||'';
+  let interval=prompt('Candle interval: 1m, 5m, or 15m','5m')||'5m';
+  try{
+   let url='/api/signal-journal/candles.xlsx?date='+encodeURIComponent(date)+'&interval='+encodeURIComponent(interval);
+   let r=await fetch(url,{headers:{'X-Signal-Export-Key':key}});
+   if(!r.ok){let message=await r.text();throw Error('Candle export failed ('+r.status+'): '+message.slice(0,220))}
+   let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);
+   a.download='nifty_candles_'+(date||new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'}))+'_'+interval+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
+  }catch(e){alert(e.message)}
+ });
+ $('downloadSignalExcel').addEventListener('click',async()=>{
+  let key=prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;
+  let date=prompt('Date YYYY-MM-DD (leave blank for recent calls):','')||'';
+  try{let r=await fetch('/api/signal-journal/export.xlsx?date='+encodeURIComponent(date),{headers:{'X-Signal-Export-Key':key}});if(!r.ok)throw Error('Export failed ('+r.status+'). Check key and database.');let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='nifty_calls_'+(date||'recent')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}catch(e){alert(e.message)}
+ });
+})();
+</script>
+
 </body>
 </html>
 """
@@ -5939,76 +5955,6 @@ loadAll();setInterval(loadAll,60000);setInterval(()=>{if(document.visibilityStat
 # ============================================================
 # F&O ALERT ENGINE - VERSION 7
 # ============================================================
-
-def _v185_trend_observation(data):
-    """Research-only Supertrend(10,3), ADX(14), ATR(14) on completed 5m candles.
-    No changes to BUY CE / BUY PE / WAIT or prediction weights.
-    """
-    empty = {"status": "unavailable", "mode": "observation", "timeframe": "5m",
-             "supertrend": {"period": 10, "multiplier": 3, "direction": "UNAVAILABLE", "value": None},
-             "adx": {"period": 14, "value": None, "plus_di": None, "minus_di": None, "strength": "UNAVAILABLE"},
-             "atr": {"period": 14, "value": None, "percent_of_spot": None},
-             "last_completed_candle": None}
-    try:
-        import numpy as np
-        frame = _completed_intraday_frame(data, interval_minutes=5)
-        if frame is None or len(frame) < 45:
-            return empty
-        high = frame["High"].astype(float)
-        low = frame["Low"].astype(float)
-        close = frame["Close"].astype(float)
-        pc = close.shift(1)
-        tr = pd.concat([high-low, (high-pc).abs(), (low-pc).abs()], axis=1).max(axis=1)
-        # Wilder-smoothed ATR / directional movement; no forward-looking candles.
-        atr14 = tr.ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        up = high.diff()
-        down = -low.diff()
-        pdm = up.where((up>down)&(up>0), 0.0)
-        mdm = down.where((down>up)&(down>0), 0.0)
-        pdi = 100*pdm.ewm(alpha=1/14, adjust=False, min_periods=14).mean()/atr14.replace(0, np.nan)
-        mdi = 100*mdm.ewm(alpha=1/14, adjust=False, min_periods=14).mean()/atr14.replace(0, np.nan)
-        dx = 100*(pdi-mdi).abs()/(pdi+mdi).replace(0, np.nan)
-        adx = dx.ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-        atr10 = tr.ewm(alpha=1/10, adjust=False, min_periods=10).mean()
-        mid = (high+low)/2
-        ub = (mid+3*atr10).to_numpy(dtype=float)
-        lb = (mid-3*atr10).to_numpy(dtype=float)
-        cls = close.to_numpy(dtype=float)
-        upper = ub.copy()
-        lower = lb.copy()
-        direction = np.ones(len(cls), dtype=int)
-        for i in range(1, len(cls)):
-            if not np.isfinite(ub[i]) or not np.isfinite(lb[i]):
-                continue
-            if np.isfinite(upper[i-1]) and (ub[i]>=upper[i-1] and cls[i-1]<=upper[i-1]):
-                upper[i] = upper[i-1]
-            if np.isfinite(lower[i-1]) and (lb[i]<=lower[i-1] and cls[i-1]>=lower[i-1]):
-                lower[i] = lower[i-1]
-            if cls[i]>upper[i-1]:
-                direction[i]=1
-            elif cls[i]<lower[i-1]:
-                direction[i]=-1
-            else:
-                direction[i]=direction[i-1]
-        def val(x):
-            x=float(x)
-            return round(x, 3) if np.isfinite(x) else None
-        a=val(adx.iloc[-1]); v=val(atr14.iloc[-1]); spot=val(close.iloc[-1]);
-        if a is None or v is None:
-            return empty
-        trend = 'BULLISH' if direction[-1]>0 else 'BEARISH'
-        return {"status":"success", "mode":"observation", "timeframe":"5m",
-                "supertrend":{"period":10,"multiplier":3,"direction":trend,
-                              "value":val(lower[-1] if direction[-1]>0 else upper[-1])},
-                "adx":{"period":14,"value":a,"plus_di":val(pdi.iloc[-1]),
-                       "minus_di":val(mdi.iloc[-1]),
-                       "strength":"WEAK" if a<20 else "DEVELOPING" if a<25 else "STRONG"},
-                "atr":{"period":14,"value":v,"percent_of_spot":round(v/spot*100,3) if spot else None},
-                "last_completed_candle":str(frame.index[-1]),
-                "message":"Observation only; does not alter trading calls or confidence."}
-    except Exception:
-        return empty
-
 
 def _calculate_intraday_atr(data, period=14):
     """
@@ -6735,7 +6681,6 @@ def prediction(include_alerts: bool = False):
         # -----------------------------
         # 9. MULTI-TIMEFRAME PRICE ACTION
         # -----------------------------
-        trend_observation = _v185_trend_observation(market_data)
         price_action_data = calculate_price_action_confirmation(market_data)
         price_action_available = price_action_data.get("status") == "success"
         price_action_score = float(price_action_data.get("score", 0) or 0)
@@ -6906,42 +6851,6 @@ def prediction(include_alerts: bool = False):
         )
 
         # -----------------------------
-        # v18.6: ACTIVE 5-MINUTE TREND CONFIRMATION
-        # Only completed candles; capped adjustment prevents indicator overlap
-        # from overpowering the existing multi-source prediction model.
-        # ATR is used as a volatility/risk filter, never a direction signal.
-        # -----------------------------
-        active_trend = {"status": "unavailable", "mode": "active", "score_adjustment": 0.0,
-                        "direction": "NEUTRAL", "adx_filter": "UNAVAILABLE",
-                        "atr_filter": "UNAVAILABLE", "reason": "Insufficient completed 5-minute candles."}
-        if trend_observation.get("status") == "success":
-            st = trend_observation["supertrend"].get("direction")
-            adx_val = trend_observation["adx"].get("value")
-            di_plus = trend_observation["adx"].get("plus_di")
-            di_minus = trend_observation["adx"].get("minus_di")
-            atr_pct = trend_observation["atr"].get("percent_of_spot")
-            if all(isinstance(v, (int, float)) for v in (adx_val, di_plus, di_minus, atr_pct)):
-                # Require Supertrend and directional movement to agree.
-                st_dir = 1 if st == "BULLISH" else -1 if st == "BEARISH" else 0
-                di_dir = 1 if di_plus > di_minus else -1 if di_minus > di_plus else 0
-                agreement = st_dir if st_dir == di_dir else 0
-                # ADX<20 is choppy; 20-25 developing; >=25 trending.
-                strength = 0.0 if adx_val < 20 else 0.5 if adx_val < 25 else 1.0
-                # 5-minute ATR above 0.5% of index level signals exceptional volatility.
-                high_volatility = atr_pct > 0.5
-                adjustment = round(0.09 * agreement * strength * (0.5 if high_volatility else 1.0), 4)
-                combined_score = max(-1.0, min(1.0, combined_score + adjustment))
-                active_trend = {
-                    "status": "success", "mode": "active", "score_adjustment": adjustment,
-                    "direction": "BULLISH" if agreement > 0 else "BEARISH" if agreement < 0 else "NEUTRAL",
-                    "adx_filter": "WEAK" if adx_val < 20 else "DEVELOPING" if adx_val < 25 else "STRONG",
-                    "atr_filter": "HIGH_VOLATILITY" if high_volatility else "NORMAL",
-                    "reason": "Supertrend and DI agree" if agreement else "Supertrend and DI disagree or are neutral",
-                }
-        trend_observation["mode"] = "active"
-        trend_observation["active_prediction"] = active_trend
-
-        # -----------------------------
         # 20. PROBABILITY MODEL
         # -----------------------------
         direction_strength = abs(combined_score)
@@ -7084,15 +6993,6 @@ def prediction(include_alerts: bool = False):
         else:
             fno_setup = "WAIT"
 
-        # v18.6 conservative entry filter: no new CE/PE watch when
-        # completed-candle ADX is weak or ATR signals exceptional volatility.
-        # Fail open for unavailable data, preserving existing predictions.
-        if fno_setup != "WAIT" and active_trend["status"] == "success":
-            if active_trend["adx_filter"] == "WEAK" or active_trend["atr_filter"] == "HIGH_VOLATILITY":
-                fno_setup = "WAIT"
-            elif (fno_setup == "CE WATCH" and active_trend["direction"] == "BEARISH") or (fno_setup == "PE WATCH" and active_trend["direction"] == "BULLISH"):
-                fno_setup = "WAIT"
-
         # Explain exactly why the current setup is WAIT/CE/PE.
         setup_reasons = []
         if fno_setup == "CE WATCH":
@@ -7124,13 +7024,6 @@ def prediction(include_alerts: bool = False):
             if data_coverage < 0.72:
                 setup_reasons.append("Live data coverage is below the preferred 72% threshold.")
 
-        if fno_setup == "WAIT" and active_trend["status"] == "success":
-            if active_trend["adx_filter"] == "WEAK":
-                setup_reasons.insert(0, "ADX below 20: trend strength is weak.")
-            elif active_trend["atr_filter"] == "HIGH_VOLATILITY":
-                setup_reasons.insert(0, "5-minute ATR exceeds 0.5% of index price: elevated volatility.")
-            elif active_trend["direction"] != "NEUTRAL":
-                setup_reasons.insert(0, "Active Supertrend/DI confirmation: " + active_trend["direction"] + ".")
         fno_setup_reason = " ".join(setup_reasons[:3]) or "Signals are mixed, so the model is waiting for stronger confirmation."
 
         # -----------------------------
@@ -7161,7 +7054,7 @@ def prediction(include_alerts: bool = False):
 
         return {
             "status": "success",
-            "model_version": "18.6",
+            "model_version": "15.0",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -7271,7 +7164,6 @@ def prediction(include_alerts: bool = False):
                     "score": round(option_score, 3),
                     "message": option_data.get("message")
                 },
-                "trend_observation_v185": trend_observation,
                 "price_action": {
                     "status": price_action_data.get("status"),
                     "bias": price_action_data.get("bias", "NEUTRAL"),
@@ -8015,7 +7907,7 @@ def walk_forward_validation():
             "status": "success",
             "validation_type": "expanding-window price-feature proxy",
             "no_lookahead": True,
-            "model_version": "18.6",
+            "model_version": "15.0",
             "evaluated_rows": len(all_actual),
             "directional_accuracy_percent": round(directional_accuracy, 1),
             "signal_precision_percent": round(signal_precision, 1),
@@ -8533,7 +8425,7 @@ def _v12_3_run_audited_backtest(
     return {
         "status": "success",
         "mode": "NIFTY_DIRECTION_PROXY_AUDITED",
-        "model_version": "18.6",
+        "model_version": "15.0",
         **metrics,
         "period": period,
         "threshold": round(float(threshold), 2),
@@ -9079,7 +8971,7 @@ def v149_history_readiness():
 
         return {
             "status": "success",
-            "model_version": "18.6",
+            "model_version": "15.0",
             **gate
         }
 
@@ -10278,7 +10170,7 @@ def v145_extended_validation(
 
         return {
             "status": "success",
-            "model_version": "18.6",
+            "model_version": "15.0",
             "requested_months": months,
             "actual_yfinance_period": actual_period,
             "historical_candles": len(df),
@@ -10569,7 +10461,7 @@ def v144_regime_aware_walk_forward(
 
         return {
             "status": "success",
-            "model_version": "18.6",
+            "model_version": "15.0",
             "rule_under_test": {
                 "TRENDING": "REVERSION",
                 "RANGE": "WAIT",
@@ -10801,7 +10693,7 @@ def v143_regime_engine_matrix(
 
         return {
             "status": "success",
-            "model_version": "18.6",
+            "model_version": "15.0",
             "period": period,
             "threshold": threshold,
             "matrix": matrix,
@@ -11039,7 +10931,7 @@ def v141_signal_edge(period: str = "60d", threshold: float = 0.20):
 
         return {
             "status": "success",
-            "model_version": "18.6",
+            "model_version": "15.0",
             "period": period,
             "bar_interval": "15m",
             "verdict": verdict,
@@ -13880,3 +13772,8 @@ def v18_backtest(period: str='30d'):
         result['data_rows']=len(bars)
         return result
     except Exception as exc:return {'status':'error','message':str(exc)}
+
+
+# Observational signal journal and export endpoints
+import signal_tracker
+signal_tracker.register(app)
