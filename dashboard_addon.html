@@ -1,0 +1,34 @@
+<!-- Signal Journal add-on: insert before </body> in dashboard HTML -->
+<style>
+#signalJournalTools{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;padding:12px;border:1px solid #203650;border-radius:12px;background:#0b1829;color:#eef5ff}
+#signalJournalTools button{background:#17385b;color:#fff;border:1px solid #386189;border-radius:8px;padding:10px 14px;cursor:pointer}
+#signalJournalTools .hint{font-size:12px;color:#9cb1ca;flex-basis:100%}
+</style>
+<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Signals are recorded while this dashboard is open. Export requires your private key. Price-movement outcomes are not yet calculated.</span></div>
+<script>
+(function(){
+ const $=id=>document.getElementById(id);
+ function text(id){return ($(id)?.textContent||'').trim();}
+ function observe(){
+  let raw=text('signal').toUpperCase();
+  let signal=raw.includes('BUY CE')?'BUY CE':raw.includes('BUY PE')?'BUY PE':raw==='WAIT'?'WAIT':null;
+  if(!signal)return;
+  let p=text('confidence').match(/[\d.]+/);
+  // Do not guess the NIFTY spot from option strike or unrelated displayed values.
+  fetch('/api/signal-journal/observe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal,confidence:p?Number(p[0]):null,suggested_option:text('signalStrike')})}).catch(()=>{});
+ }
+ let previous='';
+ setInterval(()=>{let state=[text('signal'),text('confidence'),text('signalStrike')].join('|');if(state!==previous){previous=state;observe()}},5000);
+ $('downloadNiftyChart').addEventListener('click',()=>{
+  try{
+   if(typeof chart==='undefined'||!chart||typeof chart.takeScreenshot!=='function')throw Error('Chart is not ready');
+   let canvas=chart.takeScreenshot();let a=document.createElement('a');a.href=canvas.toDataURL('image/png');a.download='nifty_chart_'+new Date().toISOString().slice(0,10)+'.png';a.click();
+  }catch(e){alert('Chart download unavailable: '+e.message)}
+ });
+ $('downloadSignalExcel').addEventListener('click',async()=>{
+  let key=prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;
+  let date=prompt('Date YYYY-MM-DD (leave blank for recent calls):','')||'';
+  try{let r=await fetch('/api/signal-journal/export.xlsx?date='+encodeURIComponent(date),{headers:{'X-Signal-Export-Key':key}});if(!r.ok)throw Error('Export failed ('+r.status+'). Check key and database.');let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='nifty_calls_'+(date||'recent')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}catch(e){alert(e.message)}
+ });
+})();
+</script>
