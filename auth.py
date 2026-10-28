@@ -260,41 +260,6 @@ def _ensure_paper_account(user_id: int):
         conn.commit()
 
 
-
-# v18.3: strict contract matching. Never substitute a nearby strike or expiry.
-def _exact_contract_price(snapshot, option_type, strike, expiry):
-    alerts = (snapshot or {}).get("alerts") or {}
-    chain = (snapshot or {}).get("option_chain") or {}
-    if str(chain.get("status", "")).lower() != "success":
-        return None
-    side = "call" if str(option_type).upper() == "CE" else "put" if str(option_type).upper() == "PE" else None
-    if not side:
-        return None
-    row = alerts.get(side) or {}
-    if not isinstance(row, dict):
-        return None
-    try:
-        if abs(float(row.get("strike")) - float(strike)) > 0.001:
-            return None
-        live_expiry = chain.get("expiry") or alerts.get("expiry")
-        if not expiry or not live_expiry or str(expiry)[:10] != str(live_expiry)[:10]:
-            return None
-        price = float(row.get("ltp"))
-        return round(price, 2) if math.isfinite(price) and price > 0 else None
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-# Audit helpers are optional in this build: paper pricing must not be blocked
-# by a missing accuracy-audit implementation.
-def _safe_prediction_audit(snapshot):
-    fn = globals().get("_record_and_evaluate_prediction")
-    if not callable(fn):
-        return {"created": 0, "evaluated": 0}
-    try:
-        return fn(snapshot) or {"created": 0, "evaluated": 0}
-    except Exception:
-        return {"created": 0, "evaluated": 0}
-
 def setup_auth(app, fno_alert_provider=None):
     try:
         _init_db()
@@ -392,10 +357,8 @@ def setup_auth(app, fno_alert_provider=None):
             with conn.cursor() as cur:
                 cur.execute("SELECT starting_balance,cash_balance,auto_trade,quantity,min_confidence FROM paper_accounts WHERE user_id=%s",(user["user_id"],)); a=cur.fetchone()
                 cur.execute("SELECT COALESCE(SUM(CASE WHEN status='OPEN' THEN pnl ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='CLOSED' THEN pnl ELSE 0 END),0),COUNT(*) FILTER(WHERE status='OPEN'),COUNT(*) FILTER(WHERE status='CLOSED'),COUNT(*) FILTER(WHERE status='CLOSED' AND pnl>0) FROM paper_trades WHERE user_id=%s",(user["user_id"],)); x=cur.fetchone()
-                cur.execute("SELECT COALESCE(SUM(COALESCE(current_price,entry_price)*quantity),0),MAX(last_price_at) FROM paper_trades WHERE user_id=%s AND status='OPEN'",(user["user_id"],))
-                v=cur.fetchone(); open_value=float(v[0] or 0); last_quote=v[1]
         closed=int(x[3] or 0); wins=int(x[4] or 0)
-        return {"status":"success","summary":{"starting_balance":float(a[0]),"cash_balance":float(a[1]),"equity":float(a[1])+float(open_value),"last_price_at":last_quote.isoformat() if last_quote else None,"open_pnl":float(x[0]),"realized_pnl":float(x[1]),"open_positions":int(x[2]),"win_rate":round(wins/closed*100,1) if closed else 0,"auto_trade":a[2],"quantity":a[3],"min_confidence":float(a[4])}}
+        return {"status":"success","summary":{"starting_balance":float(a[0]),"cash_balance":float(a[1]),"equity":float(a[1])+float(x[0]),"open_pnl":float(x[0]),"realized_pnl":float(x[1]),"open_positions":int(x[2]),"win_rate":round(wins/closed*100,1) if closed else 0,"auto_trade":a[2],"quantity":a[3],"min_confidence":float(a[4])}}
 
     @app.get("/api/paper/history")
     def paper_history(request: Request, date_from: Optional[str]=None, date_to: Optional[str]=None, limit: int=500):
@@ -466,14 +429,14 @@ def setup_auth(app, fno_alert_provider=None):
     def paper_sync(request: Request):
         user=_current_user(request); _ensure_paper_account(user["user_id"])
         if fno_alert_provider is None:
-            return JSONResponse({"status":"error","updated":0,"message":"F&O provider unavailable."},status_code=503)
+            return {"status":"success","updated":0,"message":"F&O provider unavailable."}
         try:
             snap=fno_alert_provider()
             if not isinstance(snap, dict) or snap.get("status") != "success":
-                return JSONResponse({"status":"error","updated":0,"message":"Market snapshot unavailable."},status_code=503)
+                return {"status":"success","updated":0,"message":"Market snapshot unavailable."}
 
-            audit_result = _safe_prediction_audit(snap)
-            updated=0; closed=0; auto_opened=0; unavailable=0
+            audit_result = _record_and_evaluate_prediction(snap)
+            updated=0; closed=0; auto_opened=0
             ist_now=datetime.now(timezone(timedelta(hours=5,minutes=30)))
             eod_squareoff=(ist_now.hour>15 or (ist_now.hour==15 and ist_now.minute>=20))
             trading_window=((ist_now.hour>9 or (ist_now.hour==9 and ist_now.minute>=20)) and not eod_squareoff)
@@ -490,9 +453,7 @@ def setup_auth(app, fno_alert_provider=None):
                     for r in rows:
                         tid,typ,strike,entry,qty,stop,t1,t2,expiry=r
                         live=_exact_contract_price(snap,typ,strike,expiry)
-                        if live is None:
-                            unavailable+=1
-                            continue
+                        if live is None: continue
                         pnl=(float(live)-float(entry))*int(qty); exit_reason=None
                         if eod_squareoff: exit_reason="EOD 15:20"
                         elif stop is not None and live <= float(stop): exit_reason="STOP LOSS"
@@ -541,18 +502,18 @@ def setup_auth(app, fno_alert_provider=None):
                 conn.commit()
 
             return {"status":"success","updated":updated,"closed":closed,"auto_opened":auto_opened,
-                    "unavailable_quotes":unavailable,"message":("Exact contract quote unavailable for %d open trade(s); prices are unchanged." % unavailable if unavailable else "Quotes synchronized."),"eod_squareoff_active":eod_squareoff,"audit_created":audit_result.get("created",0),
+                    "eod_squareoff_active":eod_squareoff,"audit_created":audit_result.get("created",0),
                     "audit_evaluated":audit_result.get("evaluated",0)}
         except Exception as e:
-            return JSONResponse({"status":"error","updated":0,"message":str(e)},status_code=503)
+            return {"status":"success","updated":0,"message":str(e)}
 
     @app.get("/api/accuracy/summary")
     def accuracy_summary(request: Request):
         try:
             if fno_alert_provider is not None:
                 snap=fno_alert_provider()
-                _safe_prediction_audit(snap)
-            return {"status":"success","summary":(_accuracy_summary() if callable(globals().get("_accuracy_summary")) else {})}
+                _record_and_evaluate_prediction(snap)
+            return {"status":"success","summary":_accuracy_summary()}
         except Exception as e:
             return JSONResponse({"status":"error","message":str(e)},status_code=400)
 

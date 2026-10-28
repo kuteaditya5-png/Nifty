@@ -4565,118 +4565,13 @@ button:hover{border-color:var(--neo)!important;box-shadow:0 0 18px rgba(39,231,2
 .ticket-note{font-size:11px;line-height:1.45;color:#8ba2c3;margin:11px 0}.manual-buy{width:100%}
 @media(max-width:900px){.manual-option-grid{grid-template-columns:1fr}.option-table{min-width:650px}}
 </style>
-<style id="aditya-modern-dark-v18">
-/* UI-only redesign. All original trading calculations and endpoints remain intact. */
-:root{--bg:#030b1b;--panel:#07152b;--panel2:#07152b;--line:#193a65;--blue:#2368ff;--green:#11e5a4}
-body{background:radial-gradient(ellipse at 50% -18%,#102954 0%,#030b1b 52%)!important;color:#ecf4ff}
-.sidebar-nav{display:none!important}
-.shell{width:min(1640px,98%)!important;padding-top:12px!important}
-.topbar{position:relative;display:flex!important;flex-wrap:wrap;align-items:center!important;gap:12px!important;padding:12px 15px!important;border:1px solid #193a65;border-radius:16px;background:rgba(4,15,34,.94);box-shadow:0 12px 40px rgba(0,0,0,.25)}
-.brand{font-size:29px!important;white-space:nowrap}.brand span{color:#5480ff!important}.brandline .tag{display:none}
-#mainHorizontalNav{display:flex!important;gap:5px!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;flex:1;align-items:center;justify-content:center;flex-wrap:wrap}
-#mainHorizontalNav .app-tab{border-radius:10px!important;padding:10px 13px!important;font-size:12px!important;background:transparent!important;color:#c4d6f3!important}
-#mainHorizontalNav .app-tab.active,#mainHorizontalNav .app-tab:hover{background:linear-gradient(135deg,#1246be,#286dff)!important;color:#fff!important;box-shadow:0 0 17px rgba(42,111,255,.24)}
-.topbar .actions{margin-left:auto}.topbar .actions .pill:first-child{font-size:11px}
-.card,.section-card,.sidecard,.metric,.tradebox{border-radius:15px!important;border-color:#1b3b68!important;background:linear-gradient(155deg,rgba(8,26,55,.98),rgba(3,15,35,.98))!important}
-.card{box-shadow:0 12px 32px rgba(0,0,0,.18)}
-.prediction-card{border-color:#116a66!important;background:linear-gradient(145deg,#063b3d,#061a34)!important}
-.prediction-card .signal{color:#16e9a8!important}.tradebox.entry{border-color:#2868c7!important}.tradebox.stop{border-color:#8c3548!important}.tradebox.target{border-color:#176b55!important}
-.primary,button.primary{background:linear-gradient(135deg,#1c66ff,#2052d5)!important;color:#fff!important;border-color:#3d7fff!important}
-.market-open{white-space:nowrap}.topgrid{gap:13px!important}.main-layout{gap:13px!important}
-.backtest-panel{left:50%!important;transform:translateX(-50%);top:90px!important;width:min(1080px,96vw)!important;max-height:calc(100vh - 105px)!important;z-index:80!important}
-.ui-signature{font-size:12px;font-weight:700;color:#9db3d5;white-space:nowrap}.ui-signature strong{color:#72a1ff;font-weight:900}
-@media(max-width:980px){.topbar{justify-content:center!important}.topbar .actions{margin-left:0}.brand{font-size:25px!important}#mainHorizontalNav{order:3;flex-basis:100%;justify-content:flex-start;overflow-x:auto;flex-wrap:nowrap!important}#mainHorizontalNav .app-tab{white-space:nowrap}}
-@media(max-width:640px){.shell{width:96%!important}.topbar{padding:10px!important}.ui-signature{font-size:10px}.topbar .actions{gap:4px}.topbar .actions button{padding:7px!important}.backtest-panel{top:115px!important;max-height:calc(100vh - 130px)!important}}
-</style>
-<style id="aditya-mobile-first-v18-1">
-/* Mobile-only presentation improvements; trading logic is unchanged. */
-html,body{max-width:100%;overflow-x:hidden}
-#mainHorizontalNav{scrollbar-width:thin;scrollbar-color:#2b6cff transparent}
-#mainHorizontalNav .app-tab{flex:0 0 auto}
-@media(max-width:760px){
-  .shell{width:100%!important;max-width:100%!important;padding:8px 10px 80px!important;margin:0 auto!important;box-sizing:border-box}
-  .topbar{display:grid!important;grid-template-columns:1fr auto!important;gap:8px!important;padding:12px!important;border-radius:14px!important}
-  .brandline,.brand{min-width:0!important}.brand{font-size:24px!important;letter-spacing:-.5px!important}
-  .topbar .actions{grid-column:1/-1!important;width:100%!important;display:flex!important;align-items:center!important;gap:7px!important;flex-wrap:wrap!important;margin:0!important}
-  .topbar .actions .pill{font-size:10px!important;padding:5px 7px!important}
-  .topbar .actions button{font-size:11px!important;padding:8px 9px!important;min-height:36px!important}
-  #mainHorizontalNav{position:sticky!important;top:0!important;z-index:60!important;display:flex!important;flex-wrap:nowrap!important;justify-content:flex-start!important;overflow-x:auto!important;overscroll-behavior-x:contain;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;width:100%!important;max-width:100%!important;box-sizing:border-box;margin:8px 0 12px!important;padding:7px!important;background:#06172f!important;border:1px solid #1b3b68!important;border-radius:13px!important;box-shadow:0 10px 24px rgba(0,0,0,.3)}
-  #mainHorizontalNav .app-tab{scroll-snap-align:start;padding:10px 13px!important;min-height:40px!important;font-size:12px!important}
-  .topgrid,.main-layout,.manual-option-grid,.auto-grid{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:10px!important}
-  .card,.section-card,.sidecard,.metric,.tradebox,.manual-chain,.manual-ticket{min-width:0!important;max-width:100%!important;box-sizing:border-box}
-  .card,.section-card,.sidecard{padding:13px!important;border-radius:14px!important}
-  .prediction-card{order:0}.trade-card{order:1}.market-card{order:2}
-  .signalrow{flex-wrap:wrap!important;gap:12px!important}.signal{font-size:clamp(24px,7vw,34px)!important}
-  .tradeboxes{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
-  .tradebox{padding:11px!important}.tradebox .v{font-size:clamp(15px,4.4vw,23px)!important;overflow-wrap:anywhere}
-  .manual-option-grid{margin:10px 0!important}.manual-chain{overflow-x:auto!important}.option-table{min-width:650px!important}
-  table{max-width:none} .table-wrap,.table-scroll,.table-container{max-width:100%!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch}
-  input,select,textarea{max-width:100%!important;box-sizing:border-box;font-size:16px!important}
-  button{touch-action:manipulation}button,input[type=button],input[type=submit]{min-height:38px}
-  canvas,svg{max-width:100%} .backtest-panel{position:fixed!important;left:8px!important;right:8px!important;top:8px!important;bottom:8px!important;transform:none!important;width:auto!important;max-height:none!important;overflow-y:auto!important;overscroll-behavior:contain;padding:12px!important;z-index:200!important;border-radius:14px!important}
-  .backtest-grid,.ticket-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
-  .ui-signature{font-size:11px!important;white-space:normal!important}
-}
-@media(max-width:390px){
-  .shell{padding-left:7px!important;padding-right:7px!important}
-  .brand{font-size:22px!important}
-  .topbar .actions button{padding:7px!important}
-  .backtest-grid{grid-template-columns:1fr!important}
-}
-@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
-</style>
-
-<style id="aditya-mobile-v18-2-layout-repair">
-/* v18.2: repair mobile layout without changing trade decisions. */
-@media (max-width:760px){
- html,body{width:100%!important;min-width:0!important;overflow-x:clip!important}
- .shell{width:100%!important;min-width:0!important;max-width:100vw!important;padding:10px 12px 80px!important}
- .topbar{display:flex!important;flex-direction:column!important;align-items:stretch!important;justify-content:flex-start!important;gap:10px!important;width:100%!important;min-width:0!important;padding:12px!important;margin-bottom:8px!important}
- .topbar>div:first-child{width:100%!important;min-width:0!important}
- .brandline{display:flex!important;justify-content:space-between!important;align-items:center!important;width:100%!important;min-width:0!important}
- .brand{font-size:23px!important;line-height:1.2!important;max-width:100%!important;overflow:visible!important}
- .topbar .actions{width:100%!important;min-width:0!important;display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;align-items:center!important;gap:7px!important;margin:0!important}
- .topbar .actions>div:first-child{grid-column:1/-1!important;min-width:0!important;flex-wrap:wrap!important}
- .topbar .actions>.market-open{grid-column:1/3!important;min-width:0!important;font-size:11px!important;white-space:normal!important}
- .topbar .actions>#lastUpdated{grid-column:3!important;font-size:10px!important;white-space:normal!important;text-align:center!important;overflow-wrap:anywhere!important}
- .topbar .actions>button{min-width:0!important;width:100%!important;padding:9px 3px!important;font-size:11px!important;white-space:nowrap!important}
- .ui-signature{display:block!important;font-size:11px!important;white-space:normal!important;max-width:100%!important}
- #mainHorizontalNav{position:relative!important;top:auto!important;display:flex!important;flex-wrap:nowrap!important;justify-content:flex-start!important;width:100%!important;min-width:0!important;max-width:100%!important;overflow-x:auto!important;overflow-y:hidden!important;margin:0 0 12px!important;padding:6px!important;gap:4px!important;scrollbar-width:thin!important;-webkit-overflow-scrolling:touch!important}
- #mainHorizontalNav .app-tab{flex:0 0 auto!important;min-width:max-content!important;padding:10px 12px!important;font-size:12px!important}
- .topgrid,.main-layout{display:grid!important;grid-template-columns:minmax(0,1fr)!important;width:100%!important;min-width:0!important}
- .topgrid>*,.main-layout>*,.card,.prediction-card,.trade-card,.market-card{width:100%!important;min-width:0!important;max-width:100%!important;grid-column:auto!important}
- .prediction-card{padding:16px!important;min-height:0!important;text-align:left!important;overflow:hidden!important}
- .prediction-card:before,.prediction-card:after{display:none!important;content:none!important}
- .prediction-card .eyebrow{text-align:left!important}
- .prediction-card .signalrow{display:flex!important;flex-direction:column!important;align-items:stretch!important;justify-content:flex-start!important;gap:10px!important;height:auto!important;min-height:0!important;margin-top:10px!important}
- .prediction-card .signalwrap{display:flex!important;flex-direction:row!important;align-items:center!important;justify-content:flex-start!important;gap:12px!important;min-width:0!important}
- .prediction-card .signalwrap>div:last-child{min-width:0!important}
- .prediction-card .arrow{font-size:31px!important;flex-shrink:0!important}
- .prediction-card .signal{font-size:clamp(30px,9vw,40px)!important;line-height:1.1!important;overflow-wrap:anywhere!important}
- .prediction-card .signal-sub{font-size:13px!important;line-height:1.45!important;overflow-wrap:anywhere!important;margin-top:5px!important}
- .prediction-card .conf{position:static!important;inset:auto!important;display:grid!important;grid-template-columns:auto 1fr!important;align-items:center!important;gap:3px 12px!important;text-align:left!important;padding-top:10px!important;border-top:1px solid rgba(118,166,232,.25)!important;width:100%!important}
- .prediction-card .conf b{font-size:19px!important;text-align:right!important}
- .prediction-card .conf #signalTime{grid-column:1/-1!important;display:block!important;font-size:11px!important;line-height:1.5!important;white-space:normal!important;overflow-wrap:anywhere!important}
- .trade-card{min-height:0!important;padding:14px!important}
- .trade-card .section-sub{font-size:12px!important;line-height:1.5!important;overflow-wrap:anywhere!important}
- .tradeboxes{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
- .tradebox{min-width:0!important;padding:11px!important}
- .tradebox .eyebrow{font-size:10px!important;letter-spacing:.04em!important}
- .tradebox .v{font-size:clamp(14px,4vw,18px)!important;line-height:1.4!important;overflow-wrap:anywhere!important;word-break:normal!important}
- .chart-card,.chart-wrap,.toolbar,.intervals{min-width:0!important;max-width:100%!important}
- .chart-wrap{height:320px!important}
- .toolbar{flex-wrap:wrap!important}
- .side{display:grid!important;grid-template-columns:minmax(0,1fr)!important}
- .metrics{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important}
- .option-table{min-width:650px!important}
- .backtest-panel{left:8px!important;right:8px!important;top:8px!important;bottom:8px!important;width:auto!important;max-width:none!important;max-height:none!important;transform:none!important;overflow-y:auto!important}
- .trade-card.wait-reference .tradeboxes{opacity:.55!important}
- .trade-card.wait-reference:after{content:'WAIT — Reference levels only. No active trade.';display:block;font-size:11px;color:#ffd18a;margin-top:10px;font-weight:700}
-}
-@media(max-width:370px){.shell{padding-left:8px!important;padding-right:8px!important}.topbar .actions>button{font-size:10px!important}.tradebox .v{font-size:14px!important}}
-</style>
 </head>
 <body>
+<div class="sidebar-nav">
+  <button class="active" onclick="showMainDashboard(this)"><span class="nav-icon">⌂</span>Dashboard</button>
+  <button onclick="toggleBacktestPanel(this)"><span class="nav-icon">↺</span>Backtest</button>
+</div>
+
 <div class="backtest-panel" id="backtestPanel">
   <div class="section-head"><div><div class="section-title">Auto Trade Backtest</div><div class="section-sub">Focused historical replay for the current CE / PE / WAIT trading direction.</div></div><button onclick="closeBacktestPanel()">✕</button></div>
   <div class="backtest-grid">
@@ -4712,12 +4607,11 @@ html,body{max-width:100%;overflow-x:hidden}
   </div>
 
 
-  <div class="app-tabs" id="mainHorizontalNav">
+  <div class="app-tabs">
     <button class="app-tab active" data-tab="dashboard" onclick="showAppTab('dashboard')">Dashboard</button>
     <button class="app-tab" data-tab="trading" onclick="showAppTab('trading')">Trading</button>
     <button class="app-tab" data-tab="history" onclick="showAppTab('history')">History</button>
     <button class="app-tab" data-tab="validation" onclick="showAppTab('validation')">Validation</button>
-    <button class="app-tab" id="navBacktest" onclick="toggleBacktestPanel(this)">Backtest</button>
   </div>
   <div class="error" id="errorBox"></div>
 
@@ -5866,88 +5760,6 @@ async function loadAll(){
 function changeInterval(v){currentInterval=v;document.querySelectorAll("[data-i]").forEach(b=>b.classList.toggle("active",b.dataset.i===v));loadAll()}
 loadAll();setInterval(loadAll,60000);
 </script>
-<script id="aditya-horizontal-nav-init">
-(function(){
-  function initModernNav(){
-    const bar=document.querySelector('.topbar');
-    const nav=document.getElementById('mainHorizontalNav');
-    if(!bar||!nav)return;
-    const brand=bar.querySelector('.brandline');
-    if(brand)brand.insertAdjacentElement('afterend',nav);else bar.prepend(nav);
-    if(!bar.querySelector('.ui-signature')){
-      const signature=document.createElement('span');signature.className='ui-signature';
-      signature.innerHTML='Made by <strong>Aditya</strong>';
-      bar.appendChild(signature);
-    }
-    document.querySelectorAll('#mainHorizontalNav .app-tab[data-tab]').forEach(btn=>{
-      btn.addEventListener('click',()=>{document.getElementById('backtestPanel')?.classList.remove('open');document.getElementById('navBacktest')?.classList.remove('active');});
-    });
-  }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initModernNav);else initModernNav();
-})();
-</script>
-<script id="v18-2-mobile-wait-visual">
-(function(){
- function syncWaitVisual(){
-  var signal=document.getElementById('signal');
-  var card=document.querySelector('.trade-card');
-  if(!signal||!card)return;
-  card.classList.toggle('wait-reference',/^WAIT\b/i.test((signal.textContent||'').trim()));
- }
- document.addEventListener('DOMContentLoaded',function(){
-  var el=document.getElementById('signal');
-  if(el){new MutationObserver(syncWaitVisual).observe(el,{childList:true,characterData:true,subtree:true});}
-  syncWaitVisual();
- });
-})();
-</script>
-<!-- Signal Journal add-on: insert before </body> in dashboard HTML -->
-<style>
-#signalJournalTools{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;padding:12px;border:1px solid #203650;border-radius:12px;background:#0b1829;color:#eef5ff}
-#signalJournalTools button{background:#17385b;color:#fff;border:1px solid #386189;border-radius:8px;padding:10px 14px;cursor:pointer}
-#signalJournalTools .hint{font-size:12px;color:#9cb1ca;flex-basis:100%}
-</style>
-<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadChartExcel">⬇ Download chart candles Excel</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Chart Excel exports timestamped Open, High, Low, Close and Volume from market data. Exports require your private key. Signals are observed only while this dashboard is open.</span></div>
-<script>
-(function(){
- const $=id=>document.getElementById(id);
- function text(id){return ($(id)?.textContent||'').trim();}
- function observe(){
-  let raw=text('signal').toUpperCase();
-  let signal=raw.includes('BUY CE')?'BUY CE':raw.includes('BUY PE')?'BUY PE':raw==='WAIT'?'WAIT':null;
-  if(!signal)return;
-  let p=text('confidence').match(/[\d.]+/);
-  // Do not guess the NIFTY spot from option strike or unrelated displayed values.
-  fetch('/api/signal-journal/observe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal,confidence:p?Number(p[0]):null,suggested_option:text('signalStrike')})}).catch(()=>{});
- }
- let previous='';
- setInterval(()=>{let state=[text('signal'),text('confidence'),text('signalStrike')].join('|');if(state!==previous){previous=state;observe()}},5000);
- $('downloadNiftyChart').addEventListener('click',()=>{
-  try{
-   if(typeof chart==='undefined'||!chart||typeof chart.takeScreenshot!=='function')throw Error('Chart is not ready');
-   let canvas=chart.takeScreenshot();let a=document.createElement('a');a.href=canvas.toDataURL('image/png');a.download='nifty_chart_'+new Date().toISOString().slice(0,10)+'.png';a.click();
-  }catch(e){alert('Chart download unavailable: '+e.message)}
- });
- $('downloadChartExcel').addEventListener('click',async()=>{
-  let key=prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;
-  let date=prompt('Market date YYYY-MM-DD (blank = today):','')||'';
-  let interval=prompt('Candle interval: 1m, 5m, or 15m','5m')||'5m';
-  try{
-   let url='/api/signal-journal/candles.xlsx?date='+encodeURIComponent(date)+'&interval='+encodeURIComponent(interval);
-   let r=await fetch(url,{headers:{'X-Signal-Export-Key':key}});
-   if(!r.ok){let message=await r.text();throw Error('Candle export failed ('+r.status+'): '+message.slice(0,220))}
-   let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);
-   a.download='nifty_candles_'+(date||new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'}))+'_'+interval+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
-  }catch(e){alert(e.message)}
- });
- $('downloadSignalExcel').addEventListener('click',async()=>{
-  let key=prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;
-  let date=prompt('Date YYYY-MM-DD (leave blank for recent calls):','')||'';
-  try{let r=await fetch('/api/signal-journal/export.xlsx?date='+encodeURIComponent(date),{headers:{'X-Signal-Export-Key':key}});if(!r.ok)throw Error('Export failed ('+r.status+'). Check key and database.');let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='nifty_calls_'+(date||'recent')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}catch(e){alert(e.message)}
- });
-})();
-</script>
-
 </body>
 </html>
 """
@@ -13772,8 +13584,3 @@ def v18_backtest(period: str='30d'):
         result['data_rows']=len(bars)
         return result
     except Exception as exc:return {'status':'error','message':str(exc)}
-
-
-# Observational signal journal and export endpoints
-import signal_tracker
-signal_tracker.register(app)
