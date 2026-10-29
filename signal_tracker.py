@@ -40,6 +40,8 @@ def register(app):
             if conf is not None and not 0 <= conf <= 100: raise HTTPException(422,'Invalid confidence')
             option=re.sub(r'[^\w .\-/]','',str(payload.get('suggested_option','')))[:100]
             now=datetime.now(IST)
+            if now.weekday()>=5 or not ('09:15'<=now.strftime('%H:%M')<='15:30'):
+                return {'status':'skipped','recorded':False,'note':'Outside regular market hours'}
             # One observation per signal per five-minute bucket; retains transitions and avoids polling duplicates.
             bucket=now.strftime('%H:')+str((now.minute//5)*5).zfill(2)
             setup()
@@ -77,14 +79,17 @@ def register(app):
             from openpyxl import Workbook
             from openpyxl.styles import Font,PatternFill
             wb=Workbook();ws=wb.active;ws.title='Signal History'
-            headers=['ID','Observed At (IST)','Market Date','5m Bucket','Call','NIFTY at Observation','Confidence %','Suggested Option','Source']
+            headers=['ID','Observed At (IST)','Market Date','5m Bucket','Call','NIFTY at Observation','Confidence %','Candidate Option (not trade)','Source','Trade Executable','Market Session']
             ws.append(headers)
             for row in rows:
                 rid,at,day,bucket,sig,price,conf,opt,src=row
-                ws.append([rid,at.astimezone(IST).strftime('%Y-%m-%d %H:%M:%S'),str(day),bucket,sig,float(price) if price is not None else None,float(conf) if conf is not None else None,opt,src])
+                ws.append([rid,at.astimezone(IST).strftime('%Y-%m-%d %H:%M:%S'),str(day),bucket,sig,float(price) if price is not None else None,float(conf) if conf is not None else None,opt,src,'NO' if sig=='WAIT' else 'SIGNAL ONLY','MARKET' if '09:15'<=at.astimezone(IST).strftime('%H:%M')<='15:30' else 'OUTSIDE MARKET'])
             ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
             for c in ws[1]:c.font=Font(bold=True,color='FFFFFF');c.fill=PatternFill('solid',fgColor='16324F')
-            for col,width in {'A':10,'B':24,'C':16,'D':14,'E':14,'F':25,'G':18,'H':26,'I':18}.items():ws.column_dimensions[col].width=width
+            for col,width in {'A':10,'B':24,'C':16,'D':14,'E':14,'F':25,'G':18,'H':26,'I':18,'J':19,'K':20}.items():ws.column_dimensions[col].width=width
+            notes=wb.create_sheet('Read Me')
+            for item in [('Purpose','Browser-observed decisions, not executed trades'),('WAIT','No trade; displayed option is only a candidate'),('Price','NIFTY spot at observation when available; older observations may be blank'),('Accuracy','Do not infer trading accuracy from WAIT decisions'),('Coverage','Signals are logged only while dashboard is open; no automatic backfill'),('Time zone','Asia/Kolkata (IST)'),('Source','Dashboard observation; not independently verified')]:notes.append(item)
+            notes.column_dimensions['A'].width=22;notes.column_dimensions['B'].width=95
             output=io.BytesIO();wb.save(output);output.seek(0)
             return StreamingResponse(output,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="nifty_signal_history.xlsx"'})
         except HTTPException: raise
@@ -138,7 +143,7 @@ def register(app):
                 def val(k):
                     v=row.get(k)
                     return float(v) if v is not None and pd.notna(v) else None
-                ws.append([st,et,val('Open'),val('High'),val('Low'),val('Close'),val('Volume')])
+                ws.append([st,et,val('Open'),val('High'),val('Low'),val('Close'),(val('Volume') if val('Volume') not in (0,None) else None)])
             ws.freeze_panes='C2';ws.auto_filter.ref=ws.dimensions
             for cell in ws[1]:
                 cell.font=Font(bold=True,color='FFFFFF')
@@ -159,7 +164,7 @@ def register(app):
                 ('Timestamp meaning','Start and end of each candle, Asia/Kolkata (IST)'),
                 ('Completed candles only','Yes; incomplete current candle excluded'),
                 ('Source limitation','Fetched at export time; may differ from chart feed or previously displayed candles'),
-                ('Data limitations','Volume may be missing for index data; no option premiums included'),
+                ('Data limitations','Zero/unavailable index volume shown blank; no option premiums included'),
                 ('Timezone','IST (UTC+05:30)'),
                 ('Rows',len(df)),
             ]: notes.append(item)

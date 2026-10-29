@@ -5907,7 +5907,7 @@ loadAll();setInterval(loadAll,60000);
 #signalJournalTools button{background:#17385b;color:#fff;border:1px solid #386189;border-radius:8px;padding:10px 14px;cursor:pointer}
 #signalJournalTools .hint{font-size:12px;color:#9cb1ca;flex-basis:100%}
 </style>
-<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadChartExcel">⬇ Download chart candles Excel</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Chart Excel exports timestamped Open, High, Low, Close and Volume from market data. Exports require your private key. Signals are observed only while this dashboard is open.</span></div>
+<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadChartExcel">⬇ Download chart candles Excel</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Chart Excel exports timestamped Open, High, Low, Close and Volume from market data. Exports require your private key. Signals are observed only while this dashboard is open during market hours. WAIT is not a trade.</span></div>
 <script>
 (function(){
  const $=id=>document.getElementById(id);
@@ -5918,7 +5918,11 @@ loadAll();setInterval(loadAll,60000);
   if(!signal)return;
   let p=text('confidence').match(/[\d.]+/);
   // Do not guess the NIFTY spot from option strike or unrelated displayed values.
-  fetch('/api/signal-journal/observe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal,confidence:p?Number(p[0]):null,suggested_option:text('signalStrike')})}).catch(()=>{});
+  const now=new Date();
+  const ist=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now);
+  if(ist<'09:15'||ist>'15:30')return; // avoid logging stale after-hours decisions
+  const price=Number((typeof latestPrediction!=='undefined'&&latestPrediction)?latestPrediction.price:null);
+  fetch('/api/signal-journal/observe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal,nifty_price:Number.isFinite(price)&&price>=1000&&price<=100000?price:null,confidence:p?Number(p[0]):null,suggested_option:text('signalStrike')})}).catch(()=>{});
  }
  let previous='';
  setInterval(()=>{let state=[text('signal'),text('confidence'),text('signalStrike')].join('|');if(state!==previous){previous=state;observe()}},5000);
@@ -5929,21 +5933,21 @@ loadAll();setInterval(loadAll,60000);
   }catch(e){alert('Chart download unavailable: '+e.message)}
  });
  $('downloadChartExcel').addEventListener('click',async()=>{
-  let key=prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;
+  let key=sessionStorage.getItem('nifty_export_key')||prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;sessionStorage.setItem('nifty_export_key',key);
   let date=prompt('Market date YYYY-MM-DD (blank = today):','')||'';
   let interval=prompt('Candle interval: 1m, 5m, or 15m','5m')||'5m';
   try{
    let url='/api/signal-journal/candles.xlsx?date='+encodeURIComponent(date)+'&interval='+encodeURIComponent(interval);
    let r=await fetch(url,{headers:{'X-Signal-Export-Key':key}});
-   if(!r.ok){let message=await r.text();throw Error('Candle export failed ('+r.status+'): '+message.slice(0,220))}
+   if(!r.ok){if(r.status===403)sessionStorage.removeItem('nifty_export_key');let message=await r.text();throw Error('Candle export failed ('+r.status+'): '+message.slice(0,220))}
    let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);
    a.download='nifty_candles_'+(date||new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'}))+'_'+interval+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
   }catch(e){alert(e.message)}
  });
  $('downloadSignalExcel').addEventListener('click',async()=>{
-  let key=prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;
+  let key=sessionStorage.getItem('nifty_export_key')||prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;sessionStorage.setItem('nifty_export_key',key);
   let date=prompt('Date YYYY-MM-DD (leave blank for recent calls):','')||'';
-  try{let r=await fetch('/api/signal-journal/export.xlsx?date='+encodeURIComponent(date),{headers:{'X-Signal-Export-Key':key}});if(!r.ok)throw Error('Export failed ('+r.status+'). Check key and database.');let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='nifty_calls_'+(date||'recent')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}catch(e){alert(e.message)}
+  try{let r=await fetch('/api/signal-journal/export.xlsx?date='+encodeURIComponent(date),{headers:{'X-Signal-Export-Key':key}});if(!r.ok){if(r.status===403)sessionStorage.removeItem('nifty_export_key');throw Error('Export failed ('+r.status+'). Check SIGNAL_EXPORT_KEY in Vercel.');}let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='nifty_calls_'+(date||'recent')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}catch(e){alert(e.message)}
  });
 })();
 </script>
@@ -13777,3 +13781,8 @@ def v18_backtest(period: str='30d'):
 # Observational signal journal and export endpoints
 import signal_tracker
 signal_tracker.register(app)
+
+# v18.12: isolated research-only momentum / breakout signal evaluator.
+# Existing live /prediction and F&O order gates remain unchanged.
+import prediction_v1812
+prediction_v1812.register(app)
