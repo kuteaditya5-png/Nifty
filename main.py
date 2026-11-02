@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import statistics
+import breakout_v1814
 
 load_dotenv()
 
@@ -22,7 +23,7 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 app = FastAPI(
     title="NIFTY AI",
     description="AI powered NIFTY 50 market analysis",
-    version="1.0"
+    version="18.14"
 )
 
 
@@ -39,7 +40,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "15.12",
+        "version": "18.14",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4312,6 +4313,9 @@ def chart_data(interval: str = "5m"):
             ]
         ).copy()
 
+        data = breakout_v1814.completed(data, minutes=int(interval[:-1]))
+        breakout_chart = breakout_v1814.analyze(data) if interval == "5m" else None
+
         # Keep the payload compact enough for frequent dashboard refreshes.
         if len(data) > 450:
             data = data.iloc[-450:].copy()
@@ -4395,6 +4399,7 @@ def chart_data(interval: str = "5m"):
             "market": "NIFTY 50",
             "interval": interval,
             "candles": candles,
+            "breakout": breakout_chart,
             "ema20": ema20,
             "ema50": ema50,
             "last_price": candles[-1]["close"],
@@ -4727,7 +4732,7 @@ html,body{max-width:100%;overflow-x:hidden}
       <div class="eyebrow">Current Prediction</div>
       <div class="signalrow">
         <div class="signalwrap"><div class="arrow" id="signalArrow">→</div><div><div class="signal" id="signal">--</div><div class="signal-sub" id="signalStrike">NIFTY --</div></div></div>
-        <div class="conf"><span>Confidence</span><b id="confidence">--%</b><span id="signalTime">Signal time: --</span></div>
+        <div class="conf"><span>Signal strength</span><b id="confidence">--%</b><span id="signalTime">Signal time: --</span></div>
       </div>
     </div>
 
@@ -4760,7 +4765,7 @@ html,body{max-width:100%;overflow-x:hidden}
           <label class="toggle"><input type="checkbox" id="emaToggle" checked onchange="toggleEma()"> EMA</label>
         </div>
       </div>
-      <div class="chart-meta"><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
+      <div class="chart-meta"><div id="breakoutStatus" class="ohlc"></div><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
       <div class="chart-wrap" id="chartWrap">
         <div id="niftyChart"></div>
       </div>
@@ -4885,6 +4890,7 @@ html,body{max-width:100%;overflow-x:hidden}
 <script>
 let currentInterval="5m";
 let chart,candleSeries,ema20Series,ema50Series,predictionSeries;
+let breakoutSeries={};
 let lastSignal=localStorage.getItem("nifty_last_signal")||"";
 let latestPrediction=null;
 let latestChartData=null;
@@ -4947,7 +4953,7 @@ function renderPrediction(data){
   const reason=data.fno_setup_reason||trade.reason||"Waiting for stronger confirmation.";
   setText("intradaySetupSub",setup.includes("CE")||setup.includes("PE")?`Prediction-confirmed intraday ${setup.includes("CE")?"CE":"PE"} setup · Entry, SL and targets below`:`WAIT · No forced trade. Entry, SL and targets activate when the prediction setup qualifies.`);
   const ts=data.signal_generated_at||new Date().toISOString();setText("signalTime","Signal time: "+new Date(ts).toLocaleTimeString());
-  setText("marketBias",`${data.prediction||"--"} · Score ${data.combined_score??"--"}`);
+  setText("marketBias",`${data.prediction||"--"} · Score ${data.combined_score??"--"} · Breakout adjustment ${data.breakout_adjustment?.adjustment??0}`);
   setText("sumSignal",setup);el("sumSignal").style.color=color;setText("sumStrike",typ&&trade.strike?`${trade.strike} ${typ}`:"--");setText("sumConfidence",conf.toFixed(0)+"%");setText("sumEntry",entry);setText("sumStop",stop);setText("sumT1",t1);setText("sumT2",t2);setText("sumReason",reason);
 
   const s=data.signals||{},tech=s.technical||{},pa=s.price_action||{},flow=s.institutional_flow||{},oc=s.option_chain||{},news=s.news||{};
@@ -4977,6 +4983,9 @@ function initChart(){
   candleSeries=chart.addCandlestickSeries({upColor:"#23c9aa",downColor:"#ef5965",borderUpColor:"#23c9aa",borderDownColor:"#ef5965",wickUpColor:"#23c9aa",wickDownColor:"#ef5965"});
   ema20Series=chart.addLineSeries({color:"#4187ff",lineWidth:1});
   ema50Series=chart.addLineSeries({color:"#976bf4",lineWidth:1});
+  for(const [key,color] of Object.entries({orb_high:"#22d3a6",orb_low:"#fb5b6b",prior6_high:"#d5b75d",prior6_low:"#b899ef"})){
+    breakoutSeries[key]=chart.addLineSeries({color,lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
+  }
   window.addEventListener("resize",()=>chart.applyOptions({width:c.clientWidth}));
 }
 function toggleEma(){const on=el("emaToggle").checked;ema20Series.applyOptions({visible:on});ema50Series.applyOptions({visible:on})}
@@ -4988,9 +4997,26 @@ async function loadChart(prediction){
   latestChartData=d;candleSeries.setData(d.candles||[]);ema20Series.setData(d.ema20||[]);ema50Series.setData(d.ema50||[]);
   renderTradeLevels(prediction);
   const bars=d.candles||[],last=bars[bars.length-1]||{};
-  if(typeof candleSeries.setMarkers==="function")candleSeries.setMarkers([]);
+  renderBreakouts(d);
   setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
   setText("chartIntervalLabel",currentInterval);chart.timeScale().fitContent();
+}
+function renderBreakouts(data){
+  const b=data.breakout,records=b?.records||[],times=new Set((data.candles||[]).map(c=>c.time));
+  const visible=records.filter(r=>times.has(r.time));
+  for(const key of Object.keys(breakoutSeries)){
+    breakoutSeries[key].setData(visible.map(r=>r[key]==null?{time:r.time}:{time:r.time,value:r[key]}));
+  }
+  const markers=[];
+  for(const r of visible){
+    if(r.quality_flags.length){markers.push({time:r.time,position:"aboveBar",color:"#f7b84b",shape:"circle",text:"Data review"});continue;}
+    if(!r.events.length)continue;
+    const up=r.direction==="UP",down=r.direction==="DOWN";
+    markers.push({time:r.time,position:up?"belowBar":"aboveBar",color:r.confirmed?(up?"#22d3a6":"#fb5b6b"):"#f7b84b",
+      shape:up?"arrowUp":down?"arrowDown":"circle",text:r.confirmed?(up?"Breakout ↑":"Breakdown ↓"):(up||down?"Unconfirmed cross":"Rejection")});
+  }
+  candleSeries.setMarkers(markers);
+  setText("breakoutStatus",b?`5m completed candles · ORB = 09:15–09:30 · Prior 6 levels · ${b.quality_flag_count} data flags · arrows are spot evidence, not option buy orders`:"Breakout overlays are available on the 5m chart.");
 }
 function renderTradeLevels(data){
   if(!candleSeries)return;
@@ -5907,7 +5933,7 @@ loadAll();setInterval(loadAll,60000);
 #signalJournalTools button{background:#17385b;color:#fff;border:1px solid #386189;border-radius:8px;padding:10px 14px;cursor:pointer}
 #signalJournalTools .hint{font-size:12px;color:#9cb1ca;flex-basis:100%}
 </style>
-<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadChartExcel">⬇ Download chart candles Excel</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Chart Excel exports timestamped Open, High, Low, Close and Volume from market data. Exports require your private key. Signals are observed only while this dashboard is open during market hours. WAIT is not a trade.</span></div>
+<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadChartExcel">⬇ Download chart candles Excel</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Chart Excel exports timestamped Open, High, Low, Close and Volume from market data. Exports require your private key. Server Decisions exports include scheduled collection and explicit missing snapshots. Dashboard observations are listed separately. WAIT is not a trade.</span></div>
 <script>
 (function(){
  const $=id=>document.getElementById(id);
@@ -6584,6 +6610,7 @@ def build_fno_alert_engine(
 @app.get("/prediction")
 def prediction(include_alerts: bool = False):
     try:
+        prediction_started_at = datetime.now(breakout_v1814.IST)
         # -----------------------------
         # 1. MARKET / MOMENTUM DATA
         # -----------------------------
@@ -6595,6 +6622,13 @@ def prediction(include_alerts: bool = False):
                 "status": "error",
                 "message": "NIFTY market data not available"
             }
+
+        market_data = breakout_v1814.completed(market_data, prediction_started_at)
+        if len(market_data) < 2:
+            return {"status":"error","message":"Not enough completed candles"}
+        breakout_data = breakout_v1814.analyze(market_data, prediction_started_at)
+        shadow_rows, _ = prediction_v1812.evaluate(market_data)
+        shadow_latest = shadow_rows[-1] if shadow_rows else {"decision":"WAIT","reason":"Indicator warm-up incomplete"}
 
         latest_close = float(market_data["Close"].iloc[-1])
         previous_close = float(market_data["Close"].iloc[-2])
@@ -6854,6 +6888,8 @@ def prediction(include_alerts: bool = False):
             )
         )
 
+        combined_score, breakout_adjustment = breakout_v1814.adjust_score(combined_score, breakout_data)
+
         # -----------------------------
         # 20. PROBABILITY MODEL
         # -----------------------------
@@ -7028,6 +7064,24 @@ def prediction(include_alerts: bool = False):
             if data_coverage < 0.72:
                 setup_reasons.append("Live data coverage is below the preferred 72% threshold.")
 
+        # Log every failed WATCH gate for both directions, including opposing positioning.
+        watch_gates = {}
+        for side, sign in (("CE", 1), ("PE", -1)):
+            watch_gates[side] = {
+                "option_chain": bool(option_available),
+                "direction_threshold": sign*combined_score >= fno_direction_threshold,
+                "option_direction": sign*option_score >= .12,
+                "candle_alignment": sign*candle_score > -.35,
+                "price_action": sign*price_action_score >= -.15,
+                "breadth_alignment": bool(directional_confirmation),
+                "futures_alignment": bool(futures_confirmation),
+                "price_action_alignment": bool(price_action_confirmation),
+                "fresh_completed_candle": breakout_data["eligible"],
+            }
+        if not breakout_data["eligible"]:
+            fno_setup = "WAIT"
+            setup_reasons.insert(0, "Outside session, stale candle, or source candle flagged for review.")
+
         fno_setup_reason = " ".join(setup_reasons[:3]) or "Signals are mixed, so the model is waiting for stronger confirmation."
 
         # -----------------------------
@@ -7056,9 +7110,25 @@ def prediction(include_alerts: bool = False):
                 market_regime=regime_data["regime"]
             )
 
+        if fno_alerts and not breakout_data["eligible"]:
+            for side in ("call", "put"):
+                fno_alerts[side]["signal"] = "WAIT"
+                fno_alerts[side]["reason"] = "Fresh, valid completed market candle required."
+                fno_alerts[side].setdefault("warnings", []).append(fno_alerts[side]["reason"])
+
         return {
             "status": "success",
-            "model_version": "15.0",
+            "model_version": "18.14",
+            "candle_at": market_data.index[-1].isoformat(),
+            "decision_started_at": prediction_started_at.isoformat(),
+            "decision_completed_at": datetime.now(breakout_v1814.IST).isoformat(),
+            "breakout": {k:v for k,v in breakout_data.items() if k != "records"},
+            "breakout_adjustment": breakout_adjustment,
+            "shadow_decision": shadow_latest,
+            "watch_gates": watch_gates,
+            "failed_gates": {side:[name for name,passed in gates.items() if not passed] for side,gates in watch_gates.items()},
+            "option_data_available": bool(option_available),
+            "confidence_note": "Heuristic signal strength, not a calibrated win probability",
             "market": "NIFTY 50",
             "price": round(latest_close, 2),
             "prediction": prediction_label,
@@ -13786,3 +13856,7 @@ signal_tracker.register(app)
 # Existing live /prediction and F&O order gates remain unchanged.
 import prediction_v1812
 prediction_v1812.register(app)
+
+# Authenticated server-side completed-candle journal (no browser required).
+import server_journal_v1814
+server_journal_v1814.register(app, prediction)

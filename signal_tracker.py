@@ -19,7 +19,7 @@ DDL='''CREATE TABLE IF NOT EXISTS nifty_signal_journal (
 def connect():
     dsn=os.getenv('DATABASE_URL')
     if not dsn: raise RuntimeError('DATABASE_URL is not configured')
-    return psycopg.connect(dsn)
+    return psycopg.connect(dsn, connect_timeout=8)
 
 def setup():
     with connect() as conn:
@@ -78,7 +78,9 @@ def register(app):
             # openpyxl only used at request time to produce user-requested Excel export.
             from openpyxl import Workbook
             from openpyxl.styles import Font,PatternFill
-            wb=Workbook();ws=wb.active;ws.title='Signal History'
+            wb=Workbook();ws=wb.active;ws.title='Dashboard Observations'
+            from server_journal_v1814 import append_export
+            append_export(wb,date)
             headers=['ID','Observed At (IST)','Market Date','5m Bucket','Call','NIFTY at Observation','Confidence %','Candidate Option (not trade)','Source','Trade Executable','Market Session']
             ws.append(headers)
             for row in rows:
@@ -88,7 +90,7 @@ def register(app):
             for c in ws[1]:c.font=Font(bold=True,color='FFFFFF');c.fill=PatternFill('solid',fgColor='16324F')
             for col,width in {'A':10,'B':24,'C':16,'D':14,'E':14,'F':25,'G':18,'H':26,'I':18,'J':19,'K':20}.items():ws.column_dimensions[col].width=width
             notes=wb.create_sheet('Read Me')
-            for item in [('Purpose','Browser-observed decisions, not executed trades'),('WAIT','No trade; displayed option is only a candidate'),('Price','NIFTY spot at observation when available; older observations may be blank'),('Accuracy','Do not infer trading accuracy from WAIT decisions'),('Coverage','Signals are logged only while dashboard is open; no automatic backfill'),('Time zone','Asia/Kolkata (IST)'),('Source','Dashboard observation; not independently verified')]:notes.append(item)
+            for item in [('Purpose','Server snapshots and separate browser observations; no executed trades'),('WAIT','No trade; displayed option is only a candidate'),('Price','NIFTY spot at observation when available; older observations may be blank'),('Accuracy','Do not infer trading accuracy from WAIT decisions'),('Coverage','Server Decisions require the collector. MISSING means unobserved, not WAIT; browser rows remain separate.'),('Time zone','Asia/Kolkata (IST)'),('Source','Server: live model snapshot. Browser: displayed observation. Neither is an executed trade.')]:notes.append(item)
             notes.column_dimensions['A'].width=22;notes.column_dimensions['B'].width=95
             output=io.BytesIO();wb.save(output);output.seek(0)
             return StreamingResponse(output,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="nifty_signal_history.xlsx"'})
@@ -141,8 +143,10 @@ def register(app):
                 'Body %','Upper Wick %','Lower Wick %','Close Position %','Candle Change %',
                 'Higher High','Higher Low','Lower High','Lower Low','Consecutive Bullish','Consecutive Bearish',
                 'Previous 6 High','Previous 6 Low','Breakout Status','Inside/Outside Bar',
-                'Range vs Prior 6 Avg','Candle Pattern','Candle Strength Score','Upper Rejection','Lower Rejection']
+                'Range vs Prior 6 Avg','Candle Pattern','Candle Strength Score','Upper Rejection','Lower Rejection','Data Quality Flags','Candle Quality Eligible']
             ws.append(headers)
+            from breakout_v1814 import quality_flags
+            quality=quality_flags(df)
             history=[]; bullish_run=0; bearish_run=0
             def safe_pct(part,whole):
                 return round(100.0*part/whole,2) if whole>0 else None
@@ -156,6 +160,8 @@ def register(app):
                 if any(x is None for x in (o,h,l,c)) or h<l or h<max(o,c) or l>min(o,c):
                     # Keep original provider values visible, but do not invent candle features.
                     ws.append([st,et,o,h,l,c,v,'UNAVAILABLE' if v in (None,0) else 'AVAILABLE'])
+                    ws.cell(ws.max_row,34,','.join(quality.get(ts.isoformat(),[])))
+                    ws.cell(ws.max_row,35,'NO')
                     history.append(None);bullish_run=bearish_run=0
                     continue
                 rng=max(0.0,h-l);body=abs(c-o);upper=max(0.0,h-max(o,c));lower=max(0.0,min(o,c)-l)
@@ -194,6 +200,9 @@ def register(app):
                     bullish_run,bearish_run,six_high,six_low,breakout,relation,ratio,pattern,
                     strength,'YES' if up_pct is not None and up_pct>=50 else 'NO',
                     'YES' if low_pct is not None and low_pct>=50 else 'NO'])
+                flags=quality.get(ts.isoformat(),[])
+                ws.cell(ws.max_row,34,','.join(flags) or 'OK')
+                ws.cell(ws.max_row,35,'NO' if flags else 'YES')
                 history.append({'h':h,'l':l,'range':rng})
             ws.freeze_panes='C2';ws.auto_filter.ref=ws.dimensions
             for cell in ws[1]:
@@ -218,7 +227,7 @@ def register(app):
                 ('Completed candles only','Yes; incomplete current candle excluded'),
                 ('Source limitation','Fetched at export time; may differ from chart feed or previously displayed candles'),
                 ('Data limitations','Zero/unavailable index volume shown blank; no option premiums included'),
-                ('Candle features','Derived from completed OHLC candles only; no volume proxy or prediction changes'),
+                ('Candle features','Raw prices retained. Data Quality Flags must be reviewed before replay. No index volume proxy.'),
                 ('Pattern labels','Shape heuristics only; not confirmed reversal or trading advice'),
                 ('Strength score','0-100 body dominance weighted by close position in candle direction; not model confidence'),
                 ('Prior 6 breakout','Uses exactly six preceding valid candles; blank until six exist'),

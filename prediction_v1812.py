@@ -8,7 +8,8 @@ from fastapi import HTTPException
 def _ema(s, n): return s.ewm(span=n, adjust=False).mean()
 def _rsi(s, n=14):
     d=s.diff(); up=d.clip(lower=0).ewm(alpha=1/n,adjust=False).mean(); down=(-d.clip(upper=0)).ewm(alpha=1/n,adjust=False).mean()
-    return 100-100/(1+up/down.replace(0,float('nan')))
+    result=100-100/(1+up/down.replace(0,float('nan')))
+    return result.mask((down==0)&(up>0),100).mask((down==0)&(up==0),50)
 def evaluate(frame, horizon=3):
     """Only uses candles through each decision index. Horizon used for ex-post scoring only."""
     df=frame.copy().sort_index()
@@ -18,6 +19,8 @@ def evaluate(frame, horizon=3):
     close=df['Close']; e9=_ema(close,9);e21=_ema(close,21);e50=_ema(close,50)
     rsi=_rsi(close); macd=_ema(close,12)-_ema(close,26); macds=_ema(macd,9)
     atr=(pd.concat([(df.High-df.Low).abs(),(df.High-close.shift()).abs(),(df.Low-close.shift()).abs()],axis=1).max(axis=1)).ewm(alpha=1/14,adjust=False).mean()
+    from breakout_v1814 import quality_flags
+    flags=quality_flags(df)
     rows=[]
     for i in range(50,len(df)):
         # Breakout references exclude current candle to avoid look-ahead.
@@ -36,10 +39,11 @@ def evaluate(frame, horizon=3):
         decision='WAIT';setup='NONE'
         if up_score==4 and down_score<4: decision='BUY CE';setup='BREAKOUT' if breakout_up else 'PULLBACK'
         elif down_score==4 and up_score<4: decision='BUY PE';setup='BREAKDOWN' if breakout_down else 'PULLBACK'
-        future=float(close.iloc[i+horizon]) if i+horizon<len(df) else None
+        if flags.get(df.index[i].isoformat()): decision='WAIT';setup='DATA_REVIEW'
+        future=float(close.iloc[i+horizon]) if i+horizon<len(df) and df.index[i+horizon].date()==df.index[i].date() and df.index[i+horizon]-df.index[i]==pd.Timedelta(minutes=5*horizon) and not any(flags.get(t.isoformat()) for t in df.index[i:i+horizon+1]) else None
         delta=round(future-price,2) if future is not None else None
         aligned=(delta>0 if decision=='BUY CE' else delta<0 if decision=='BUY PE' else None) if delta is not None else None
-        rows.append({'time':str(df.index[i]),'decision':decision,'setup':setup,'nifty':round(price,2),'rsi':round(r,1),'ema9':round(float(e9.iloc[i]),2),'ema21':round(float(e21.iloc[i]),2),'score':max(up_score,down_score),'atr':round(vol,2),'after_15m_points':delta if horizon==3 else None,'future_points':delta,'direction_correct':aligned,'reason':'Trend + momentum + RSI + confirmed breakout/pullback' if decision!='WAIT' else 'Insufficient confluence'})
+        rows.append({'time':str(df.index[i]),'decision':decision,'setup':setup,'nifty':round(price,2),'rsi':round(r,1) if math.isfinite(r) else None,'ema9':round(float(e9.iloc[i]),2),'ema21':round(float(e21.iloc[i]),2),'score':int(max(up_score,down_score)),'atr':round(vol,2),'after_15m_points':delta if horizon==3 else None,'future_points':delta,'direction_correct':aligned,'reason':'Trend + momentum + RSI + confirmed breakout/pullback' if decision!='WAIT' else 'Source candle flagged for review' if setup=='DATA_REVIEW' else 'Insufficient confluence'})
     trades=[r for r in rows if r['decision']!='WAIT']; evaluated=[r for r in trades if r['direction_correct'] is not None]
     summary={'candles':len(df),'observations':len(rows),'buy_ce':sum(r['decision']=='BUY CE' for r in trades),'buy_pe':sum(r['decision']=='BUY PE' for r in trades),'wait':sum(r['decision']=='WAIT' for r in rows),'evaluated':len(evaluated),'directional_hit_rate_percent':round(100*sum(r['direction_correct'] for r in evaluated)/len(evaluated),1) if evaluated else None,'note':'Research-only direction test, not option premium P&L. Overlapping signals and costs are not adjusted.'}
     return rows,summary
@@ -50,9 +54,8 @@ def register(app):
         import yfinance as yf
         data=yf.Ticker('^NSEI').history(period='5d',interval='5m')
         if data.empty: raise HTTPException(503,'NIFTY candles unavailable')
-        # Yahoo current bar can be unfinished; conservatively discard last bar during session.
-        now=datetime.now(ZoneInfo('Asia/Kolkata'))
-        if now.weekday()<5 and (9,15)<=(now.hour,now.minute)<(15,30): data=data.iloc[:-1]
+        from breakout_v1814 import completed
+        data=completed(data)
         rows,summary=evaluate(data)
         return {'status':'success','version':'18.12-shadow','latest':rows[-1] if rows else None,'summary':summary,'warning':'Experimental shadow signal. Does not replace live F&O decision or confirm option availability.'}
     @app.get('/api/v18-12/replay')
@@ -60,6 +63,13 @@ def register(app):
         import yfinance as yf
         data=yf.Ticker('^NSEI').history(period='5d',interval='5m')
         if data.empty: raise HTTPException(503,'NIFTY candles unavailable')
-        if date: data=data[data.index.strftime('%Y-%m-%d')==date]
+        from breakout_v1814 import completed
+        data=completed(data)
+        # Preserve prior-session warm-up, then filter decision outputs.
         rows,summary=evaluate(data)
+        if date:
+            rows=[r for r in rows if r['time'][:10]==date]
+            trades=[r for r in rows if r['decision']!='WAIT']
+            evaluated=[r for r in trades if r['direction_correct'] is not None]
+            summary.update(observations=len(rows),buy_ce=sum(r['decision']=='BUY CE' for r in trades),buy_pe=sum(r['decision']=='BUY PE' for r in trades),wait=sum(r['decision']=='WAIT' for r in rows),evaluated=len(evaluated),directional_hit_rate_percent=round(100*sum(r['direction_correct'] for r in evaluated)/len(evaluated),1) if evaluated else None)
         return {'status':'success','version':'18.12-shadow','date':date,'summary':summary,'signals':[r for r in rows if r['decision']!='WAIT'],'warning':'Exploratory in-sample replay. Do not infer profitability or deploy without out-of-sample testing.'}
