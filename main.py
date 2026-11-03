@@ -5940,7 +5940,7 @@ loadAll();setInterval(loadAll,60000);
 #signalJournalTools button{background:#17385b;color:#fff;border:1px solid #386189;border-radius:8px;padding:10px 14px;cursor:pointer}
 #signalJournalTools .hint{font-size:12px;color:#9cb1ca;flex-basis:100%}
 </style>
-<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadChartExcel">⬇ Download chart candles Excel</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Chart Excel exports timestamped Open, High, Low, Close and Volume from market data. Exports require your private key. Server Decisions exports include scheduled collection and explicit missing snapshots. Dashboard observations are listed separately. WAIT is not a trade.</span></div>
+<div id="signalJournalTools"><button id="downloadNiftyChart">⬇ Download chart PNG</button><button id="downloadChartExcel">⬇ Download chart candles Excel</button><button id="downloadSignalExcel">⬇ Download calls Excel</button><span class="hint">Chart Excel includes candle features, next-candle direction and outcomes. LIVE and REPLAY are separate; confidence is heuristic. Exports require your private key. Server Decisions exports include scheduled collection and explicit missing snapshots. Dashboard observations are listed separately. WAIT is not a trade.</span></div>
 <script>
 (function(){
  const $=id=>document.getElementById(id);
@@ -5969,8 +5969,9 @@ loadAll();setInterval(loadAll,60000);
   let key=sessionStorage.getItem('nifty_export_key')||prompt('Enter SIGNAL_EXPORT_KEY (private):');if(!key)return;sessionStorage.setItem('nifty_export_key',key);
   let date=prompt('Market date YYYY-MM-DD (blank = today):','')||'';
   let interval=prompt('Candle interval: 1m, 5m, or 15m','5m')||'5m';
+  let mode=interval==='5m'?(prompt('Prediction comparison: auto (live when saved), live, or replay','auto')||'auto'):'auto';
   try{
-   let url='/api/signal-journal/candles.xlsx?date='+encodeURIComponent(date)+'&interval='+encodeURIComponent(interval);
+   let url='/api/signal-journal/candles.xlsx?date='+encodeURIComponent(date)+'&interval='+encodeURIComponent(interval)+'&prediction_mode='+encodeURIComponent(mode);
    let r=await fetch(url,{headers:{'X-Signal-Export-Key':key}});
    if(!r.ok){if(r.status===403)sessionStorage.removeItem('nifty_export_key');let message=await r.text();throw Error('Candle export failed ('+r.status+'): '+message.slice(0,220))}
    let blob=await r.blob();let a=document.createElement('a');a.href=URL.createObjectURL(blob);
@@ -6637,6 +6638,15 @@ def prediction(include_alerts: bool = False):
         shadow_rows, _ = prediction_v1812.evaluate(market_data)
         shadow_latest = shadow_rows[-1] if shadow_rows else {"decision":"WAIT","reason":"Indicator warm-up incomplete"}
 
+        import candle_audit_v1815
+        try:
+            audit_rows = candle_audit_v1815.replay_predictions(market_data)
+            next_candle_audit = audit_rows.get(market_data.index[-1].isoformat())
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Next-candle audit calculation failed")
+            next_candle_audit = None
+
         latest_close = float(market_data["Close"].iloc[-1])
         previous_close = float(market_data["Close"].iloc[-2])
         change_5min = latest_close - previous_close
@@ -7123,9 +7133,10 @@ def prediction(include_alerts: bool = False):
                 fno_alerts[side]["reason"] = "Fresh, valid completed market candle required."
                 fno_alerts[side].setdefault("warnings", []).append(fno_alerts[side]["reason"])
 
-        return {
+        snapshot = {
             "status": "success",
-            "model_version": "18.14",
+            "model_version": "18.15",
+            "next_candle_audit": next_candle_audit,
             "candle_at": market_data.index[-1].isoformat(),
             "decision_started_at": prediction_started_at.isoformat(),
             "decision_completed_at": datetime.now(breakout_v1814.IST).isoformat(),
@@ -7333,6 +7344,9 @@ def prediction(include_alerts: bool = False):
                 "This remains a validation/paper-trading model, not a guaranteed forecast."
             )
         }
+
+        snapshot["audit_storage_status"] = candle_audit_v1815.save_live(snapshot)
+        return snapshot
 
     except Exception as e:
         return {

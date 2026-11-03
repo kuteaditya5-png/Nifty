@@ -1,0 +1,57 @@
+NIFTY AI v18.15 — next five-minute candle comparison
+Built from v18.14.1 Clean Chart. No change to volume sourcing or live trade gates.
+
+INSTALL
+1. Extract this complete project into a clean checkout of your Nifty repository.
+2. Review changes and commit/push using your normal GitHub/Termux workflow.
+3. Deploy on your existing Vercel project. This download does not deploy itself.
+4. Keep existing DATABASE_URL, JWT_SECRET, SIGNAL_EXPORT_KEY and monitor secrets.
+   Do not replace existing secrets with the blank .env.example values.
+5. DATABASE_URL must permit CREATE TABLE and SELECT/INSERT on the new
+   nifty_candle_audit_v1815 table. The application creates it on first use.
+
+USE
+Click Download chart candles Excel, choose a date and 5m, then choose:
+  auto   — first saved live snapshot, otherwise explicitly labelled REPLAY.
+  live   — recorded snapshots only; absent predictions remain MISSING.
+  replay — OHLC-only historical direction research; works without a database.
+Existing 1m/15m candle exports remain available without next-candle evaluation.
+
+WORKBOOK
+Prediction Review: separate LIVE/REPLAY counts and direction correctness.
+NIFTY OHLCV: original 35 columns plus 52 audit fields. One row per candle.
+Source & Notes: provider, export-time revisions and data limitations.
+The review formulas recalculate when opened in Excel/compatible spreadsheet apps.
+
+WHAT THE PREDICTION MEANS
+Next Candle Prediction is a separately versioned research direction assessment
+derived from the existing shadow engine's UP/DOWN evidence and bounded breakout
+adjustment. It is NOT a newly validated live trading model.
+Live Market Prediction / Live Market Confidence and Trade Call retain their own
+columns; replay does not fabricate missing historical option/news decisions.
+Confidence is heuristic direction strength, not a calibrated win probability.
+
+TIMING AND DATA
+At each successful /prediction request the first fresh complete snapshot is
+saved once, including when the dashboard requests it. Later requests cannot
+overwrite the first snapshot for that source candle.
+Calls that did not compute CE/PE alerts show NOT RECORDED in Trade Call.
+The existing scheduled collector also calls /prediction. For collection while
+the dashboard is closed, configure NIFTY_SITE_URL and NIFTY_MONITOR_SECRET in
+GitHub Actions, with the same monitor secret in Vercel; DATABASE_URL is in Vercel.
+GitHub scheduling is not guaranteed to run at the exact candle boundary.
+
+Strict full-next-candle evaluation excludes any LIVE capture after that next
+candle began. Real requests normally arrive after the boundary, so many/all
+LIVE rows can be LATE CAPTURE. Their actual outcome is still visible; they are
+not represented as timely forecast accuracy. REPLAY is a distinct as-of-close
+research test, never evidence of historical live performance.
+Exact five-minute adjacency and same session are required. Missing next bars,
+session end, quality flags, revised source close and invalid indicator context
+are not scored. The last session candle never uses the next day's opening bar.
+Neutral actual movement is within +/-2 NIFTY spot points, a research convention
+stored in each prediction. It is not an option-premium target.
+
+VALIDATION
+See README_V18_15.md for methods and checks. Live database writes and deployment
+must be verified in your environment. No improved accuracy is claimed.

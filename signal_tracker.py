@@ -98,13 +98,15 @@ def register(app):
         except Exception as e: raise HTTPException(503,'Signal journal export unavailable') from e
 
     @app.get('/api/signal-journal/candles.xlsx')
-    def export_chart_candles(request: Request, date: str='', interval: str='5m'):
+    def export_chart_candles(request: Request, date: str='', interval: str='5m', prediction_mode: str='auto'):
         """Export historical NIFTY OHLCV candles with exchange-local timestamps.
         This independently fetches market data; it does not export chart pixels.
         """
         key=os.getenv('SIGNAL_EXPORT_KEY')
         if not key or not hmac.compare_digest(request.headers.get('X-Signal-Export-Key',''),key):
             raise HTTPException(403,'Export authorization required')
+        if prediction_mode not in ('auto','live','replay'):
+            raise HTTPException(422,'prediction_mode must be auto, live or replay')
         if interval not in ('1m','5m','15m'):
             raise HTTPException(422,'Interval must be 1m, 5m or 15m')
         from datetime import date as date_type, timedelta
@@ -121,18 +123,22 @@ def register(app):
             import pandas as pd
             start=datetime.combine(day,datetime.min.time(),tzinfo=IST)
             end=start+timedelta(days=1)
-            df=yf.Ticker('^NSEI').history(start=start,end=end,interval=interval,auto_adjust=False)
+            fetch_start=max(start-timedelta(days=7), datetime.combine(datetime.now(IST).date()-timedelta(days=58),datetime.min.time(),tzinfo=IST)) if interval=='5m' else start
+            df=yf.Ticker('^NSEI').history(start=fetch_start,end=end,interval=interval,auto_adjust=False)
             if df is None or df.empty:
                 raise HTTPException(404,'No candles returned for this date (market closed or provider unavailable)')
             if df.index.tz is None:
                 raise HTTPException(503,'Market data lacks timezone information; cannot safely label timestamps')
             df=df.sort_index()
             df.index=df.index.tz_convert(IST)
-            df=df[df.index.date==day]
+            if df.index.has_duplicates:
+                raise HTTPException(503,'Duplicate candle timestamps; export cannot align predictions safely')
             now=pd.Timestamp.now(tz='Asia/Kolkata')
             duration=pd.Timedelta(minutes=int(interval[:-1]))
             df=df[(df.index+duration)<=now]
             df=df.between_time('09:15','15:29')
+            context=df.copy()
+            df=df[df.index.date==day]
             if df.empty: raise HTTPException(404,'No completed market-session candles available')
             from openpyxl import Workbook
             from openpyxl.styles import Font, PatternFill
@@ -217,12 +223,16 @@ def register(app):
                 for idx in (10,11,12,13,25,26):r[idx-1].number_format='#,##0.00'
                 for idx in (14,15,16,17,18,31):r[idx-1].number_format='0.00'
                 r[6].number_format='#,##0'
+            if interval=='5m':
+                from candle_audit_v1815 import append_to_workbook
+                append_to_workbook(wb,ws,df,context,day,prediction_mode)
             notes=wb.create_sheet('Source & Notes')
             for item in [
                 ('Instrument','NIFTY 50 spot index (^NSEI)'),
                 ('Provider','Yahoo Finance via yfinance'),
                 ('Market date (IST)',str(day)),
                 ('Interval',interval),
+                ('Next-candle audit','Enabled for 5m only; see Prediction Review. No change to live trade gates.' if interval=='5m' else 'Not applicable: next-candle audit requires the 5m interval'),
                 ('Timestamp meaning','Start and end of each candle, Asia/Kolkata (IST)'),
                 ('Completed candles only','Yes; incomplete current candle excluded'),
                 ('Source limitation','Fetched at export time; may differ from chart feed or previously displayed candles'),
