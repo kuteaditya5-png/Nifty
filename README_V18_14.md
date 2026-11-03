@@ -12,7 +12,7 @@ Reference reviewed: https://github.com/kuteaditya5-png/Stocklens/blob/098c43aae3
 - Confirmation also requires a directional body of at least 50% of candle range, close in the outer 30%, and EMA9/EMA21 agreement with at least 21 bars of warm-up.
 - Confirmed fresh evidence can adjust the existing combined model score by at most 0.05. Agreement increases conviction; opposition reduces it. Correlated ORB and rolling evidence receive a single adjustment. Existing option/coverage/direction thresholds remain in place.
 - Signal strength is a heuristic score, not a calibrated probability or measured accuracy. The adjustment is not validated as an improvement in profitability.
-- Five-minute charts show opening-range and rolling levels, confirmed/unconfirmed crossings, rejections and data-quality markers. Other intervals clear these overlays.
+- v18.14.1 chart styling: latest session only on 5m, two dashed blue OR HIGH / OR LOW lines. No candle markers, breakout/rejection text, rolling-level overlays or trade-level overlays. EMA is optional and off by default. Prediction, quality checks and collection logic remain unchanged. Other intervals clear opening-range lines.
 - Zero-range bars and suspicious closing spikes are flagged without altering provider prices. A flagged/stale/latest out-of-session candle blocks live WATCH and option BUY/WATCH alerts. Index volume is not fabricated.
 
 ## Collection setup

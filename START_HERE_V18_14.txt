@@ -1,4 +1,6 @@
-NIFTY AI v18.14 — complete source project
+NIFTY AI v18.14.1 — complete source project
+
+Chart update: dashed blue OR HIGH / OR LOW lines, no breakout/rejection labels or arrows. Prediction logic is unchanged from v18.14.
 
 This package includes the full Nifty source and the v18.14 changes. No earlier patch is needed.
 

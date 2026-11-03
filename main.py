@@ -23,7 +23,7 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 app = FastAPI(
     title="NIFTY AI",
     description="AI powered NIFTY 50 market analysis",
-    version="18.14"
+    version="18.14.1"
 )
 
 
@@ -40,7 +40,7 @@ def health():
     return {
         "project": "NIFTY AI",
         "status": "ok",
-        "version": "18.14",
+        "version": "18.14.1",
         "message": "NIFTY prediction engine is running."
     }
 
@@ -4762,14 +4762,14 @@ html,body{max-width:100%;overflow-x:hidden}
           <button data-i="15m" onclick="changeInterval('15m')">15m</button>
         </div>
         <div class="toggles">
-          <label class="toggle"><input type="checkbox" id="emaToggle" checked onchange="toggleEma()"> EMA</label>
+          <label class="toggle"><input type="checkbox" id="emaToggle" onchange="toggleEma()"> EMA</label>
         </div>
       </div>
       <div class="chart-meta"><div id="breakoutStatus" class="ohlc"></div><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
       <div class="chart-wrap" id="chartWrap">
         <div id="niftyChart"></div>
       </div>
-      <div class="chart-note">Intraday NIFTY levels are drawn from the active CE/PE setup: Entry, Stop Loss, Target 1 and Target 2. WAIT shows no artificial trade levels.</div>
+      <div class="chart-note"><span style="color:#23c9aa">━</span> Up candle &nbsp; <span style="color:#de879b">━</span> Down candle &nbsp; <span style="color:#63b4ed">┄</span> Opening range levels</div>
     </div>
 
     <div class="side">
@@ -4890,7 +4890,7 @@ html,body{max-width:100%;overflow-x:hidden}
 <script>
 let currentInterval="5m";
 let chart,candleSeries,ema20Series,ema50Series,predictionSeries;
-let breakoutSeries={};
+let openingRangeLines=[];
 let lastSignal=localStorage.getItem("nifty_last_signal")||"";
 let latestPrediction=null;
 let latestChartData=null;
@@ -4976,16 +4976,14 @@ function initChart(){
   const c=el("niftyChart");
   chart=LightweightCharts.createChart(c,{
     width:c.clientWidth,height:c.clientHeight,
-    layout:{background:{color:"rgba(8,21,36,.25)"},textColor:"#8298b7"},
-    grid:{vertLines:{color:"#12263c"},horzLines:{color:"#12263c"}},
+    layout:{background:{color:"#0e1d30"},textColor:"#8298b7"},
+    grid:{vertLines:{visible:false},horzLines:{color:"#203146",style:2}},
     rightPriceScale:{borderColor:"#213850"},timeScale:{borderColor:"#213850",timeVisible:true,secondsVisible:false,rightOffset:8,barSpacing:8}
   });
-  candleSeries=chart.addCandlestickSeries({upColor:"#23c9aa",downColor:"#ef5965",borderUpColor:"#23c9aa",borderDownColor:"#ef5965",wickUpColor:"#23c9aa",wickDownColor:"#ef5965"});
+  candleSeries=chart.addCandlestickSeries({upColor:"#23c9aa",downColor:"#de879b",borderUpColor:"#23c9aa",borderDownColor:"#de879b",wickUpColor:"#23c9aa",wickDownColor:"#de879b"});
   ema20Series=chart.addLineSeries({color:"#4187ff",lineWidth:1});
   ema50Series=chart.addLineSeries({color:"#976bf4",lineWidth:1});
-  for(const [key,color] of Object.entries({orb_high:"#22d3a6",orb_low:"#fb5b6b",prior6_high:"#d5b75d",prior6_low:"#b899ef"})){
-    breakoutSeries[key]=chart.addLineSeries({color,lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
-  }
+  toggleEma();
   window.addEventListener("resize",()=>chart.applyOptions({width:c.clientWidth}));
 }
 function toggleEma(){const on=el("emaToggle").checked;ema20Series.applyOptions({visible:on});ema50Series.applyOptions({visible:on})}
@@ -4994,29 +4992,38 @@ async function loadChart(prediction){
   if(!chart)initChart();
   const r=await fetch("/chart-data?interval="+encodeURIComponent(currentInterval),{cache:"no-store"}),d=await r.json();
   if(!r.ok||d.status!=="success")throw new Error(d.message||"Chart unavailable");
+  // Display one session, matching the opening-range reference chart.
+  const records=d.breakout?.records||[],day=records.at(-1)?.candle_at?.slice(0,10);
+  const start=records.find(r=>r.candle_at?.slice(0,10)===day)?.time;
+  if(start!=null){
+    d.candles=(d.candles||[]).filter(r=>r.time>=start);
+    d.ema20=(d.ema20||[]).filter(r=>r.time>=start);
+    d.ema50=(d.ema50||[]).filter(r=>r.time>=start);
+    d.bars=d.candles.length;
+  }
   latestChartData=d;candleSeries.setData(d.candles||[]);ema20Series.setData(d.ema20||[]);ema50Series.setData(d.ema50||[]);
-  renderTradeLevels(prediction);
   const bars=d.candles||[],last=bars[bars.length-1]||{};
   renderBreakouts(d);
   setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
   setText("chartIntervalLabel",currentInterval);chart.timeScale().fitContent();
 }
 function renderBreakouts(data){
-  const b=data.breakout,records=b?.records||[],times=new Set((data.candles||[]).map(c=>c.time));
-  const visible=records.filter(r=>times.has(r.time));
-  for(const key of Object.keys(breakoutSeries)){
-    breakoutSeries[key].setData(visible.map(r=>r[key]==null?{time:r.time}:{time:r.time,value:r[key]}));
+  openingRangeLines.forEach(line=>candleSeries.removePriceLine(line));
+  openingRangeLines=[];
+  candleSeries.setMarkers([]);
+  const times=new Set((data.candles||[]).map(c=>c.time));
+  const latest=(data.breakout?.records||[]).filter(r=>times.has(r.time)).at(-1);
+  if(latest){
+    for(const [key,title] of [["orb_high","OR HIGH"],["orb_low","OR LOW"]]){
+      const price=latest[key];
+      if(typeof price!=="number"||!Number.isFinite(price))continue;
+      openingRangeLines.push(candleSeries.createPriceLine({
+        price,color:"#63b4ed",lineWidth:1,lineStyle:2,
+        axisLabelVisible:true,title
+      }));
+    }
   }
-  const markers=[];
-  for(const r of visible){
-    if(r.quality_flags.length){markers.push({time:r.time,position:"aboveBar",color:"#f7b84b",shape:"circle",text:"Data review"});continue;}
-    if(!r.events.length)continue;
-    const up=r.direction==="UP",down=r.direction==="DOWN";
-    markers.push({time:r.time,position:up?"belowBar":"aboveBar",color:r.confirmed?(up?"#22d3a6":"#fb5b6b"):"#f7b84b",
-      shape:up?"arrowUp":down?"arrowDown":"circle",text:r.confirmed?(up?"Breakout ↑":"Breakdown ↓"):(up||down?"Unconfirmed cross":"Rejection")});
-  }
-  candleSeries.setMarkers(markers);
-  setText("breakoutStatus",b?`5m completed candles · ORB = 09:15–09:30 · Prior 6 levels · ${b.quality_flag_count} data flags · arrows are spot evidence, not option buy orders`:"Breakout overlays are available on the 5m chart.");
+  setText("breakoutStatus",openingRangeLines.length?"Opening range · 09:15–09:30 IST":data.interval==="5m"?"Opening range forming or unavailable":"Opening range lines available on 5m");
 }
 function renderTradeLevels(data){
   if(!candleSeries)return;
