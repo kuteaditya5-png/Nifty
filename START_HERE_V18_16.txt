@@ -1,0 +1,35 @@
+NIFTY AI v18.16 — separate breakout card and spot target lines
+
+This is the full project, including the v18.15 next-candle Excel audit.
+Extract into your Nifty checkout, review and commit the changes, then deploy
+through your existing Vercel connection. Preserve your environment secrets.
+See START_HERE_V18_15.txt for Excel/collector/database setup.
+
+NEW DISPLAY
+The separate 5m Breakout Setup card shows bullish/bearish direction, source
+(ORB / PRIOR6), signal time in IST, lifecycle status, entry, stop and targets.
+The chart uses the very same server values: ENTRY, STOP, T1 and T2, all labelled
+as NIFTY spot. OR HIGH / OR LOW stay dashed blue. No rejection text or arrows.
+Select the 5m chart to see the setup. Other intervals clear these setup lines.
+
+LEVEL RULES
+Use the latest confirmed completed-candle breakout of the displayed session.
+Entry = signal candle close (reference only, not an executed/fill price).
+Stop = signal low minus breakout buffer for UP; high plus buffer for DOWN.
+Risk R = entry-to-stop distance. Targets = 1R and 2R in the signal direction.
+These are geometric projections, not forecasts of achievable prices or option
+premiums. They do not promise 35 premium points or override CE/PE/WAIT gates.
+
+SETUP TRACKING
+Track the six subsequent completed 5m candles (30 minutes after signal close).
+Mark target/stop touches, expiry and session close. If stop and a target are
+touched in the same candle, mark AMBIGUOUS; OHLC cannot establish touch order.
+New confirmed signals replace older setups. Completed historical setups can
+retain their lines with an explicit non-active status on the card.
+Flagged data, gaps and stale active data suppress target lines. Chart refresh
+clears old targets before fetching new data so failed requests do not retain them.
+Touches are based only on completed candles, not live ticks.
+
+No volume sourcing or prediction/trade gates were changed.
+Local tests cover UP/DOWN levels, lifecycle handling and matching chart/card
+values. Live deployment and browser appearance must be checked on your site.

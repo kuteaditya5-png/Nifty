@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import statistics
 import breakout_v1814
+import breakout_setup_v1816
 
 load_dotenv()
 
@@ -4400,6 +4401,7 @@ def chart_data(interval: str = "5m"):
             "interval": interval,
             "candles": candles,
             "breakout": breakout_chart,
+            "breakout_setup": breakout_setup_v1816.build(data, breakout_chart) if interval == "5m" else None,
             "ema20": ema20,
             "ema50": ema50,
             "last_price": candles[-1]["close"],
@@ -4753,6 +4755,21 @@ html,body{max-width:100%;overflow-x:hidden}
     </div>
   </div>
 
+  <div class="card" id="breakoutCard" style="padding:16px;margin:12px 0">
+    <div class="eyebrow">5m Breakout Setup · NIFTY spot</div>
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:8px 0">
+      <strong id="breakoutDirection">WAIT</strong><span id="breakoutState">Waiting for confirmation</span>
+    </div>
+    <div class="tradeboxes">
+      <div class="tradebox entry"><div class="eyebrow">Spot entry</div><div class="v" id="breakoutEntry">--</div></div>
+      <div class="tradebox stop"><div class="eyebrow">Spot stop</div><div class="v" id="breakoutStop">--</div></div>
+      <div class="tradebox target"><div class="eyebrow">Target 1 · 1R</div><div class="v" id="breakoutT1">--</div></div>
+      <div class="tradebox target"><div class="eyebrow">Target 2 · 2R</div><div class="v" id="breakoutT2">--</div></div>
+    </div>
+    <div class="section-sub" id="breakoutDetail" style="margin-top:10px">Waiting for a completed 5m breakout.</div>
+    <div class="section-sub">Spot projections, not option premiums or a BUY CE/PE call. Targets are not guaranteed.</div>
+  </div>
+
   <div class="main-layout">
     <div class="card chart-card">
       <div class="toolbar">
@@ -4769,7 +4786,7 @@ html,body{max-width:100%;overflow-x:hidden}
       <div class="chart-wrap" id="chartWrap">
         <div id="niftyChart"></div>
       </div>
-      <div class="chart-note"><span style="color:#23c9aa">━</span> Up candle &nbsp; <span style="color:#de879b">━</span> Down candle &nbsp; <span style="color:#63b4ed">┄</span> Opening range levels</div>
+      <div class="chart-note"><span style="color:#23c9aa">━</span> Up candle &nbsp; <span style="color:#de879b">━</span> Down candle &nbsp; <span style="color:#63b4ed">┄</span> Opening range levels &nbsp; <span style="color:#34d399">┄</span> Breakout targets (spot)</div>
     </div>
 
     <div class="side">
@@ -4891,6 +4908,7 @@ html,body{max-width:100%;overflow-x:hidden}
 let currentInterval="5m";
 let chart,candleSeries,ema20Series,ema50Series,predictionSeries;
 let openingRangeLines=[];
+let breakoutTargetLines=[];
 let lastSignal=localStorage.getItem("nifty_last_signal")||"";
 let latestPrediction=null;
 let latestChartData=null;
@@ -4990,8 +5008,9 @@ function toggleEma(){const on=el("emaToggle").checked;ema20Series.applyOptions({
 
 async function loadChart(prediction){
   if(!chart)initChart();
+  renderBreakoutSetup(null,{interval:currentInterval,candles:[]});
   const r=await fetch("/chart-data?interval="+encodeURIComponent(currentInterval),{cache:"no-store"}),d=await r.json();
-  if(!r.ok||d.status!=="success")throw new Error(d.message||"Chart unavailable");
+  if(!r.ok||d.status!=="success"){renderBreakoutSetup(null,{interval:currentInterval,candles:[]});throw new Error(d.message||"Chart unavailable");}
   // Display one session, matching the opening-range reference chart.
   const records=d.breakout?.records||[],day=records.at(-1)?.candle_at?.slice(0,10);
   const start=records.find(r=>r.candle_at?.slice(0,10)===day)?.time;
@@ -5004,6 +5023,7 @@ async function loadChart(prediction){
   latestChartData=d;candleSeries.setData(d.candles||[]);ema20Series.setData(d.ema20||[]);ema50Series.setData(d.ema50||[]);
   const bars=d.candles||[],last=bars[bars.length-1]||{};
   renderBreakouts(d);
+  renderBreakoutSetup(d.breakout_setup,d);
   setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
   setText("chartIntervalLabel",currentInterval);chart.timeScale().fitContent();
 }
@@ -5025,24 +5045,26 @@ function renderBreakouts(data){
   }
   setText("breakoutStatus",openingRangeLines.length?"Opening range · 09:15–09:30 IST":data.interval==="5m"?"Opening range forming or unavailable":"Opening range lines available on 5m");
 }
-function renderTradeLevels(data){
-  if(!candleSeries)return;
-  (window.tradePriceLines||[]).forEach(x=>{try{candleSeries.removePriceLine(x)}catch(e){}});window.tradePriceLines=[];
-  const setup=String(data?.fno_setup||"WAIT").toUpperCase();
-  if(!setup.includes("CE")&&!setup.includes("PE"))return;
-  const oc=data?.signals?.option_chain||{},entry=Number(data?.price);
-  const ce=setup.includes("CE");
-  const sl=Number(ce?(oc.immediate_support??oc.support):(oc.immediate_resistance??oc.resistance));
-  const t1=Number(ce?(oc.immediate_resistance??oc.resistance):(oc.immediate_support??oc.support));
-  const t2=Number(ce?(oc.major_resistance??oc.resistance):(oc.major_support??oc.support));
-  const levels=[
-    {title:"ENTRY",price:entry,color:"#4da3ff"},
-    {title:"TARGET 1",price:t1,color:"#35d07f"},
-    {title:"TARGET 2",price:t2,color:"#35d07f"},
-    {title:"STOP LOSS",price:sl,color:"#ff5b64"}
-  ].filter(x=>Number.isFinite(x.price)&&x.price>0);
-  levels.forEach(x=>{try{window.tradePriceLines.push(candleSeries.createPriceLine({price:x.price,color:x.color,lineWidth:2,lineStyle:2,axisLabelVisible:true,title:`${x.title} ${fmt(x.price,2)}`}))}catch(e){}});
+function renderBreakoutSetup(plan,data){
+  breakoutTargetLines.forEach(line=>candleSeries.removePriceLine(line));breakoutTargetLines=[];
+  const supported=data?.interval==="5m";
+  const direction=plan?.direction;
+  setText("breakoutDirection",direction==="UP"?"BULLISH BREAKOUT":direction==="DOWN"?"BEARISH BREAKDOWN":"WAIT");
+  setText("breakoutState",supported?(plan?.status||"WAIT"):"SELECT 5m");
+  for(const [id,key] of [["breakoutEntry","entry"],["breakoutStop","stop_loss"],["breakoutT1","target_1"],["breakoutT2","target_2"]]){
+    const value=plan?.[key];setText(id,typeof value==="number"&&Number.isFinite(value)?fmt(value):"--");
+  }
+  const at=plan?.signal_at?new Date(plan.signal_at).toLocaleString("en-IN",{timeZone:"Asia/Kolkata"}):"";
+  setText("breakoutDetail",!supported?"Breakout setup and target lines use completed 5m candles.":
+    `${plan?.reason||"Waiting for confirmation."}${at?" Signal: "+at+" IST · "+plan.basis:""}${plan?.risk_points!=null?" · Risk "+fmt(plan.risk_points)+" points":""}`);
+  if(!supported||!plan?.show_levels)return;
+  if(!(data.candles||[]).some(c=>c.time===plan.signal_time))return;
+  for(const [key,title,color] of [["entry","ENTRY (spot)","#e6c26a"],["stop_loss","STOP (spot)","#fb7185"],["target_1","T1 (1R spot)","#34d399"],["target_2","T2 (2R spot)","#10b981"]]){
+    const price=plan[key];if(typeof price!=="number"||!Number.isFinite(price)||price<=0)continue;
+    breakoutTargetLines.push(candleSeries.createPriceLine({price,color,lineWidth:1,lineStyle:2,axisLabelVisible:true,title}));
+  }
 }
+function renderTradeLevels(data){ /* Breakout spot levels are rendered from chart data only. */ }
 
 async function loadPrediction(){
   const r=await fetch("/prediction?include_alerts=true",{cache:"no-store"}),d=await r.json();
@@ -7135,8 +7157,9 @@ def prediction(include_alerts: bool = False):
 
         snapshot = {
             "status": "success",
-            "model_version": "18.15",
+            "model_version": "18.16",
             "next_candle_audit": next_candle_audit,
+            "breakout_setup": breakout_setup_v1816.build(market_data, breakout_data),
             "candle_at": market_data.index[-1].isoformat(),
             "decision_started_at": prediction_started_at.isoformat(),
             "decision_completed_at": datetime.now(breakout_v1814.IST).isoformat(),

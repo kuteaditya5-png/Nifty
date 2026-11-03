@@ -1,0 +1,18 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('main.py','utf8');
+const code=source.slice(source.indexOf('function renderBreakoutSetup(plan,data){'),source.indexOf('function renderTradeLevels(data){'));
+const text={},removed=[];
+const ctx={breakoutTargetLines:[],candleSeries:{removePriceLine:x=>removed.push(x),createPriceLine:x=>x},setText:(k,v)=>text[k]=v,fmt:v=>v.toFixed(2)};
+vm.createContext(ctx);vm.runInContext(code,ctx);
+const plan={status:'ACTIVE',direction:'UP',show_levels:true,signal_time:10,entry:100,stop_loss:90,target_1:110,target_2:120,risk_points:10};
+const chart={interval:'5m',candles:[{time:10}]};
+ctx.renderBreakoutSetup(plan,chart);
+assert.equal(ctx.breakoutTargetLines.length,4);assert.equal(text.breakoutT1,'110.00');
+assert.equal(ctx.breakoutTargetLines[2].price,110);
+ctx.renderBreakoutSetup({...plan,direction:'DOWN',target_1:80,target_2:70},chart);
+assert.equal(removed.length,4);assert.equal(text.breakoutDirection,'BEARISH BREAKDOWN');
+ctx.renderBreakoutSetup(null,{interval:'15m',candles:[]});
+assert.equal(ctx.breakoutTargetLines.length,0);assert.equal(text.breakoutT1,'--');
+ctx.renderBreakoutSetup(plan,{interval:'5m',candles:[{time:99}]});assert.equal(ctx.breakoutTargetLines.length,0);
+ctx.renderBreakoutSetup({...plan,show_levels:false},chart);assert.equal(ctx.breakoutTargetLines.length,0);
+console.log('Separate breakout card, exact chart levels, cleanup and timeframe guards passed');
