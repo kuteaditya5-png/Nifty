@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 import breakout_v1814 as breakout
 import prediction_v1812 as shadow
 import signal_tracker
+import fvg_v1817
 
 IST = breakout.IST
 VERSION = '18.15-next-candle-audit'
@@ -27,6 +28,7 @@ HEADERS = [
     'Live Market Prediction','Live Market Confidence %','Live Base Score','Live Breakout Score Adjustment',
     'Live Adjusted Score','Shadow Trade Call','Prediction Reference Close','Export Close Difference Points',
     'Breakout Direction','Next Candle Quality Flags','Audit Storage Status']
+HEADERS += fvg_v1817.HEADERS + ["Live FVG Score Adjustment", "Live Final Score After FVG", "Live FVG Blocked Sides", "Live FVG Decision Reason"]
 DDL = '''CREATE TABLE IF NOT EXISTS nifty_candle_audit_v1815 (
  candle_at TIMESTAMPTZ PRIMARY KEY,
  recorded_at TIMESTAMPTZ NOT NULL,
@@ -136,6 +138,7 @@ def joined_rows(frame, predictions, live=None, storage_status='AVAILABLE', mode=
     """Attach an exact next 5m bar, never a later available bar or next session."""
     live = live or {}; now = timestamp(now or datetime.now(IST))
     flags = breakout.quality_flags(frame); output = {}
+    fvg_records = {r["candle_at"]: r for r in fvg_v1817.analyze(frame, now)["records"]}
     for ts, candle in frame.iterrows():
         key = timestamp(ts).isoformat(); end = ts+pd.Timedelta(minutes=5)
         record = live.get(key) if mode != 'replay' else None
@@ -209,6 +212,18 @@ def joined_rows(frame, predictions, live=None, storage_status='AVAILABLE', mode=
             'Audit Storage Status':storage_status}
         for name in ('Open','High','Low','Close'):
             vals['Next '+name] = number(next_bar[name]) if next_bar is not None else None
+        captured = (payload.get("fvg") or {}).get("latest")
+        if captured and captured.get("candle_at") == key:
+            vals.update(fvg_v1817.export_fields(captured, "LIVE"))
+        elif mode != "live":
+            vals.update(fvg_v1817.export_fields(fvg_records.get(key), "REPLAY"))
+        else:
+            vals.update(fvg_v1817.export_fields(None, "MISSING"))
+        fa = payload.get("fvg_adjustment") or {}
+        vals.update({"Live FVG Score Adjustment":fa.get("adjustment"),
+                     "Live Final Score After FVG":fa.get("adjusted_score"),
+                     "Live FVG Blocked Sides":", ".join(fa.get("blocked_sides", [])) if fa else None,
+                     "Live FVG Decision Reason":fa.get("reason")})
         output[key] = vals
     return output
 

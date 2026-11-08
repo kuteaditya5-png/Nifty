@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 import statistics
 import breakout_v1814
 import breakout_setup_v1816
+import fvg_v1817
 
 load_dotenv()
 
@@ -4402,6 +4403,7 @@ def chart_data(interval: str = "5m"):
             "candles": candles,
             "breakout": breakout_chart,
             "breakout_setup": breakout_setup_v1816.build(data, breakout_chart) if interval == "5m" else None,
+            "fvg": fvg_v1817.analyze(data) if interval == "5m" else None,
             "ema20": ema20,
             "ema50": ema50,
             "last_price": candles[-1]["close"],
@@ -4770,6 +4772,7 @@ html,body{max-width:100%;overflow-x:hidden}
     <div class="section-sub">Spot projections, not option premiums or a BUY CE/PE call. Targets are not guaranteed.</div>
   </div>
 
+  <div class="card" style="padding:16px;margin:12px 0"><div class="eyebrow">5m Fair Value Gaps · NIFTY spot</div><strong id="fvgState">WAIT</strong><div id="fvgDetail" class="section-sub">Waiting for completed candles.</div><div class="section-sub">Confirmed FVG retests contribute to call strength and block opposing calls. Other trade checks still apply.</div></div>
   <div class="main-layout">
     <div class="card chart-card">
       <div class="toolbar">
@@ -4971,7 +4974,7 @@ function renderPrediction(data){
   const reason=data.fno_setup_reason||trade.reason||"Waiting for stronger confirmation.";
   setText("intradaySetupSub",setup.includes("CE")||setup.includes("PE")?`Prediction-confirmed intraday ${setup.includes("CE")?"CE":"PE"} setup · Entry, SL and targets below`:`WAIT · No forced trade. Entry, SL and targets activate when the prediction setup qualifies.`);
   const ts=data.signal_generated_at||new Date().toISOString();setText("signalTime","Signal time: "+new Date(ts).toLocaleTimeString());
-  setText("marketBias",`${data.prediction||"--"} · Score ${data.combined_score??"--"} · Breakout adjustment ${data.breakout_adjustment?.adjustment??0}`);
+  setText("marketBias",`${data.prediction||"--"} · Score ${data.combined_score??"--"} · Breakout ${data.breakout_adjustment?.adjustment??0} · FVG ${data.fvg_adjustment?.adjustment??0}`);
   setText("sumSignal",setup);el("sumSignal").style.color=color;setText("sumStrike",typ&&trade.strike?`${trade.strike} ${typ}`:"--");setText("sumConfidence",conf.toFixed(0)+"%");setText("sumEntry",entry);setText("sumStop",stop);setText("sumT1",t1);setText("sumT2",t2);setText("sumReason",reason);
 
   const s=data.signals||{},tech=s.technical||{},pa=s.price_action||{},flow=s.institutional_flow||{},oc=s.option_chain||{},news=s.news||{};
@@ -5009,6 +5012,7 @@ function toggleEma(){const on=el("emaToggle").checked;ema20Series.applyOptions({
 async function loadChart(prediction){
   if(!chart)initChart();
   renderBreakoutSetup(null,{interval:currentInterval,candles:[]});
+  renderFvg(null);
   const r=await fetch("/chart-data?interval="+encodeURIComponent(currentInterval),{cache:"no-store"}),d=await r.json();
   if(!r.ok||d.status!=="success"){renderBreakoutSetup(null,{interval:currentInterval,candles:[]});throw new Error(d.message||"Chart unavailable");}
   // Display one session, matching the opening-range reference chart.
@@ -5024,6 +5028,7 @@ async function loadChart(prediction){
   const bars=d.candles||[],last=bars[bars.length-1]||{};
   renderBreakouts(d);
   renderBreakoutSetup(d.breakout_setup,d);
+  renderFvg(d);
   setText("chartStatus",`O ${fmt(last.open)}  H ${fmt(last.high)}  L ${fmt(last.low)}  C ${fmt(last.close)}  · ${d.bars||0} actual bars`);
   setText("chartIntervalLabel",currentInterval);chart.timeScale().fitContent();
 }
@@ -5062,6 +5067,19 @@ function renderBreakoutSetup(plan,data){
   for(const [key,title,color] of [["entry","ENTRY (spot)","#e6c26a"],["stop_loss","STOP (spot)","#fb7185"],["target_1","T1 (1R spot)","#34d399"],["target_2","T2 (2R spot)","#10b981"]]){
     const price=plan[key];if(typeof price!=="number"||!Number.isFinite(price)||price<=0)continue;
     breakoutTargetLines.push(candleSeries.createPriceLine({price,color,lineWidth:1,lineStyle:2,axisLabelVisible:true,title}));
+  }
+}
+let fvgLines=[];
+function renderFvg(data){
+  fvgLines.forEach(line=>candleSeries.removePriceLine(line));fvgLines=[];
+  const f=data?.interval==="5m"?data.fvg:null,r=f?.latest,z=r?.zone;
+  setText("fvgState",!f?"SELECT 5m / WAIT":`${f.eligible?"CURRENT":"HISTORICAL / STALE"} · ${z?(z.direction==="UP"?"BULLISH":"BEARISH")+(z.inverse?" IFVG":" FVG")+" · "+z.status:"NO FVG"}`);
+  setText("fvgDetail",z?`Zone ${fmt(z.lower)}–${fmt(z.upper)} · Midpoint ${fmt(z.midpoint)} · Fill ${fmt(z.fill_pct)}% · Active ${r.active_count} · Retest ${(r.signals||[]).map(s=>s.direction+(s.inverse?" IFVG":" FVG")).join(", ")||"NONE"}`:"Completed 5m candles required. No qualifying zone available.");
+  if(!z||["FILLED","INVALIDATED","DATA_REVIEW"].includes(z.status))return;
+  if(!(data.candles||[]).some(c=>c.time===z.time))return;
+  for(const [key,label] of [["lower","LOW"],["upper","HIGH"],["midpoint","50%"]]){
+    const price=z[key];if(!Number.isFinite(price))continue;
+    fvgLines.push(candleSeries.createPriceLine({price,color:z.direction==="UP"?"#22d3ee":"#f472b6",lineWidth:1,lineStyle:2,axisLabelVisible:true,title:(z.inverse?"IFVG ":"FVG ")+label}));
   }
 }
 function renderTradeLevels(data){ /* Breakout spot levels are rendered from chart data only. */ }
@@ -6928,6 +6946,9 @@ def prediction(include_alerts: bool = False):
         )
 
         combined_score, breakout_adjustment = breakout_v1814.adjust_score(combined_score, breakout_data)
+        fvg_data = fvg_v1817.analyze(market_data, prediction_started_at)
+        combined_score, fvg_adjustment = fvg_v1817.adjust_score(
+            combined_score, fvg_data, breakout_adjustment["adjustment"])
 
         # -----------------------------
         # 20. PROBABILITY MODEL
@@ -7121,6 +7142,13 @@ def prediction(include_alerts: bool = False):
             fno_setup = "WAIT"
             setup_reasons.insert(0, "Outside session, stale candle, or source candle flagged for review.")
 
+        if fno_setup.split()[0] in fvg_adjustment["blocked_sides"]:
+            fno_setup = "WAIT"
+        for side in ("CE", "PE"):
+            watch_gates[side]["fvg_alignment"] = side not in fvg_adjustment["blocked_sides"]
+        if fvg_adjustment["retest_directions"]:
+            setup_reasons.insert(0, fvg_adjustment["reason"])
+
         fno_setup_reason = " ".join(setup_reasons[:3]) or "Signals are mixed, so the model is waiting for stronger confirmation."
 
         # -----------------------------
@@ -7155,10 +7183,14 @@ def prediction(include_alerts: bool = False):
                 fno_alerts[side]["reason"] = "Fresh, valid completed market candle required."
                 fno_alerts[side].setdefault("warnings", []).append(fno_alerts[side]["reason"])
 
+        fno_alerts = fvg_v1817.filter_alerts(fno_alerts, fvg_adjustment)
+
         snapshot = {
             "status": "success",
-            "model_version": "18.16",
+            "model_version": "18.17.1",
             "next_candle_audit": next_candle_audit,
+            "fvg": fvg_data,
+            "fvg_adjustment": fvg_adjustment,
             "breakout_setup": breakout_setup_v1816.build(market_data, breakout_data),
             "candle_at": market_data.index[-1].isoformat(),
             "decision_started_at": prediction_started_at.isoformat(),
