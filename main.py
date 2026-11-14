@@ -1,3 +1,4 @@
+from pathlib import Path
 import urllib.parse
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -4434,6 +4435,7 @@ def chart_data(interval: str = "5m"):
 
 @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
 def dashboard():
+    flow_view = Path(__file__).with_name("flow_chart.html").read_text(encoding="utf-8")
     return r"""
 <!doctype html>
 <html lang="en">
@@ -4684,7 +4686,16 @@ html,body{max-width:100%;overflow-x:hidden}
 }
 @media(max-width:370px){.shell{padding-left:8px!important;padding-right:8px!important}.topbar .actions>button{font-size:10px!important}.tradebox .v{font-size:14px!important}}
 </style>
-</head>
+<style>
+body{background:#0c0e18!important}body:before{display:none}
+.shell .card,.shell .topbar{background:#161a29!important;border-color:#34384c!important;box-shadow:none!important}
+.shell .brand span{color:#c7acff!important}.shell .app-tab.active,.view-switch button[aria-pressed=true],.intervals button.active{background:#6748a1!important;color:white!important}
+.view-switch{display:flex;gap:6px;margin:12px 0}.view-switch button{border-radius:22px;padding:9px 15px}
+.spot-heading{padding:10px 16px 6px}.spot-heading small{color:#afa4c7;letter-spacing:.12em}.spot-heading h2,.setup-heading{margin:4px 0 10px}.setup-heading{font-size:18px;margin-top:22px}
+#spotChartView{background:#161a29;border-radius:16px;border:1px solid #34384c;overflow:hidden}
+#spotChartView .chart-card{border:0!important;border-radius:0}.main-layout{grid-template-columns:1fr}.main-layout .side{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+@media(max-width:760px){.shell #mainHorizontalNav{position:fixed!important;inset:auto 0 0!important;z-index:80;justify-content:space-around!important;margin:0!important;background:#191c2c!important;border-radius:0!important;padding:7px 3px max(7px,env(safe-area-inset-bottom))!important}.shell #mainHorizontalNav button.app-tab{font-size:10px!important;padding:9px 6px!important}.shell .topbar .actions{display:flex!important;flex-wrap:wrap}.shell .topbar .actions button{width:auto!important}.shell .topbar .ui-signature{display:none!important}.shell .topbar{margin:0!important}.shell .topbar .actions #lastUpdated{font-size:10px!important}#signalJournalTools{margin-bottom:80px!important}}
+</style></head>
 <body>
 <div class="backtest-panel" id="backtestPanel">
   <div class="section-head"><div><div class="section-title">Auto Trade Backtest</div><div class="section-sub">Focused historical replay for the current CE / PE / WAIT trading direction.</div></div><button onclick="closeBacktestPanel()">✕</button></div>
@@ -4709,9 +4720,9 @@ html,body{max-width:100%;overflow-x:hidden}
 <div class="shell">
   <div class="topbar">
     <div>
-      <div class="brandline"><div class="brand">NIFTY <span>AI</span></div><div class="tag">Smarter signals. Better validation.</div></div>
+      <div class="brandline"><div class="brand">NIFTY <span>AI</span></div><div class="tag">Intraday workspace</div></div>
     </div>
-    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v16.1</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
+    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v18.18</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
       <span class="market-open"><span class="statusdot"></span><span id="marketState">Market data</span></span>
       <span class="pill" id="lastUpdated">Loading...</span>
       <button class="iconbtn" onclick="loadAll()">↻ Refresh</button>
@@ -4731,6 +4742,31 @@ html,body{max-width:100%;overflow-x:hidden}
   <div class="error" id="errorBox"></div>
 
   <div class="tab-page active" id="tab-dashboard">
+  <div class="view-switch" aria-label="Chart instrument">
+    <button id="spotViewBtn" aria-pressed="true" onclick="switchInstrument(false)">NIFTY 50 spot</button>
+    <button id="flowViewBtn" aria-pressed="false" onclick="switchInstrument(true)">Futures order flow</button>
+  </div>
+  <div id="spotChartView"><header class="spot-heading"><small>NSE INDEX</small><h2>NIFTY 50</h2></header>
+    <div class="card chart-card">
+      <div class="toolbar">
+        <div class="intervals">
+          <button data-i="1m" onclick="changeInterval('1m')">1m</button>
+          <button data-i="5m" class="active" onclick="changeInterval('5m')">5m</button>
+          <button data-i="15m" onclick="changeInterval('15m')">15m</button>
+        </div>
+        <div class="toggles">
+          <label class="toggle"><input type="checkbox" id="emaToggle" onchange="toggleEma()"> EMA</label>
+        </div>
+      </div>
+      <div class="chart-meta"><div id="breakoutStatus" class="ohlc"></div><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
+      <div class="chart-wrap" id="chartWrap">
+        <div id="niftyChart"></div>
+      </div>
+      <div class="chart-note"><span style="color:#23c9aa">━</span> Up candle &nbsp; <span style="color:#de879b">━</span> Down candle &nbsp; <span style="color:#63b4ed">┄</span> Opening range levels &nbsp; <span style="color:#34d399">┄</span> Breakout targets (spot)</div>
+    </div>
+
+</div><div id="futuresChartView" hidden><!-- FUTURES_FLOW --></div>
+  <h2 class="setup-heading">NIFTY spot setups</h2>
   <div class="topgrid">
     <div class="card prediction-card">
       <div class="eyebrow">Current Prediction</div>
@@ -4774,24 +4810,6 @@ html,body{max-width:100%;overflow-x:hidden}
 
   <div class="card" style="padding:16px;margin:12px 0"><div class="eyebrow">5m Fair Value Gaps · NIFTY spot</div><strong id="fvgState">WAIT</strong><div id="fvgDetail" class="section-sub">Waiting for completed candles.</div><div class="section-sub">Confirmed FVG retests contribute to call strength and block opposing calls. Other trade checks still apply.</div></div>
   <div class="main-layout">
-    <div class="card chart-card">
-      <div class="toolbar">
-        <div class="intervals">
-          <button data-i="1m" onclick="changeInterval('1m')">1m</button>
-          <button data-i="5m" class="active" onclick="changeInterval('5m')">5m</button>
-          <button data-i="15m" onclick="changeInterval('15m')">15m</button>
-        </div>
-        <div class="toggles">
-          <label class="toggle"><input type="checkbox" id="emaToggle" onchange="toggleEma()"> EMA</label>
-        </div>
-      </div>
-      <div class="chart-meta"><div id="breakoutStatus" class="ohlc"></div><div class="chart-title">NIFTY 50 · <span id="chartIntervalLabel">5m</span> · NSE</div><div class="ohlc" id="chartStatus">Loading candles...</div></div>
-      <div class="chart-wrap" id="chartWrap">
-        <div id="niftyChart"></div>
-      </div>
-      <div class="chart-note"><span style="color:#23c9aa">━</span> Up candle &nbsp; <span style="color:#de879b">━</span> Down candle &nbsp; <span style="color:#63b4ed">┄</span> Opening range levels &nbsp; <span style="color:#34d399">┄</span> Breakout targets (spot)</div>
-    </div>
-
     <div class="side">
       <div class="card sidecard">
         <div class="side-title">✧ AI Insights</div>
@@ -4993,11 +5011,18 @@ function renderPrediction(data){
   notifySignal(setup,reason);
 }
 
+function switchInstrument(futures){
+  el("spotChartView").hidden=futures;
+  el("futuresChartView").hidden=!futures;
+  el("spotViewBtn").setAttribute("aria-pressed",String(!futures));
+  el("flowViewBtn").setAttribute("aria-pressed",String(futures));
+  if(!futures && chart)requestAnimationFrame(()=>chart.applyOptions({width:el("niftyChart").clientWidth}));
+}
 function initChart(){
   const c=el("niftyChart");
   chart=LightweightCharts.createChart(c,{
     width:c.clientWidth,height:c.clientHeight,
-    layout:{background:{color:"#0e1d30"},textColor:"#8298b7"},
+    layout:{background:{color:"#101320"},textColor:"#8298b7"},
     grid:{vertLines:{visible:false},horzLines:{color:"#203146",style:2}},
     rightPriceScale:{borderColor:"#213850"},timeScale:{borderColor:"#213850",timeVisible:true,secondsVisible:false,rightOffset:8,barSpacing:8}
   });
@@ -6028,7 +6053,7 @@ loadAll();setInterval(loadAll,60000);
 
 </body>
 </html>
-"""
+""".replace("<!-- FUTURES_FLOW -->", flow_view)
 
 # ============================================================
 # F&O ALERT ENGINE - VERSION 7

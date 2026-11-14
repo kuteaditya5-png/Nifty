@@ -1,0 +1,14 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const s=fs.readFileSync('main.py','utf8');
+const code=s.slice(s.indexOf('let fvgLines=[];'),s.indexOf('function renderTradeLevels(data){'));
+const text={},lines=[];let removed=0;
+const ctx={setText:(k,v)=>text[k]=v,fmt:v=>Number(v).toFixed(2),candleSeries:{removePriceLine:()=>removed++,createPriceLine:x=>(lines.push(x),x)}};
+vm.createContext(ctx);vm.runInContext(code,ctx);
+const z={direction:'UP',status:'FRESH',lower:101,upper:105,midpoint:103,fill_pct:0,time:10};
+const d={interval:'5m',candles:[{time:10}],fvg:{eligible:true,latest:{zone:z,active_count:1,signals:[]}}};
+ctx.renderFvg(d);assert.equal(lines.length,3);assert.equal(lines[2].price,103);
+ctx.renderFvg({...d,interval:'15m'});assert.equal(removed,3);
+ctx.renderFvg({...d,fvg:{...d.fvg,latest:{...d.fvg.latest,zone:{...z,status:'FILLED'}}}});assert.equal(lines.length,3);
+ctx.renderFvg({...d,fvg:{...d.fvg,eligible:false}});assert.match(text.fvgState,/HISTORICAL/);
+ctx.renderFvg(null);assert.equal(removed,6);
+console.log('FVG chart levels, fill/stale state and timeframe cleanup passed');

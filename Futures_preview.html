@@ -1,0 +1,122 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NIFTY AI · Futures order flow</title><style>*{box-sizing:border-box}body{background:#0c0e18;color:#eff0ff;margin:0 auto;padding:14px;max-width:1050px;font-family:system-ui}a{color:#bdabfb}</style></head><body><style>
+.flow{font-family:Inter,system-ui,sans-serif;background:#101320;color:#edf0fc;border:1px solid #303449;border-radius:18px;padding:clamp(14px,3vw,28px);margin-bottom:16px}
+.flow header,.flow .row,.flow .tools{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.flow h2{font-size:clamp(23px,4vw,34px);margin:4px 0}.flow small,.flow time,.flow .muted{color:#aeb5ca}.flow .quote{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums}
+.flow .tools{margin:18px 0 4px;justify-content:flex-start}.flow label,.flow button,.flow select{font:inherit;font-size:13px}.flow label{display:inline-flex;align-items:center;gap:5px}.flow input{accent-color:#ad8cff}
+.flow button,.flow select{padding:7px 10px;background:#252239!important;border:1px solid #49435e!important;border-radius:8px;color:#f4efff}
+.flow canvas{display:block;width:100%;height:clamp(255px,40vh,420px);touch-action:pan-y;cursor:crosshair}
+.flow .detail{background:#1c2031;border:1px solid #363a50;border-radius:14px;padding:14px}.flow .stats{display:grid;grid-template-columns:1fr 1fr;margin:12px 0}.flow .stats>div:last-child{text-align:right}.flow .stats b{display:block;font-size:22px}.flow .up{color:#50dfa4}.flow .down{color:#ff8996}.flow .ratio{height:8px;border-radius:8px;overflow:hidden;background:#fa798b;margin-bottom:9px}.flow .ratio i{display:block;height:100%;background:#50dfa4}
+.flow details{margin-top:14px;color:#c6cce0;font-size:13px}.flow summary{cursor:pointer}.flow code{overflow-wrap:anywhere;color:#ded4ff}.flow [role=alert]{color:#ffb6bd}.flow :focus-visible{outline:2px solid #c7acff;outline-offset:2px}
+</style>
+<section class="flow" id="flowView" aria-label="Futures trade activity">
+<header><div><small>NIFTY AI / Order flow</small><h2>NIFTY Futures</h2><small id="flowSource">Simulated trades · 5 min · IST</small></div><strong class="quote" id="flowQuote"></strong></header>
+<div class="tools"><label>Session <select id="flowSession"></select></label><label><input type="checkbox" id="flowTrend" checked>SuperTrend (10, 3)</label><label><input type="checkbox" id="flowBubbles" checked>Buy/sell bubbles</label></div>
+<canvas id="flowCanvas" tabindex="0" aria-label="Select a candle by tapping or using left and right arrow keys"></canvas>
+<div class="detail" aria-live="polite"><div class="row"><strong>Selected candle</strong><time id="flowTime"></time></div><div class="stats"><div class="up">Buy-initiated<b id="flowBuy"></b></div><div class="down">Sell-initiated<b id="flowSell"></b></div></div><div class="ratio"><i id="flowRatio"></i></div><div class="row"><small>Total volume</small><strong id="flowTotal"></strong></div></div>
+<details><summary>Trade data</summary><p>Import one NIFTY futures contract per file. Use one row per executed trade with its aggressor side and quantity in contracts. Times must include a timezone. Results cover the supplied trades.</p><code>trade_id,timestamp,price,contracts,side<br>t001,2026-11-13T10:30:03+05:30,25075,12,BUY</code><p><input id="flowFile" type="file" accept=".csv,text/csv" aria-label="Import trade CSV"> <button id="flowDemo" type="button">Use sample</button></p><div role="alert" id="flowError"></div></details>
+</section>
+<script>
+(()=>{
+const get=id=>document.getElementById(id);
+const canvas=get('flowCanvas'), ctx=canvas.getContext('2d');
+const up='#50dfa4',down='#fa798b', number=new Intl.NumberFormat('en-IN');
+const clock=t=>new Date(t+19800000).toISOString().slice(11,16);
+const date=t=>new Date(t+19800000).toISOString().slice(0,10);
+function aggregate(trades){
+  const buckets=new Map();
+  for(const trade of trades.sort((a,b)=>a.time-b.time)){
+    const time=Math.floor(trade.time/300000)*300000;
+    const bar=buckets.get(time)||{time,open:trade.price,high:trade.price,low:trade.price,buy:0,sell:0};
+    bar.high=Math.max(bar.high,trade.price);bar.low=Math.min(bar.low,trade.price);
+    bar.close=trade.price;bar[trade.side]+=trade.qty;buckets.set(time,bar);
+  }
+  let atr=0,upper,lower,bull=false,prev;
+  return Array.from(buckets.values(),(bar,i)=>{
+    const tr=Math.max(bar.high-bar.low,Math.abs(bar.high-(prev??bar.open)),Math.abs(bar.low-(prev??bar.open)));
+    atr=i<10?atr+tr/10:(atr*9+tr)/10;
+    if(i>=9){
+      const mid=(bar.high+bar.low)/2,hi=mid+3*atr,lo=mid-3*atr;
+      upper=upper===undefined||hi<upper||prev>upper?hi:upper;
+      lower=lower===undefined||lo>lower||prev<lower?lo:lower;
+      bull=bull?bar.close>=lower:bar.close>upper;
+      bar.trend=bull?lower:upper;bar.bull=bull;
+    }
+    prev=bar.close;return bar;
+  });
+}
+function parseTrades(raw){
+  const [header,...rows]=raw.trim().split(/\r?\n/);
+  if(header.trim().toLowerCase()!=='trade_id,timestamp,price,contracts,side')throw Error('Use the five CSV columns in the order shown.');
+  if(!rows.length)throw Error('The file contains no trades.');
+  const seen=new Set();
+  return rows.map((line,i)=>{
+    const fields=line.split(',').map(s=>s.trim()),[id,stamp,p,q,s]=fields;
+    const time=Date.parse(stamp),price=Number(p),qty=Number(q),side=s?.toLowerCase();
+    if(fields.length!==5||!id||seen.has(id)||!/(Z|[+-]\d\d:\d\d)$/i.test(stamp)||!Number.isFinite(time)||!Number.isFinite(price)||price<=0||!Number.isSafeInteger(qty)||qty<=0||!['buy','sell'].includes(side))throw Error('Check trade ID, timestamp, price, contracts and side on row '+(i+2)+'.');
+    seen.add(id);return {time,price,qty,side};
+  });
+}
+function sample(){
+  const trades=[],start=Date.parse('2026-11-13T09:15:00+05:30');
+  for(let i=0;i<24;i++){
+    const base=25015+2.3*i+17*Math.sin(i*.68), buy=i===15?650:Math.round(480+230*Math.sin(i*.74));
+    [base,base-4,base+8,base+5*Math.cos(i*.68)].forEach((price,j)=>trades.push({time:start+i*300000+j*40000,price,qty:j%2?Math.floor((1000-buy)/2)+(j===3?(1000-buy)%2:0):Math.floor(buy/2)+(j===2?buy%2:0),side:j%2?'sell':'buy'}));
+  }return trades;
+}
+let all=[],bars=[],selected=0,points=[],revision=0;
+function use(trades,label,isSample=false){
+  all=aggregate(trades);get('flowSource').textContent=label+' · 5 min · IST';
+  const days=Array.from(new Set(all.map(b=>date(b.time))));
+  get('flowSession').replaceChildren(...days.map(d=>new Option(d,d)));
+  get('flowSession').value=days.at(-1);session(isSample);get('flowError').textContent='';
+}
+function session(isSample=false){
+  bars=all.filter(b=>date(b.time)===get('flowSession').value);
+  selected=isSample?15:bars.length-1;get('flowQuote').textContent=bars.at(-1).close.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});draw();
+}
+function draw(){
+  if(!bars.length||!canvas.clientWidth)return;
+  const w=canvas.clientWidth,h=canvas.clientHeight,dpr=window.devicePixelRatio||1;
+  canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);
+  const b=bars[selected],total=b.buy+b.sell,pct=b.buy/total*100;
+  get('flowTime').textContent=clock(b.time)+'–'+clock(b.time+300000)+' IST';
+  for(const [id,v] of [['flowBuy',b.buy],['flowSell',b.sell]])get(id).textContent=number.format(v)+' · '+(100*v/total).toFixed(1)+'%';
+  get('flowTotal').textContent=number.format(total)+' contracts';get('flowRatio').style.width=pct+'%';
+  const left=8,right=w-62,top=40,bottom=h-30,step=(right-left)/bars.length;
+  const trend=get('flowTrend').checked;
+  const spread=bars.flatMap(c=>trend&&Number.isFinite(c.trend)?[c.low,c.high,c.trend]:[c.low,c.high]);
+  let low=Math.min(...spread),high=Math.max(...spread);const pad=Math.max((high-low)*.08,.1);low-=pad;high+=pad;
+  const y=p=>bottom-(p-low)/(high-low)*(bottom-top),x=i=>left+(i+.5)*step;
+  function line(x1,y1,x2,y2,color){ctx.strokeStyle=color;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke()}
+  ctx.font='11px system-ui';ctx.textAlign='left';
+  for(let j=0;j<=4;j++){const p=low+(high-low)*j/4;line(left,y(p),right,y(p),'#2c3040');ctx.fillStyle='#b4bbce';ctx.fillText(number.format(Math.round(p)),right+5,y(p)+4)}
+  points=bars.map((c,i)=>x(i));ctx.setLineDash([3,4]);line(x(selected),top-6,x(selected),bottom,'#a8aac0');ctx.setLineDash([]);
+  bars.forEach((c,i)=>{
+    const color=c.close>=c.open?up:down,width=Math.max(1,Math.min(16,step*.62));
+    line(x(i),y(c.high),x(i),y(c.low),color);ctx.fillStyle=color;ctx.fillRect(x(i)-width/2,Math.min(y(c.open),y(c.close)),width,Math.max(1,Math.abs(y(c.close)-y(c.open))));
+    const previous=bars[i-1];
+    if(trend&&previous?.bull===c.bull&&Number.isFinite(previous?.trend)&&Number.isFinite(c.trend)){const ink=c.bull?up:down;line(x(i-1),y(previous.trend),x(i),y(previous.trend),ink);line(x(i),y(previous.trend),x(i),y(c.trend),ink)}
+    if(i%Math.max(1,Math.ceil(bars.length/(w<500?4:8)))===0){ctx.fillStyle='#b4bbce';ctx.textAlign='left';ctx.fillText(clock(c.time),Math.max(2,x(i)-12),h-8)}
+  });
+  if(get('flowBubbles').checked){
+    const placed=[];
+    for(const i of [selected,...bars.map((_,i)=>i).filter(i=>i!==selected)]){
+      const c=bars[i],t=c.buy+c.sell,share=Math.max(c.buy,c.sell)/t;
+      if(i!==selected&&share<.65)continue;
+      const label=c.buy===c.sell?'Even 50%':(c.buy>c.sell?'Buy ':'Sell ')+Math.round(share*100)+'%';
+      const bw=ctx.measureText(label).width+16,cx=Math.max(bw/2+2,Math.min(right-bw/2,x(i))),cy=Math.max(13,y(c.high)-20);
+      if(placed.some(p=>Math.abs(p.cx-cx)<(p.bw+bw)/2+6&&Math.abs(p.cy-cy)<28))continue;
+      placed.push({cx,cy,bw});const ink=c.buy===c.sell?'#c7bdd9':c.buy>c.sell?up:down;
+      line(cx,cy+10,x(i),y(c.high),ink);ctx.fillStyle='#191c2a';ctx.strokeStyle=ink;ctx.beginPath();ctx.roundRect(cx-bw/2,cy-10,bw,20,8);ctx.fill();ctx.stroke();ctx.fillStyle=ink;ctx.textAlign='center';ctx.fillText(label,cx,cy+4);
+    }
+  }
+}
+canvas.onclick=e=>{const px=e.clientX-canvas.getBoundingClientRect().left;if(!points.length)return;selected=points.reduce((best,v,i)=>Math.abs(v-px)<Math.abs(points[best]-px)?i:best,0);draw()};
+canvas.onkeydown=e=>{if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();selected=Math.max(0,Math.min(bars.length-1,selected+(e.key==='ArrowLeft'?-1:1)));draw()}};
+get('flowSession').onchange=()=>session();get('flowBubbles').onchange=draw;get('flowTrend').onchange=draw;
+get('flowFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;const token=++revision;try{const raw=await file.text();if(token===revision)use(parseTrades(raw),'Imported · '+file.name)}catch(err){if(token===revision)get('flowError').textContent=err.message}e.target.value=''};
+get('flowDemo').onclick=()=>{revision++;use(sample(),'Simulated trades',true)};
+new ResizeObserver(draw).observe(canvas);use(sample(),'Simulated trades',true);
+})();
+</script>
+</body></html>
