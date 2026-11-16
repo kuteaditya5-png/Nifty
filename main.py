@@ -1,7 +1,7 @@
 from pathlib import Path
 import urllib.parse
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 import yfinance as yf
 import requests
 import os
@@ -4268,6 +4268,26 @@ def premarket_analysis():
 # LIVE / NEAR-LIVE NIFTY CHART DATA
 # ============================================================
 
+@app.get("/futures-trades", response_class=PlainTextResponse)
+def futures_trades():
+    """Read a configured single-contract, aggressor-classified trade CSV snapshot."""
+    url = os.getenv("NIFTY_FUTURES_TRADES_URL", "").strip()
+    headers = {"Cache-Control": "no-store"}
+    if not url.startswith("https://"):
+        return PlainTextResponse("Futures feed not connected", status_code=503, headers=headers)
+    try:
+        with requests.get(url, timeout=(3, 8), stream=True) as response:
+            response.raise_for_status()
+            payload = bytearray()
+            for chunk in response.iter_content(65536):
+                payload.extend(chunk)
+                if len(payload) > 8_000_000:
+                    raise ValueError("Snapshot too large")
+            return PlainTextResponse(payload.decode("utf-8-sig"), headers=headers)
+    except (requests.RequestException, ValueError):
+        return PlainTextResponse("Futures feed unavailable", status_code=502, headers=headers)
+
+
 @app.get("/chart-data")
 def chart_data(interval: str = "5m"):
     """
@@ -4722,7 +4742,7 @@ body{background:#0c0e18!important}body:before{display:none}
     <div>
       <div class="brandline"><div class="brand">NIFTY <span>AI</span></div><div class="tag">Intraday workspace</div></div>
     </div>
-    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v18.18</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
+    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v18.18.1</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
       <span class="market-open"><span class="statusdot"></span><span id="marketState">Market data</span></span>
       <span class="pill" id="lastUpdated">Loading...</span>
       <button class="iconbtn" onclick="loadAll()">↻ Refresh</button>
@@ -5016,6 +5036,8 @@ function switchInstrument(futures){
   el("futuresChartView").hidden=!futures;
   el("spotViewBtn").setAttribute("aria-pressed",String(!futures));
   el("flowViewBtn").setAttribute("aria-pressed",String(futures));
+  updateMarketHeader();
+  if(futures)window.refreshFutures?.();
   if(!futures && chart)requestAnimationFrame(()=>chart.applyOptions({width:el("niftyChart").clientWidth}));
 }
 function initChart(){
@@ -5955,11 +5977,20 @@ async function runRollingWF(){
   }catch(e){setText("btStatus","Rolling walk-forward error: "+e.message);}
 }
 
+let spotRefreshFailed=false;
+function updateMarketHeader(){
+  const futures=!el("futuresChartView").hidden;
+  const candle=latestChartData?.candles?.at(-1);
+  const stamp=candle?new Date(candle.time*1000).toLocaleString("en-IN",{timeZone:"Asia/Kolkata"}):"";
+  setText("marketState",futures?el("flowSource").textContent:(spotRefreshFailed?"Spot refresh failed":"NIFTY spot candles"));
+  setText("lastUpdated",futures?(el("flowSession").value||"No futures session"):(stamp?"Candle open · "+stamp+" IST":"Awaiting spot data"));
+}
 async function loadAll(){
+  if(!el("futuresChartView").hidden)window.refreshFutures?.();
   loadManualOptionChain().catch(()=>{});
   const box=el("errorBox");box.style.display="none";
-  try{const p=await loadPrediction();await Promise.all([loadChart(p),loadPaper(),loadAccuracy()]);setText("lastUpdated",new Date().toLocaleString());setText("marketState","Market data live")}
-  catch(e){box.textContent=e.message;box.style.display="block";setText("lastUpdated","Update failed")}
+  try{const p=await loadPrediction();await Promise.all([loadChart(p),loadPaper(),loadAccuracy()]);spotRefreshFailed=false;updateMarketHeader()}
+  catch(e){box.textContent=e.message;box.style.display="block";spotRefreshFailed=true;updateMarketHeader()}
 }
 function changeInterval(v){currentInterval=v;document.querySelectorAll("[data-i]").forEach(b=>b.classList.toggle("active",b.dataset.i===v));loadAll()}
 loadAll();setInterval(loadAll,60000);
