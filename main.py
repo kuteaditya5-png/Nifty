@@ -4715,7 +4715,7 @@ body{background:#0c0e18!important}body:before{display:none}
 #spotChartView{background:#161a29;border-radius:16px;border:1px solid #34384c;overflow:hidden}
 #spotChartView .chart-card{border:0!important;border-radius:0}.main-layout{grid-template-columns:1fr}.main-layout .side{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
 @media(max-width:760px){.shell #mainHorizontalNav{position:fixed!important;inset:auto 0 0!important;z-index:80;justify-content:space-around!important;margin:0!important;background:#191c2c!important;border-radius:0!important;padding:7px 3px max(7px,env(safe-area-inset-bottom))!important}.shell #mainHorizontalNav button.app-tab{font-size:10px!important;padding:9px 6px!important}.shell .topbar .actions{display:flex!important;flex-wrap:wrap}.shell .topbar .actions button{width:auto!important}.shell .topbar .ui-signature{display:none!important}.shell .topbar{margin:0!important}.shell .topbar .actions #lastUpdated{font-size:10px!important}#signalJournalTools{margin-bottom:80px!important}}
-</style></head>
+</style><style>.market-open.flow-neutral{color:#aeb5ca!important}.flow-neutral .statusdot{background:#aeb5ca!important;box-shadow:none}</style></head>
 <body>
 <div class="backtest-panel" id="backtestPanel">
   <div class="section-head"><div><div class="section-title">Auto Trade Backtest</div><div class="section-sub">Focused historical replay for the current CE / PE / WAIT trading direction.</div></div><button onclick="closeBacktestPanel()">✕</button></div>
@@ -4742,7 +4742,7 @@ body{background:#0c0e18!important}body:before{display:none}
     <div>
       <div class="brandline"><div class="brand">NIFTY <span>AI</span></div><div class="tag">Intraday workspace</div></div>
     </div>
-    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v18.18.1</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
+    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v18.18.2</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
       <span class="market-open"><span class="statusdot"></span><span id="marketState">Market data</span></span>
       <span class="pill" id="lastUpdated">Loading...</span>
       <button class="iconbtn" onclick="loadAll()">↻ Refresh</button>
@@ -5980,6 +5980,7 @@ async function runRollingWF(){
 let spotRefreshFailed=false;
 function updateMarketHeader(){
   const futures=!el("futuresChartView").hidden;
+  el("marketState").parentElement.classList.toggle("flow-neutral",futures&&!el("flowSource").textContent.startsWith("Recent futures trades"));
   const candle=latestChartData?.candles?.at(-1);
   const stamp=candle?new Date(candle.time*1000).toLocaleString("en-IN",{timeZone:"Asia/Kolkata"}):"";
   setText("marketState",futures?el("flowSource").textContent:(spotRefreshFailed?"Spot refresh failed":"NIFTY spot candles"));

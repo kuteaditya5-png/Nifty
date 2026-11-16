@@ -7,13 +7,14 @@
 .flow canvas{display:block;width:100%;height:clamp(255px,40vh,420px);touch-action:pan-y;cursor:crosshair}
 .flow .detail{background:#1c2031;border:1px solid #363a50;border-radius:14px;padding:14px}.flow .stats{display:grid;grid-template-columns:1fr 1fr;margin:12px 0}.flow .stats>div:last-child{text-align:right}.flow .stats b{display:block;font-size:22px}.flow .up{color:#50dfa4}.flow .down{color:#ff8996}.flow .ratio{height:8px;border-radius:8px;overflow:hidden;background:#fa798b;margin-bottom:9px}.flow .ratio i{display:block;height:100%;background:#50dfa4}
 .flow details{margin-top:14px;color:#c6cce0;font-size:13px}.flow summary{cursor:pointer}.flow code{overflow-wrap:anywhere;color:#ded4ff}.flow [role=alert]{color:#ffb6bd}.flow :focus-visible{outline:2px solid #c7acff;outline-offset:2px}
+.flow button[aria-pressed="true"]{border-color:#ba9bff!important;color:#e2d4ff;background:#403451!important}
 </style>
 <section class="flow" id="flowView" aria-label="Futures trade activity">
-<header><div><small>NIFTY AI / Order flow</small><h2>NIFTY Futures</h2><small id="flowSource">Simulated trades · 5 min · IST</small></div><strong class="quote" id="flowQuote"></strong></header>
-<div class="tools"><label>Session <select id="flowSession"></select></label><label><input type="checkbox" id="flowTrend" checked>SuperTrend (10, 3)</label><label><input type="checkbox" id="flowBubbles" checked>Buy/sell bubbles</label></div>
+<header><div><small>NIFTY AI / Order flow</small><h2>NIFTY Futures</h2><small id="flowSource">Awaiting futures feed · 5 min · IST</small></div><strong class="quote" id="flowQuote"></strong></header>
+<div class="tools"><button id="flowLive" type="button">Live feed</button><button id="flowDemo" type="button">Sample</button><label><span id="flowSessionLabel">Session (IST)</span> <select id="flowSession"></select></label><label><input type="checkbox" id="flowTrend" checked>SuperTrend (10, 3)</label><label><input type="checkbox" id="flowBubbles" checked>Buy/sell bubbles</label></div>
 <canvas id="flowCanvas" tabindex="0" aria-label="Select a candle by tapping or using left and right arrow keys"></canvas>
-<div class="detail" aria-live="polite"><div class="row"><strong>Selected candle</strong><time id="flowTime"></time></div><div class="stats"><div class="up">Buy-initiated<b id="flowBuy"></b></div><div class="down">Sell-initiated<b id="flowSell"></b></div></div><div class="ratio"><i id="flowRatio"></i></div><div class="row"><small>Total volume</small><strong id="flowTotal"></strong></div></div>
-<details><summary>Trade data</summary><p>Import one NIFTY futures contract per file. Use one row per executed trade with its aggressor side and quantity in contracts. Times must include a timezone. Results cover the supplied trades.</p><code>trade_id,timestamp,price,contracts,side<br>t001,2026-11-13T10:30:03+05:30,25075,12,BUY</code><p><input id="flowFile" type="file" accept=".csv,text/csv" aria-label="Import trade CSV"> <button id="flowDemo" type="button">Use sample</button></p><div role="alert" id="flowError"></div></details>
+<div id="flowDetail" class="detail" aria-live="polite"><div class="row"><strong>Selected candle</strong><time id="flowTime"></time></div><div class="stats"><div class="up">Buy-initiated<b id="flowBuy"></b></div><div class="down">Sell-initiated<b id="flowSell"></b></div></div><div class="ratio"><i id="flowRatio"></i></div><div class="row"><small>Total volume</small><strong id="flowTotal"></strong></div></div>
+<details><summary>Trade data</summary><p>Import one NIFTY futures contract per file. Use one row per executed trade with its aggressor side and quantity in contracts. Times must include a timezone. Results cover the supplied trades.</p><code>trade_id,timestamp,price,contracts,side<br>t001,2026-11-13T10:30:03+05:30,25075,12,BUY</code><p><input id="flowFile" type="file" accept=".csv,text/csv" aria-label="Import trade CSV"> </p><div role="alert" id="flowError"></div></details>
 </section>
 <script>
 (()=>{
@@ -63,16 +64,59 @@ function sample(){
     [base,base-4,base+8,base+5*Math.cos(i*.68)].forEach((price,j)=>trades.push({time:start+i*300000+j*40000,price,qty:j%2?Math.floor((1000-buy)/2)+(j===3?(1000-buy)%2:0):Math.floor(buy/2)+(j===2?buy%2:0),side:j%2?'sell':'buy'}));
   }return trades;
 }
-let all=[],bars=[],selected=0,points=[],revision=0;
+let all=[],bars=[],selected=0,points=[],revision=0,mode='live';
+let sourceLabel='',followLatest=true,lastTradeByDay=new Map();
+function indicateMode(){
+  get('flowLive').setAttribute('aria-pressed',String(mode==='live'));
+  get('flowDemo').setAttribute('aria-pressed',String(mode==='sample'));
+  get('flowSessionLabel').textContent=mode==='sample'?'Sample session':mode==='import'?'Imported session':'Feed session (IST)';
+}
+function empty(label){
+  indicateMode();
+
+  all=[];bars=[];points=[];get('flowSession').replaceChildren();
+  get('flowSource').textContent=label;get('flowQuote').textContent='—';
+  get('flowDetail').hidden=true;canvas.hidden=true;canvas.style.display='none';
+  window.updateMarketHeader?.();
+}
+async function refreshFutures(){
+  if(mode!=='live')return;
+  const token=++revision;
+  try{
+    const response=await fetch('/futures-trades',{cache:'no-store'});
+    if(!response.ok)throw Error(response.status===503?'Futures feed not connected':'Futures feed unavailable');
+    const raw=await response.text();
+    if(token!==revision)return;
+    const now=Date.now(),today=date(now);
+    const trades=raw.trim().split(/\r?\n/).length<2?[]:parseTrades(raw);
+    const current=trades.filter(t=>t.time<=now);
+    if(!current.length){empty('No futures trades for '+today+' IST');return}
+    use(current,'Feed');
+  }catch(err){if(token===revision)empty(err.message)}
+}
+window.refreshFutures=refreshFutures;
 function use(trades,label,isSample=false){
-  all=aggregate(trades);get('flowSource').textContent=label+' · 5 min · IST';
+  canvas.style.display="block";canvas.hidden=false;get("flowDetail").hidden=false;
+  const previous=get('flowSession').value;
+  indicateMode();sourceLabel=label;
+  all=aggregate(trades);
+  lastTradeByDay=new Map();
+  for(const trade of trades)lastTradeByDay.set(date(trade.time),trade.time);
   const days=Array.from(new Set(all.map(b=>date(b.time))));
   get('flowSession').replaceChildren(...days.map(d=>new Option(d,d)));
-  get('flowSession').value=days.at(-1);session(isSample);get('flowError').textContent='';
+  get('flowSession').value=mode==='live'&&!followLatest&&days.includes(previous)?previous:days.at(-1);session(isSample);get('flowError').textContent='';
 }
 function session(isSample=false){
+  const day=get('flowSession').value;
+  if(mode==='live'){
+    const now=Date.now(),last=lastTradeByDay.get(day);
+    const title=day!==date(now)?'Historical feed session':now-last<=120000?'Recent futures trades':'Last reported futures trades';
+    get('flowSource').textContent=title+' · '+day+' '+clock(last)+' IST';
+  }else{
+    get('flowSource').textContent=sourceLabel+' · '+day+' · 5 min · IST';
+  }
   bars=all.filter(b=>date(b.time)===get('flowSession').value);
-  selected=isSample?15:bars.length-1;get('flowQuote').textContent=bars.at(-1).close.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});draw();
+  selected=isSample?15:bars.length-1;get('flowQuote').textContent=bars.at(-1).close.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});draw();window.updateMarketHeader?.();
 }
 function draw(){
   if(!bars.length||!canvas.clientWidth)return;
@@ -113,10 +157,11 @@ function draw(){
 }
 canvas.onclick=e=>{const px=e.clientX-canvas.getBoundingClientRect().left;if(!points.length)return;selected=points.reduce((best,v,i)=>Math.abs(v-px)<Math.abs(points[best]-px)?i:best,0);draw()};
 canvas.onkeydown=e=>{if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();selected=Math.max(0,Math.min(bars.length-1,selected+(e.key==='ArrowLeft'?-1:1)));draw()}};
-get('flowSession').onchange=()=>session();get('flowBubbles').onchange=draw;get('flowTrend').onchange=draw;
-get('flowFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;const token=++revision;try{const raw=await file.text();if(token===revision)use(parseTrades(raw),'Imported · '+file.name)}catch(err){if(token===revision)get('flowError').textContent=err.message}e.target.value=''};
-get('flowDemo').onclick=()=>{revision++;use(sample(),'Simulated trades',true)};
-new ResizeObserver(draw).observe(canvas);use(sample(),'Simulated trades',true);
+get('flowSession').onchange=()=>{followLatest=get('flowSession').value===date(all.at(-1).time);session()};get('flowBubbles').onchange=draw;get('flowTrend').onchange=draw;
+get('flowFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;const token=++revision;try{const raw=await file.text();if(token===revision){const trades=parseTrades(raw);mode='import';use(trades,'Imported · '+file.name)}}catch(err){if(token===revision)get('flowError').textContent=err.message}e.target.value=''};
+get('flowDemo').onclick=()=>{revision++;mode='sample';use(sample(),'Simulated trades',true)};
+get('flowLive').onclick=()=>{mode='live';followLatest=true;empty('Checking futures feed');refreshFutures()};
+new ResizeObserver(draw).observe(canvas);get('flowDemo').onclick();
 })();
 </script>
 </body></html>
