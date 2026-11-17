@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 import statistics
 import breakout_v1814
 import breakout_setup_v1816
+import upstox_futures
 import fvg_v1817
 
 load_dotenv()
@@ -4273,6 +4274,8 @@ def futures_trades():
     """Read a configured single-contract, aggressor-classified trade CSV snapshot."""
     url = os.getenv("NIFTY_FUTURES_TRADES_URL", "").strip()
     headers = {"Cache-Control": "no-store"}
+    if not url:
+        return upstox_futures.candles()
     if not url.startswith("https://"):
         return PlainTextResponse("Futures feed not connected", status_code=503, headers=headers)
     try:
@@ -4742,7 +4745,7 @@ body{background:#0c0e18!important}body:before{display:none}
     <div>
       <div class="brandline"><div class="brand">NIFTY <span>AI</span></div><div class="tag">Intraday workspace</div></div>
     </div>
-    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v18.18.2</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
+    <div class="actions"><div style="display:flex;gap:7px;align-items:center"><span class="pill" style="color:#22efb2;border-color:rgba(34,239,178,.35)!important">v18.19</span><span class="pill" style="color:#ff7e9a;border-color:rgba(255,126,154,.28)!important">Paper Trading</span></div>
       <span class="market-open"><span class="statusdot"></span><span id="marketState">Market data</span></span>
       <span class="pill" id="lastUpdated">Loading...</span>
       <button class="iconbtn" onclick="loadAll()">↻ Refresh</button>

@@ -31,8 +31,11 @@ function aggregate(trades){
     bar.high=Math.max(bar.high,trade.price);bar.low=Math.min(bar.low,trade.price);
     bar.close=trade.price;bar[trade.side]+=trade.qty;buckets.set(time,bar);
   }
+  return withTrend(Array.from(buckets.values()));
+}
+function withTrend(rows){
   let atr=0,upper,lower,bull=false,prev;
-  return Array.from(buckets.values(),(bar,i)=>{
+  return rows.map((bar,i)=>{
     const tr=Math.max(bar.high-bar.low,Math.abs(bar.high-(prev??bar.open)),Math.abs(bar.low-(prev??bar.open)));
     atr=i<10?atr+tr/10:(atr*9+tr)/10;
     if(i>=9){
@@ -84,6 +87,14 @@ async function refreshFutures(){
   const token=++revision;
   try{
     const response=await fetch('/futures-trades',{cache:'no-store'});
+    if(response.headers?.get('content-type')?.includes('application/json')){
+      const data=await response.json();
+      if(token!==revision)return;
+      if(!response.ok)throw Error(data.error||'Upstox candles unavailable');
+      if(!data.bars?.length){empty('No Upstox futures candles available');return}
+      use([],data.symbol,false,data.bars);
+      return;
+    }
     if(!response.ok)throw Error(response.status===503?'Futures feed not connected':'Futures feed unavailable');
     const raw=await response.text();
     if(token!==revision)return;
@@ -95,11 +106,12 @@ async function refreshFutures(){
   }catch(err){if(token===revision)empty(err.message)}
 }
 window.refreshFutures=refreshFutures;
-function use(trades,label,isSample=false){
+function use(trades,label,isSample=false,brokerBars=null){
   canvas.style.display="block";canvas.hidden=false;get("flowDetail").hidden=false;
   const previous=get('flowSession').value;
   indicateMode();sourceLabel=label;
-  all=aggregate(trades);
+  all=brokerBars?withTrend(brokerBars):aggregate(trades);
+  get("flowBubbles").disabled=Boolean(brokerBars);
   lastTradeByDay=new Map();
   for(const trade of trades)lastTradeByDay.set(date(trade.time),trade.time);
   const days=Array.from(new Set(all.map(b=>date(b.time))));
@@ -108,7 +120,10 @@ function use(trades,label,isSample=false){
 }
 function session(isSample=false){
   const day=get('flowSession').value;
-  if(mode==='live'){
+  if(all[0]?.volume!=null){
+    const last=all.filter(b=>date(b.time)===day).at(-1);
+    get('flowSource').textContent='Upstox · '+sourceLabel+' · Candle open '+day+' '+clock(last.time)+' IST';
+  }else if(mode==='live'){
     const now=Date.now(),last=lastTradeByDay.get(day);
     const title=day!==date(now)?'Historical feed session':now-last<=120000?'Recent futures trades':'Last reported futures trades';
     get('flowSource').textContent=title+' · '+day+' '+clock(last)+' IST';
@@ -124,8 +139,14 @@ function draw(){
   canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);
   const b=bars[selected],total=b.buy+b.sell,pct=b.buy/total*100;
   get('flowTime').textContent=clock(b.time)+'–'+clock(b.time+300000)+' IST';
+  get('flowRatio').parentElement.hidden=b.volume!=null;
+  if(b.volume!=null){
+    get('flowBuy').textContent='Unavailable';get('flowSell').textContent='Unavailable';
+    get('flowTotal').textContent=number.format(b.volume)+' units';
+  }else{
   for(const [id,v] of [['flowBuy',b.buy],['flowSell',b.sell]])get(id).textContent=number.format(v)+' · '+(100*v/total).toFixed(1)+'%';
   get('flowTotal').textContent=number.format(total)+' contracts';get('flowRatio').style.width=pct+'%';
+  }
   const left=8,right=w-62,top=40,bottom=h-30,step=(right-left)/bars.length;
   const trend=get('flowTrend').checked;
   const spread=bars.flatMap(c=>trend&&Number.isFinite(c.trend)?[c.low,c.high,c.trend]:[c.low,c.high]);
@@ -142,7 +163,7 @@ function draw(){
     if(trend&&previous?.bull===c.bull&&Number.isFinite(previous?.trend)&&Number.isFinite(c.trend)){const ink=c.bull?up:down;line(x(i-1),y(previous.trend),x(i),y(previous.trend),ink);line(x(i),y(previous.trend),x(i),y(c.trend),ink)}
     if(i%Math.max(1,Math.ceil(bars.length/(w<500?4:8)))===0){ctx.fillStyle='#b4bbce';ctx.textAlign='left';ctx.fillText(clock(c.time),Math.max(2,x(i)-12),h-8)}
   });
-  if(get('flowBubbles').checked){
+  if(b.volume==null&&get('flowBubbles').checked){
     const placed=[];
     for(const i of [selected,...bars.map((_,i)=>i).filter(i=>i!==selected)]){
       const c=bars[i],t=c.buy+c.sell,share=Math.max(c.buy,c.sell)/t;

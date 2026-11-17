@@ -6,7 +6,7 @@ const code = source.split('<script>')[1].split('</script>')[0];
 const nodes = new Map();
 const context = new Proxy({measureText: s => ({width: s.length*6})},{get:(o,k)=>o[k]??(()=>{})});
 function get(id){
-  if(!nodes.has(id))nodes.set(id,{style:{},checked:true,clientWidth:420,clientHeight:300,getContext:()=>context,setAttribute(){},replaceChildren(){}});
+  if(!nodes.has(id))nodes.set(id,{style:{},parentElement:{},checked:true,clientWidth:420,clientHeight:300,getContext:()=>context,setAttribute(){},replaceChildren(){}});
   return nodes.get(id);
 }
 const host={devicePixelRatio:1};
@@ -42,6 +42,11 @@ async function load(raw){await get('flowFile').onchange({target:{files:[{name:'s
   assert.match(get('flowSource').textContent,/Historical feed session · 2026-11-13/);
   response={ok:true,text:async()=>csv.split('\n')[0]};
   await host.refreshFutures();assert.equal(get('flowCanvas').hidden,true);
+  response={ok:true,headers:{get:()=>'application/json'},json:async()=>({symbol:'NIFTY FUT',bars:[{time:Date.parse('2026-11-16T10:10:00+05:30'),open:100,high:110,low:99,close:105,volume:1234}]})};
+  await host.refreshFutures();
+  assert.equal(get('flowTotal').textContent,'1,234 units');
+  assert.equal(get('flowBubbles').disabled,true);
+  assert.equal(get('flowBuy').textContent,'Unavailable');
   await load(csv);
   assert.equal(get('flowBuy').textContent,'3 · 75.0%');
   assert.equal(get('flowTotal').textContent,'4 contracts');
