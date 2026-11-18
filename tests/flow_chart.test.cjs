@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const source = fs.readFileSync('flow_chart.html','utf8');
 const code = source.split('<script>')[1].split('</script>')[0];
 const nodes = new Map();
-const context = new Proxy({measureText: s => ({width: s.length*6})},{get:(o,k)=>o[k]??(()=>{})});
+const rectangles=[];
+const context = new Proxy({fillRect(...args){rectangles.push(args)},measureText: s => ({width: s.length*6})},{get:(o,k)=>o[k]??(()=>{})});
 function get(id){
   if(!nodes.has(id))nodes.set(id,{style:{},parentElement:{},checked:true,clientWidth:420,clientHeight:300,getContext:()=>context,setAttribute(){},replaceChildren(){}});
   return nodes.get(id);
@@ -45,6 +46,15 @@ async function load(raw){await get('flowFile').onchange({target:{files:[{name:'s
   response={ok:true,headers:{get:()=>'application/json'},json:async()=>({symbol:'NIFTY FUT',bars:[{time:Date.parse('2026-11-16T10:10:00+05:30'),open:100,high:110,low:99,close:105,volume:1234}]})};
   await host.refreshFutures();
   assert.equal(get('flowTotal').textContent,'1,234 units');
+  assert.equal(get('flowVolumeNote').hidden,false);
+  const volumeBar=rectangles.at(-1);
+  assert.equal(volumeBar[1]+volumeBar[3],270);
+  assert.equal(volumeBar[3],66);
+  get('flowVolume').checked=false;
+  rectangles.length=0;get('flowVolume').onchange();
+  assert.equal(rectangles.length,1);
+  assert.equal(get('flowVolumeNote').hidden,true);
+  get('flowVolume').checked=true;get('flowVolume').onchange();
   assert.equal(get('flowBubbles').disabled,true);
   assert.equal(get('flowBuy').textContent,'Unavailable');
   await load(csv);

@@ -11,8 +11,9 @@
 </style>
 <section class="flow" id="flowView" aria-label="Futures trade activity">
 <header><div><small>NIFTY AI / Order flow</small><h2>NIFTY Futures</h2><small id="flowSource">Awaiting futures feed · 5 min · IST</small></div><strong class="quote" id="flowQuote"></strong></header>
-<div class="tools"><button id="flowLive" type="button">Live feed</button><button id="flowDemo" type="button">Sample</button><label><span id="flowSessionLabel">Session (IST)</span> <select id="flowSession"></select></label><label><input type="checkbox" id="flowTrend" checked>SuperTrend (10, 3)</label><label><input type="checkbox" id="flowBubbles" checked>Buy/sell bubbles</label></div>
+<div class="tools"><button id="flowLive" type="button">Live feed</button><button id="flowDemo" type="button">Sample</button><label><span id="flowSessionLabel">Session (IST)</span> <select id="flowSession"></select></label><label><input type="checkbox" id="flowTrend" checked>SuperTrend (10, 3)</label><label><input type="checkbox" id="flowVolume" checked>Volume</label><label><input type="checkbox" id="flowBubbles" checked>Buy/sell bubbles</label></div>
 <canvas id="flowCanvas" tabindex="0" aria-label="Select a candle by tapping or using left and right arrow keys"></canvas>
+<p class="muted" id="flowVolumeNote" style="font-size:12px;margin:0 0 12px">Volume bar colours follow candle direction; they do not show buy/sell volume.</p>
 <div id="flowDetail" class="detail" aria-live="polite"><div class="row"><strong>Selected candle</strong><time id="flowTime"></time></div><div class="stats"><div class="up">Buy-initiated<b id="flowBuy"></b></div><div class="down">Sell-initiated<b id="flowSell"></b></div></div><div class="ratio"><i id="flowRatio"></i></div><div class="row"><small>Total volume</small><strong id="flowTotal"></strong></div></div>
 <details><summary>Trade data</summary><p>Import one NIFTY futures contract per file. Use one row per executed trade with its aggressor side and quantity in contracts. Times must include a timezone. Results cover the supplied trades.</p><code>trade_id,timestamp,price,contracts,side<br>t001,2026-11-13T10:30:03+05:30,25075,12,BUY</code><p><input id="flowFile" type="file" accept=".csv,text/csv" aria-label="Import trade CSV"> </p><div role="alert" id="flowError"></div></details>
 </section>
@@ -79,7 +80,7 @@ function empty(label){
 
   all=[];bars=[];points=[];get('flowSession').replaceChildren();
   get('flowSource').textContent=label;get('flowQuote').textContent='—';
-  get('flowDetail').hidden=true;canvas.hidden=true;canvas.style.display='none';
+  get('flowDetail').hidden=true;get('flowVolumeNote').hidden=true;canvas.hidden=true;canvas.style.display='none';
   window.updateMarketHeader?.();
 }
 async function refreshFutures(){
@@ -147,7 +148,14 @@ function draw(){
   for(const [id,v] of [['flowBuy',b.buy],['flowSell',b.sell]])get(id).textContent=number.format(v)+' · '+(100*v/total).toFixed(1)+'%';
   get('flowTotal').textContent=number.format(total)+' contracts';get('flowRatio').style.width=pct+'%';
   }
-  const left=8,right=w-62,top=40,bottom=h-30,step=(right-left)/bars.length;
+  const showVolume=get('flowVolume').checked;
+  get('flowVolumeNote').hidden=!showVolume;
+  const left=8,right=w-62,top=40,axisBottom=h-30;
+  const volumeHeight=Math.max(40,Math.min(78,h*.22));
+  const volumeTop=axisBottom-volumeHeight;
+  const bottom=showVolume?volumeTop-24:axisBottom,step=(right-left)/bars.length;
+  const candleVolume=c=>c.volume!=null?c.volume:c.buy+c.sell;
+  const maxVolume=Math.max(1,...bars.map(candleVolume));
   const trend=get('flowTrend').checked;
   const spread=bars.flatMap(c=>trend&&Number.isFinite(c.trend)?[c.low,c.high,c.trend]:[c.low,c.high]);
   let low=Math.min(...spread),high=Math.max(...spread);const pad=Math.max((high-low)*.08,.1);low-=pad;high+=pad;
@@ -155,10 +163,23 @@ function draw(){
   function line(x1,y1,x2,y2,color){ctx.strokeStyle=color;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke()}
   ctx.font='11px system-ui';ctx.textAlign='left';
   for(let j=0;j<=4;j++){const p=low+(high-low)*j/4;line(left,y(p),right,y(p),'#2c3040');ctx.fillStyle='#b4bbce';ctx.fillText(number.format(Math.round(p)),right+5,y(p)+4)}
-  points=bars.map((c,i)=>x(i));ctx.setLineDash([3,4]);line(x(selected),top-6,x(selected),bottom,'#a8aac0');ctx.setLineDash([]);
+  points=bars.map((c,i)=>x(i));ctx.setLineDash([3,4]);line(x(selected),top-6,x(selected),axisBottom,'#a8aac0');ctx.setLineDash([]);
+  if(showVolume){
+    line(left,volumeTop-16,right,volumeTop-16,'#2c3040');
+    ctx.fillStyle='#b4bbce';ctx.textAlign='left';
+    ctx.fillText('Volume · '+number.format(candleVolume(b))+(b.volume!=null?' units':' contracts'),left,volumeTop-3);
+    ctx.fillText(new Intl.NumberFormat('en-IN',{notation:'compact',maximumFractionDigits:1}).format(maxVolume),right+5,volumeTop+12);
+    ctx.fillText('0',right+5,axisBottom);
+  }
   bars.forEach((c,i)=>{
     const color=c.close>=c.open?up:down,width=Math.max(1,Math.min(16,step*.62));
     line(x(i),y(c.high),x(i),y(c.low),color);ctx.fillStyle=color;ctx.fillRect(x(i)-width/2,Math.min(y(c.open),y(c.close)),width,Math.max(1,Math.abs(y(c.close)-y(c.open))));
+    if(showVolume){
+      const height=candleVolume(c)/maxVolume*volumeHeight;
+      ctx.globalAlpha=i===selected?1:.65;
+      ctx.fillRect(x(i)-width/2,axisBottom-height,width,height);
+      ctx.globalAlpha=1;
+    }
     const previous=bars[i-1];
     if(trend&&previous?.bull===c.bull&&Number.isFinite(previous?.trend)&&Number.isFinite(c.trend)){const ink=c.bull?up:down;line(x(i-1),y(previous.trend),x(i),y(previous.trend),ink);line(x(i),y(previous.trend),x(i),y(c.trend),ink)}
     if(i%Math.max(1,Math.ceil(bars.length/(w<500?4:8)))===0){ctx.fillStyle='#b4bbce';ctx.textAlign='left';ctx.fillText(clock(c.time),Math.max(2,x(i)-12),h-8)}
@@ -178,7 +199,7 @@ function draw(){
 }
 canvas.onclick=e=>{const px=e.clientX-canvas.getBoundingClientRect().left;if(!points.length)return;selected=points.reduce((best,v,i)=>Math.abs(v-px)<Math.abs(points[best]-px)?i:best,0);draw()};
 canvas.onkeydown=e=>{if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();selected=Math.max(0,Math.min(bars.length-1,selected+(e.key==='ArrowLeft'?-1:1)));draw()}};
-get('flowSession').onchange=()=>{followLatest=get('flowSession').value===date(all.at(-1).time);session()};get('flowBubbles').onchange=draw;get('flowTrend').onchange=draw;
+get('flowSession').onchange=()=>{followLatest=get('flowSession').value===date(all.at(-1).time);session()};get('flowBubbles').onchange=draw;get('flowTrend').onchange=draw;get('flowVolume').onchange=draw;
 get('flowFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;const token=++revision;try{const raw=await file.text();if(token===revision){const trades=parseTrades(raw);mode='import';use(trades,'Imported · '+file.name)}}catch(err){if(token===revision)get('flowError').textContent=err.message}e.target.value=''};
 get('flowDemo').onclick=()=>{revision++;mode='sample';use(sample(),'Simulated trades',true)};
 get('flowLive').onclick=()=>{mode='live';followLatest=true;empty('Checking futures feed');refreshFutures()};
