@@ -4765,11 +4765,7 @@ body{background:#0c0e18!important}body:before{display:none}
   <div class="error" id="errorBox"></div>
 
   <div class="tab-page active" id="tab-dashboard">
-  <div class="view-switch" aria-label="Chart instrument">
-    <button id="spotViewBtn" aria-pressed="true" onclick="switchInstrument(false)">NIFTY 50 spot</button>
-    <button id="flowViewBtn" aria-pressed="false" onclick="switchInstrument(true)">Futures order flow</button>
-  </div>
-  <div id="spotChartView"><header class="spot-heading"><small>NSE INDEX</small><h2>NIFTY 50</h2></header>
+  <div id="spotChartView" hidden style="display:none"><header class="spot-heading"><small>NSE INDEX</small><h2>NIFTY 50</h2></header>
     <div class="card chart-card">
       <div class="toolbar">
         <div class="intervals">
@@ -4788,7 +4784,7 @@ body{background:#0c0e18!important}body:before{display:none}
       <div class="chart-note"><span style="color:#23c9aa">━</span> Up candle &nbsp; <span style="color:#de879b">━</span> Down candle &nbsp; <span style="color:#63b4ed">┄</span> Opening range levels &nbsp; <span style="color:#34d399">┄</span> Breakout targets (spot)</div>
     </div>
 
-</div><div id="futuresChartView" hidden><!-- FUTURES_FLOW --></div>
+</div><div id="futuresChartView"><!-- FUTURES_FLOW --></div>
   <h2 class="setup-heading">NIFTY spot setups</h2>
   <div class="topgrid">
     <div class="card prediction-card">
@@ -5034,15 +5030,6 @@ function renderPrediction(data){
   notifySignal(setup,reason);
 }
 
-function switchInstrument(futures){
-  el("spotChartView").hidden=futures;
-  el("futuresChartView").hidden=!futures;
-  el("spotViewBtn").setAttribute("aria-pressed",String(!futures));
-  el("flowViewBtn").setAttribute("aria-pressed",String(futures));
-  updateMarketHeader();
-  if(futures)window.refreshFutures?.();
-  if(!futures && chart)requestAnimationFrame(()=>chart.applyOptions({width:el("niftyChart").clientWidth}));
-}
 function initChart(){
   const c=el("niftyChart");
   chart=LightweightCharts.createChart(c,{

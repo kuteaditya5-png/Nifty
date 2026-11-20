@@ -1,5 +1,6 @@
 <style>
 .flow{font-family:Inter,system-ui,sans-serif;background:#101320;color:#edf0fc;border:1px solid #303449;border-radius:18px;padding:clamp(14px,3vw,28px);margin-bottom:16px}
+.flow [hidden]{display:none!important}
 .flow header,.flow .row,.flow .tools{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .flow h2{font-size:clamp(23px,4vw,34px);margin:4px 0}.flow small,.flow time,.flow .muted{color:#aeb5ca}.flow .quote{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums}
 .flow .tools{margin:18px 0 4px;justify-content:flex-start}.flow label,.flow button,.flow select{font:inherit;font-size:13px}.flow label{display:inline-flex;align-items:center;gap:5px}.flow input{accent-color:#ad8cff}
@@ -10,11 +11,11 @@
 .flow button[aria-pressed="true"]{border-color:#ba9bff!important;color:#e2d4ff;background:#403451!important}
 </style>
 <section class="flow" id="flowView" aria-label="Futures trade activity">
-<header><div><small>NIFTY AI / Order flow</small><h2>NIFTY Futures</h2><small id="flowSource">Awaiting futures feed · 5 min · IST</small></div><strong class="quote" id="flowQuote"></strong></header>
-<div class="tools"><button id="flowLive" type="button">Live feed</button><button id="flowDemo" type="button">Sample</button><label><span id="flowSessionLabel">Session (IST)</span> <select id="flowSession"></select></label><label><input type="checkbox" id="flowTrend" checked>SuperTrend (10, 3)</label><label><input type="checkbox" id="flowVolume" checked>Volume</label><label><input type="checkbox" id="flowBubbles" checked>Buy/sell bubbles</label></div>
+<header><div><small>NIFTY AI / Main chart</small><h2>NIFTY Futures</h2><small id="flowSource">Awaiting futures feed · 5 min · IST</small></div><strong class="quote" id="flowQuote"></strong></header>
+<div class="tools"><button id="flowLive" type="button">Live feed</button><button id="flowDemo" type="button">Sample</button><label><span id="flowSessionLabel">Session (IST)</span> <select id="flowSession"></select></label><label><input type="checkbox" id="flowTrend" checked>SuperTrend (10, 3)</label><label><input type="checkbox" id="flowVolume" checked>Volume</label><label><input type="checkbox" id="flowBubbles" checked><span id="flowBubbleLabel">Buy/sell signals</span></label></div>
 <canvas id="flowCanvas" tabindex="0" aria-label="Select a candle by tapping or using left and right arrow keys"></canvas>
 <p class="muted" id="flowVolumeNote" style="font-size:12px;margin:0 0 12px">Volume bar colours follow candle direction; they do not show buy/sell volume.</p>
-<div id="flowDetail" class="detail" aria-live="polite"><div class="row"><strong>Selected candle</strong><time id="flowTime"></time></div><div class="stats"><div class="up">Buy-initiated<b id="flowBuy"></b></div><div class="down">Sell-initiated<b id="flowSell"></b></div></div><div class="ratio"><i id="flowRatio"></i></div><div class="row"><small>Total volume</small><strong id="flowTotal"></strong></div></div>
+<div id="flowDetail" class="detail" aria-live="polite"><div class="row"><strong>Selected candle</strong><time id="flowTime"></time></div><div class="stats"><div class="up"><span id="flowBuyLabel">Trend</span><b id="flowBuy"></b></div><div class="down"><span id="flowSellLabel">Signal</span><b id="flowSell"></b></div></div><p class="muted" id="flowOhlc"></p><p class="muted" id="flowSignalNote" style="font-size:12px"></p><div class="ratio"><i id="flowRatio"></i></div><div class="row"><small>Total volume</small><strong id="flowTotal"></strong></div></div>
 <details><summary>Trade data</summary><p>Import one NIFTY futures contract per file. Use one row per executed trade with its aggressor side and quantity in contracts. Times must include a timezone. Results cover the supplied trades.</p><code>trade_id,timestamp,price,contracts,side<br>t001,2026-11-13T10:30:03+05:30,25075,12,BUY</code><p><input id="flowFile" type="file" accept=".csv,text/csv" aria-label="Import trade CSV"> </p><div role="alert" id="flowError"></div></details>
 </section>
 <script>
@@ -112,7 +113,11 @@ function use(trades,label,isSample=false,brokerBars=null){
   const previous=get('flowSession').value;
   indicateMode();sourceLabel=label;
   all=brokerBars?withTrend(brokerBars):aggregate(trades);
-  get("flowBubbles").disabled=Boolean(brokerBars);
+  get("flowBubbles").disabled=false;
+  get('flowBubbleLabel').textContent=brokerBars?'Buy/sell signals':'Buy/sell volume bubbles';
+  get('flowBuyLabel').textContent=brokerBars?'SuperTrend direction':'Buy-initiated';
+  get('flowSellLabel').textContent=brokerBars?'Candle signal':'Sell-initiated';
+  get('flowSignalNote').textContent=brokerBars?'BUY/SELL marks confirmed SuperTrend reversals on closed 5-minute candles. These are indicator signals, not buy/sell volume or the CE/PE prediction below. The feed supplies total volume only.':'Buy/sell percentages cover the supplied trades.';
   lastTradeByDay=new Map();
   for(const trade of trades)lastTradeByDay.set(date(trade.time),trade.time);
   const days=Array.from(new Set(all.map(b=>date(b.time))));
@@ -134,6 +139,10 @@ function session(isSample=false){
   bars=all.filter(b=>date(b.time)===get('flowSession').value);
   selected=isSample?15:bars.length-1;get('flowQuote').textContent=bars.at(-1).close.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});draw();window.updateMarketHeader?.();
 }
+function reversal(c,previous){
+  if(c.time+300000>Date.now()||!Number.isFinite(c.trend)||!Number.isFinite(previous?.trend)||c.bull===previous.bull)return null;
+  return c.bull?'BUY':'SELL';
+}
 function draw(){
   if(!bars.length||!canvas.clientWidth)return;
   const w=canvas.clientWidth,h=canvas.clientHeight,dpr=window.devicePixelRatio||1;
@@ -142,12 +151,14 @@ function draw(){
   get('flowTime').textContent=clock(b.time)+'–'+clock(b.time+300000)+' IST';
   get('flowRatio').parentElement.hidden=b.volume!=null;
   if(b.volume!=null){
-    get('flowBuy').textContent='Unavailable';get('flowSell').textContent='Unavailable';
+    get('flowBuy').textContent=Number.isFinite(b.trend)?(b.bull?'Bullish':'Bearish'):'Warming up';
+    get('flowSell').textContent=b.time+300000>Date.now()?'Candle forming':reversal(b,bars[selected-1])||'No new signal';
     get('flowTotal').textContent=number.format(b.volume)+' units';
   }else{
   for(const [id,v] of [['flowBuy',b.buy],['flowSell',b.sell]])get(id).textContent=number.format(v)+' · '+(100*v/total).toFixed(1)+'%';
   get('flowTotal').textContent=number.format(total)+' contracts';get('flowRatio').style.width=pct+'%';
   }
+  get('flowOhlc').textContent='Open '+number.format(b.open)+' · High '+number.format(b.high)+' · Low '+number.format(b.low)+' · Close '+number.format(b.close);
   const showVolume=get('flowVolume').checked;
   get('flowVolumeNote').hidden=!showVolume;
   const left=8,right=w-62,top=40,axisBottom=h-30;
@@ -184,6 +195,21 @@ function draw(){
     if(trend&&previous?.bull===c.bull&&Number.isFinite(previous?.trend)&&Number.isFinite(c.trend)){const ink=c.bull?up:down;line(x(i-1),y(previous.trend),x(i),y(previous.trend),ink);line(x(i),y(previous.trend),x(i),y(c.trend),ink)}
     if(i%Math.max(1,Math.ceil(bars.length/(w<500?4:8)))===0){ctx.fillStyle='#b4bbce';ctx.textAlign='left';ctx.fillText(clock(c.time),Math.max(2,x(i)-12),h-8)}
   });
+  if(b.volume!=null&&get('flowBubbles').checked){
+    bars.forEach((c,i)=>{
+      const signal=reversal(c,bars[i-1]);
+      if(!signal)return;
+      const ink=signal==='BUY'?up:down,label=signal;
+      const bw=ctx.measureText(label).width+16;
+      const cx=Math.max(left+bw/2,Math.min(right-bw/2,x(i)));
+      const anchor=signal==='BUY'?y(c.low):y(c.high);
+      const cy=signal==='BUY'?Math.min(bottom-12,anchor+20):Math.max(14,anchor-20);
+      line(x(i),anchor,cx,cy,ink);
+      ctx.fillStyle='#191c2a';ctx.strokeStyle=ink;ctx.beginPath();
+      ctx.roundRect(cx-bw/2,cy-10,bw,20,6);ctx.fill();ctx.stroke();
+      ctx.fillStyle=ink;ctx.textAlign='center';ctx.fillText(label,cx,cy+4);
+    });
+  }
   if(b.volume==null&&get('flowBubbles').checked){
     const placed=[];
     for(const i of [selected,...bars.map((_,i)=>i).filter(i=>i!==selected)]){

@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const source = fs.readFileSync('flow_chart.html','utf8');
 const code = source.split('<script>')[1].split('</script>')[0];
 const nodes = new Map();
-const rectangles=[];
-const context = new Proxy({fillRect(...args){rectangles.push(args)},measureText: s => ({width: s.length*6})},{get:(o,k)=>o[k]??(()=>{})});
+const rectangles=[],labels=[];
+const context = new Proxy({fillRect(...args){rectangles.push(args)},fillText(text){labels.push(text)},measureText: s => ({width: s.length*6})},{get:(o,k)=>o[k]??(()=>{})});
 function get(id){
   if(!nodes.has(id))nodes.set(id,{style:{},parentElement:{},checked:true,clientWidth:420,clientHeight:300,getContext:()=>context,setAttribute(){},replaceChildren(){}});
   return nodes.get(id);
@@ -55,8 +55,28 @@ async function load(raw){await get('flowFile').onchange({target:{files:[{name:'s
   assert.equal(rectangles.length,1);
   assert.equal(get('flowVolumeNote').hidden,true);
   get('flowVolume').checked=true;get('flowVolume').onchange();
-  assert.equal(get('flowBubbles').disabled,true);
-  assert.equal(get('flowBuy').textContent,'Unavailable');
+  assert.equal(get('flowBubbles').disabled,false);
+  assert.equal(get('flowBuy').textContent,'Warming up');
+  assert.equal(get('flowSell').textContent,'Candle forming');
+  const start=Date.parse('2026-11-16T09:15:00+05:30');
+  const trendBars=Array.from({length:12},(_,i)=>({
+    time:start+i*300000,open:100,high:i===10?151:101,low:i===11?49:99,
+    close:i===10?150:i===11?50:100,volume:1000
+  }));
+  response={ok:true,headers:{get:()=>'application/json'},json:async()=>({symbol:'NIFTY FUT',bars:trendBars})};
+  labels.length=0;await host.refreshFutures();
+  assert.ok(labels.includes('BUY'),'closed bullish reversal must have a BUY bubble');
+  assert.ok(!labels.includes('SELL'),'forming candle must not have a SELL bubble');
+  assert.equal(get('flowSell').textContent,'Candle forming');
+  const now=FixedDate.now;
+  FixedDate.now=()=>Date.parse('2026-11-16T10:16:00+05:30');
+  labels.length=0;await host.refreshFutures();
+  assert.ok(labels.includes('SELL'),'closed bearish reversal must have a SELL bubble');
+  assert.equal(get('flowSell').textContent,'SELL');
+  get('flowBubbles').checked=false;labels.length=0;get('flowBubbles').onchange();
+  assert.ok(!labels.includes('BUY')&&!labels.includes('SELL'));
+  get('flowBubbles').checked=true;
+  FixedDate.now=now;
   await load(csv);
   assert.equal(get('flowBuy').textContent,'3 · 75.0%');
   assert.equal(get('flowTotal').textContent,'4 contracts');
